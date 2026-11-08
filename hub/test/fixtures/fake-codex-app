@@ -1,0 +1,470 @@
+#!/usr/bin/env bun
+// Minimal Codex app-server for driver tests. With FAKE_CODEX_FREEZE_MARK set, the first turn freezes like a stuck
+// app-server: it ignores SIGTERM and answers nothing more (only SIGKILL ends it). Later processes answer normally.
+import { appendFileSync, existsSync, writeFileSync } from "node:fs";
+const out = (o: unknown) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...(o as object) }) + "\n");
+// FAKE_CODEX_HIDDEN_MODELS=1: Codex also has a model it keeps out of its picker ("hide" in its catalog), which model/list
+// gives only with includeHidden. FAKE_CODEX_REFUSE_HIDDEN=1: an older Codex that refuses includeHidden.
+const hiddenModels = process.env.FAKE_CODEX_HIDDEN_MODELS === "1";
+// `codex debug models`: Codex's model catalog, with what each model can hold.
+if (process.argv[2] === "debug" && process.argv[3] === "models") {
+  const reserve = { slug: "gpt-test-reserve", display_name: "GPT test reserve", context_window: 128000, effective_context_window_percent: 95, visibility: "hide" };
+  process.stdout.write(JSON.stringify({ models: [{ slug: "gpt-test", display_name: "GPT test", context_window: 272000, max_context_window: 872000, effective_context_window_percent: 95, visibility: "list" }, ...(hiddenModels ? [reserve] : [])] }));
+  process.exit(0);
+}
+const mark = process.env.FAKE_CODEX_FREEZE_MARK;
+let frozen = false;
+let n = 0;
+/** The turn started before the current one (LATE_ITEM). */
+let lastTurn: string | null = null;
+/** The thread was started with helper tools that leave model and effort out (features.multi_agent_v2). */
+let hiddenOverrides = false;
+// FAKE_CODEX_OLD_CONFIG: a Codex older than the helper settings, which refuses the whole config over them, in its words:
+// "0.144" (multi_agent_v2 takes no such option, agents keys are roles) or "0.110" (features are only on/off switches).
+const oldConfigError = (config: { features?: Record<string, unknown>; agents?: Record<string, unknown> } | undefined) => {
+  const old = process.env.FAKE_CODEX_OLD_CONFIG;
+  if (!old) return null;
+  const v2 = config?.features?.multi_agent_v2;
+  if (v2 !== undefined && typeof v2 !== "boolean") return old === "0.110" ? "error deriving config: invalid type: map, expected a boolean\nin `features`\n" : "failed to load configuration: data did not match any variant of untagged enum FeatureToml\nin `features.multi_agent_v2`\n";
+  // A Codex whose `agents` keys were all roles refuses `agents.enabled = false` the same way (the settings that leave the
+  // person's own plugins out are newer than that).
+  if (typeof config?.agents?.enabled === "boolean") return "failed to load configuration: invalid type: boolean, expected struct AgentRoleToml\nin `agents`\n";
+  const sub = config?.agents?.default_subagent_model ?? config?.agents?.default_subagent_reasoning_effort;
+  return sub === undefined ? null : `failed to load configuration: invalid type: string ${JSON.stringify(sub)}, expected struct AgentRoleToml\nin \`agents\`\n`;
+};
+// FAKE_CODEX_ODD_REFUSAL=1: a Codex that refuses the settings leaving the person's own tools out, in wording no released
+// version has used (no `PluginConfig`, no "in `plugins`"): the hub must give those settings up anyway rather than lose the
+// chat. A config without them is taken, as the real retry's is.
+const oddRefusal = (config: { plugins?: unknown; include_apps_instructions?: unknown; features?: Record<string, unknown>; agents?: Record<string, unknown> } | undefined) => {
+  if (process.env.FAKE_CODEX_ODD_REFUSAL !== "1") return null;
+  const lean = config?.plugins !== undefined || config?.include_apps_instructions !== undefined || config?.features?.apps !== undefined || typeof config?.agents?.enabled === "boolean";
+  return lean ? 'error deriving config: invalid value: boolean `false`, expected a table for key "plugins.browser@openai-bundled"' : null;
+};
+// LONG_STEP: the turn starts a command that runs until the turn is interrupted. turn/steer adds input to a running turn,
+// which takes it in (a userMessage item with the clientUserMessageId as clientId) at its next step; an interrupt drops
+// input not taken in yet, as Codex does. FAKE_CODEX_TAKE_ON_INTERRUPT=1: the turn takes it in just as it's stopped.
+// FAKE_CODEX_STUCK_INTERRUPT=1: an interrupt is answered, but the turn never ends. FAKE_CODEX_STOP_MS: it ends this long
+// after the interrupt is answered. FAKE_CODEX_FAIL_ON_STEER=1: the turn fails on its next step, input not read.
+const long = new Map<string, { tid: string; pending: { clientId: string | null; text: string }[]; taken: unknown[] }>();
+const userItem = (clientId: string | null, text: string) => ({ type: "userMessage", id: `u-${++n}`, clientId, content: [{ type: "text", text, text_elements: [] }] });
+// ASK_RUN:<command>: the turn asks to run that command and reports the decision it got.
+const asks = new Map<number, (r: { decision?: string }) => void>();
+let askId = 1000;
+const ask = (method: string, params: unknown) => new Promise<{ decision?: string }>((res) => {
+  const id = askId++;
+  asks.set(id, res);
+  out({ id, method, params });
+});
+/**
+ * Turns waiting for messages to be steered into them (ASK_ASYNC_WAIT), by turn id: their thread, what was steered in,
+ * and the timer that has them read it (a moment after the last one).
+ */
+const waitingTurns = new Map<string, { tid: string; taken: ReturnType<typeof userItem>[]; timer?: ReturnType<typeof setTimeout> }>();
+/**
+ * Codex 0.160's mailbox: what helpers that finished while no turn of the chat's thread ran left for its next turn
+ * (notify_parent_of_terminal_turn, trigger_turn false), kept in this process's memory only and never written to the
+ * thread. That next turn takes it in: FAKE_CODEX_MAILBOX_LOG notes what each turn got. A new app-server has none.
+ */
+const mailbox: { from: string; text: string }[] = [];
+/** The helper HELPER_OUTLIVES starts (th-late): how it's doing, for thread/read. */
+let lateHelper: { status: string; answer?: string } | null = null;
+let buf = "";
+for await (const chunk of Bun.stdin.stream()) {
+  buf += new TextDecoder().decode(chunk);
+  let nl: number;
+  while ((nl = buf.indexOf("\n")) >= 0) {
+    const line = buf.slice(0, nl);
+    buf = buf.slice(nl + 1);
+    if (!line.trim() || frozen) continue;
+    const m = JSON.parse(line);
+    if (process.env.FAKE_CODEX_RPC_LOG) appendFileSync(process.env.FAKE_CODEX_RPC_LOG, JSON.stringify(m) + "\n");
+    if (m.method === undefined && asks.has(m.id)) {
+      asks.get(m.id)!(m.result ?? {});
+      asks.delete(m.id);
+      continue;
+    }
+    switch (m.method) {
+      case "initialize":
+        // FAKE_CODEX_VERSION: the version its user agent names, as Codex's does (otherwise it says none).
+        out({ id: m.id, result: process.env.FAKE_CODEX_VERSION ? { userAgent: `crosstalk/${process.env.FAKE_CODEX_VERSION} (Mac OS 27.0.1; arm64) unknown (crosstalk; 0.1.0)` } : {} });
+        break;
+      case "model/list": {
+        const includeHidden = m.params?.includeHidden === true;
+        if (includeHidden && process.env.FAKE_CODEX_REFUSE_HIDDEN === "1") {
+          out({ id: m.id, error: { code: -32602, message: "Invalid request: unknown field `includeHidden`, expected `cursor` or `limit`" } });
+          break;
+        }
+        // Its default effort isn't gpt-test's, so a test can tell which one a lookup found.
+        const reserve = { id: "gpt-test-reserve", model: "gpt-test-reserve", displayName: "GPT test reserve", description: "Fast and affordable test model.", hidden: true, supportedReasoningEfforts: [{ reasoningEffort: "low", description: "" }, { reasoningEffort: "medium", description: "" }], defaultReasoningEffort: "low", isDefault: false };
+        out({ id: m.id, result: { data: [{ id: "gpt-test", model: "gpt-test", defaultReasoningEffort: "medium", isDefault: true }, ...(includeHidden && hiddenModels ? [reserve] : [])] } });
+        break;
+      }
+      case "config/read": {
+        // The person's own Codex setup as this server resolves it: FAKE_CODEX_OWN_SETUP is {"mcp_servers":[names],
+        // "plugins":[ids]}. FAKE_CODEX_NO_CONFIG_READ=1: a server that can't say (an older one: unknown method).
+        if (process.env.FAKE_CODEX_NO_CONFIG_READ === "1") {
+          out({ id: m.id, error: { code: -32601, message: "Method not found" } });
+          break;
+        }
+        const own = process.env.FAKE_CODEX_OWN_SETUP ? JSON.parse(process.env.FAKE_CODEX_OWN_SETUP) : { mcp_servers: [], plugins: [] };
+        const table = (names) => Object.fromEntries((names ?? []).map((n2) => [n2, { enabled: true }]));
+        out({ id: m.id, result: { config: { mcp_servers: table(own.mcp_servers), plugins: table(own.plugins) }, layers: null, origins: {} } });
+        break;
+      }
+      case "thread/read": {
+        // FAKE_CODEX_NO_READ=1: threads can't be read (a chat bringing in what was said in the Codex app gets nothing).
+        // FAKE_CODEX_THREAD_TURNS: the thread's turns (JSON), as said in the Codex app. FAKE_CODEX_READ_DELAY: how long
+        // a read takes (ms). FAKE_CODEX_READ_LOG: a line is added to this file for each read.
+        if (process.env.FAKE_CODEX_READ_LOG) appendFileSync(process.env.FAKE_CODEX_READ_LOG, `${m.params.threadId}\n`);
+        const late = m.params.threadId === "th-late" && lateHelper ? [{ id: "late-turn", status: lateHelper.status, items: lateHelper.answer ? [{ type: "agentMessage", id: "late-answer", text: lateHelper.answer }] : [] }] : null;
+        const turns = late ?? (process.env.FAKE_CODEX_THREAD_TURNS ? JSON.parse(process.env.FAKE_CODEX_THREAD_TURNS) : [{ id: "helper-turn", status: "inProgress" }]);
+        const answer = () =>
+          process.env.FAKE_CODEX_NO_READ === "1"
+            ? out({ id: m.id, error: { code: -32600, message: "thread not loaded" } })
+            : out({ id: m.id, result: { thread: { id: m.params.threadId, model: process.env.FAKE_CODEX_HELPER_MODEL ?? "gpt-test", reasoningEffort: process.env.FAKE_CODEX_HELPER_EFFORT ?? "medium", turns } } });
+        const delay = Number(process.env.FAKE_CODEX_READ_DELAY || 0);
+        if (delay) setTimeout(answer, delay);
+        else answer();
+        break;
+      }
+      case "thread/fork":
+        // FAKE_CODEX_FORK_LOG: what the copy was forked with. FAKE_CODEX_NO_TURN: a lastTurnId that's gone.
+        if (process.env.FAKE_CODEX_FORK_LOG) appendFileSync(process.env.FAKE_CODEX_FORK_LOG, JSON.stringify(m.params) + "\n");
+        if (oldConfigError(m.params?.config)) out({ id: m.id, error: { code: -32600, message: oldConfigError(m.params?.config) } });
+        else if (m.params.lastTurnId && m.params.lastTurnId === process.env.FAKE_CODEX_NO_TURN) out({ id: m.id, error: { code: -32600, message: `no turn ${m.params.lastTurnId}` } });
+        // FAKE_CODEX_FORK_EFFORT: the effort the original's thread was left on, which the fork keeps.
+        else {
+          hiddenOverrides = !!m.params?.config?.features?.multi_agent_v2;
+          out({ id: m.id, result: { thread: { id: "th-fork", forkedFromId: m.params.threadId, turns: [] }, model: m.params.model || process.env.FAKE_CODEX_MODEL || "gpt-test", reasoningEffort: process.env.FAKE_CODEX_FORK_EFFORT || null } });
+        }
+        break;
+      case "thread/resume":
+      case "thread/start":
+        if (oldConfigError(m.params?.config)) {
+          out({ id: m.id, error: { code: -32600, message: oldConfigError(m.params?.config) } });
+          break;
+        }
+        if (oddRefusal(m.params?.config)) {
+          out({ id: m.id, error: { code: -32600, message: oddRefusal(m.params?.config) } });
+          break;
+        }
+        // FAKE_CODEX_CONFIG_WARNING: settings this Codex ignored, as it says them (configWarning: a summary, and the details
+        // that name the keys). The one sign a Codex update renamed a setting Crosstalk sends.
+        if (process.env.FAKE_CODEX_CONFIG_WARNING) {
+          out({ method: "configWarning", params: { summary: "Ignored unknown configuration keys.", details: process.env.FAKE_CODEX_CONFIG_WARNING, path: "/dev/null", range: null } });
+        }
+        // FAKE_CODEX_RESUME_ERROR: a thread/resume fails with this message, as Codex words it: "thread not found: th-old" when
+        // the thread is gone, otherwise something that says nothing about the thread ("thread/resume timed out").
+        if (m.method === "thread/resume" && process.env.FAKE_CODEX_RESUME_ERROR) {
+          out({ id: m.id, error: { code: -32600, message: process.env.FAKE_CODEX_RESUME_ERROR } });
+          break;
+        }
+        // FAKE_CODEX_START_FOREIGN: on a server shared with the Codex app, other threads' requests (an approval, a question)
+        // reach a new chat before its thread/start is answered. Each is noted in the log of what came in, with its id.
+        if (m.method === "thread/start" && process.env.FAKE_CODEX_START_FOREIGN) {
+          const foreign = [
+            ["item/commandExecution/requestApproval", { threadId: "th-other", turnId: "tu-other", itemId: "cmd-other", kind: "command", environmentId: null, command: "npm test", cwd: "/tmp" }],
+            ["item/tool/requestUserInput", { threadId: "th-other", turnId: "tu-other", itemId: "call_other", questions: [{ id: "ship", header: "", question: "Ship it?", isOther: true, isSecret: false, options: [{ label: "Yes", description: "" }] }], isBlocking: true, autoResolutionMs: null }],
+          ] as const;
+          for (const [method, params] of foreign) {
+            if (process.env.FAKE_CODEX_RPC_LOG) appendFileSync(process.env.FAKE_CODEX_RPC_LOG, JSON.stringify({ sent: "request of another thread", id: askId }) + "\n");
+            void ask(method, params);
+          }
+        }
+        // FAKE_CODEX_LOG: where to write what the thread was started with, for tests.
+        if (process.env.FAKE_CODEX_LOG) writeFileSync(process.env.FAKE_CODEX_LOG, JSON.stringify(m.params));
+        hiddenOverrides = !!m.params?.config?.features?.multi_agent_v2;
+        setTimeout(() => out({ id: m.id, result: { thread: { id: "th-1" }, model: process.env.FAKE_CODEX_MODEL || "gpt-test", reasoningEffort: process.env.FAKE_CODEX_EFFORT || null } }), Number(process.env.FAKE_CODEX_START_DELAY || 0));
+        break;
+      case "turn/start": {
+        const id = `tu-${process.pid}-${++n}`;
+        const tid = m.params?.threadId ?? "th-1"; // a forked thread is answered as itself
+        const prevTurn = lastTurn;
+        lastTurn = id;
+        setTimeout(() => out({ id: m.id, result: { turn: { id } } }), Number(process.env.FAKE_CODEX_TURN_DELAY || 0));
+        const text: string = m.params?.input?.[0]?.text ?? "";
+        // What its helpers left for this turn goes into it.
+        if (mailbox.length) {
+          if (process.env.FAKE_CODEX_MAILBOX_LOG) appendFileSync(process.env.FAKE_CODEX_MAILBOX_LOG, JSON.stringify({ turn: id, mail: mailbox }) + "\n");
+          mailbox.length = 0;
+        }
+        // HELPER_OUTLIVES: the reply starts a helper agent (a thread of its own whose parent is the chat's) and ends while
+        // it works. The helper finishes once the file FAKE_CODEX_HELPER_DONE names exists (else after 200 ms): its answer
+        // (its last agentMessage, then its turn/completed), with no turn of the chat's running, goes to the mailbox and
+        // starts nothing, as Codex 0.160 does it.
+        if (text.includes("HELPER_OUTLIVES")) {
+          const helper = "th-late";
+          out({ method: "turn/started", params: { threadId: tid, turn: { id } } });
+          out({ method: "thread/started", params: { thread: { id: helper, parentThreadId: tid, agentNickname: "Tests", agentRole: "worker", model: process.env.FAKE_CODEX_MODEL || "gpt-test", reasoningEffort: "medium" } } });
+          out({ method: "turn/started", params: { threadId: helper, turn: { id: "late-turn" } } });
+          lateHelper = { status: "inProgress" };
+          out({ method: "item/agentMessage/delta", params: { threadId: tid, turnId: id, itemId: "a1", delta: "Asked a helper to run the tests." } });
+          out({ method: "turn/completed", params: { threadId: tid, turn: { id, status: "completed" } } });
+          void (async () => {
+            const done = process.env.FAKE_CODEX_HELPER_DONE;
+            if (done) while (!existsSync(done)) await Bun.sleep(20);
+            else await Bun.sleep(200);
+            const answer = "The tests pass: 412 of 412.";
+            out({ method: "item/completed", params: { threadId: helper, turnId: "late-turn", item: { type: "agentMessage", id: "late-answer", text: answer } } });
+            lateHelper = { status: "completed", answer };
+            out({ method: "turn/completed", params: { threadId: helper, turn: { id: "late-turn", status: "completed" } } });
+            mailbox.push({ from: "/root/tests", text: answer });
+          })();
+          break;
+        }
+        // OpenAI moves the reply to another model (REROUTE), or the agent starts a helper (SPAWN:<model>:<effort>).
+        if (process.env.FAKE_CODEX_TURN_DELAY) break;
+        // RESERVED: OpenAI refusing a helper tool without model and effort, when the thread's config hides them (with
+        // FAKE_CODEX_RESERVED_ALWAYS=1, also when it doesn't: something else hides them).
+        if (text.includes("RESERVED") && (hiddenOverrides || process.env.FAKE_CODEX_RESERVED_ALWAYS === "1")) {
+          out({ method: "turn/completed", params: { threadId: tid, turn: { id, status: "failed", error: { message: "Function 'collaboration.spawn_agent' is reserved for use by this model and must match the configured schema" } } } });
+          break;
+        }
+        // USAGE_LIMIT: a usage limit, as Codex reports one — the account's rate-limit snapshot (with the reset in
+        // seconds), then a failed turn whose TurnError names it (codexErrorInfo). USAGE_LIMIT_NO_RESET: no snapshot and
+        // no time in the words. SESSION_BUDGET: Codex's own budget for the thread, which never resets.
+        if (text.includes("USAGE_LIMIT")) {
+          if (!text.includes("USAGE_LIMIT_NO_RESET")) {
+            out({ method: "account/rateLimits/updated", params: { rateLimits: { limitName: null, primary: { usedPercent: 100, windowDurationMins: 300, resetsAt: Math.floor(Date.now() / 1000) + 1800 }, secondary: { usedPercent: 40, windowDurationMins: 10080, resetsAt: Math.floor(Date.now() / 1000) + 400000 }, planType: "pro", rateLimitReachedType: "rate_limit_reached" } } });
+          }
+          out({ method: "turn/completed", params: { threadId: tid, turn: { id, status: "failed", error: { message: "You've hit your usage limit for 5h.", codexErrorInfo: "usageLimitExceeded", additionalDetails: null, misalignment: null } } } });
+          break;
+        }
+        // AUTH_STALE: its sign-in stopped working, as Codex 0.160 reports it (a TurnError typed "unauthorized").
+        // AUTH_STALE_MIDWAY: the same, partway through a reply: it ran a command and said so first.
+        if (text.includes("AUTH_STALE_MIDWAY")) {
+          const item = { type: "commandExecution", id: `cmd-${n}`, command: "git push origin main", cwd: "/tmp", status: "inProgress", commandActions: [] };
+          out({ method: "item/started", params: { threadId: tid, turnId: id, item } });
+          out({ method: "item/completed", params: { threadId: tid, turnId: id, item: { ...item, status: "completed", exitCode: 0, aggregatedOutput: "main -> main" } } });
+          out({ method: "item/agentMessage/delta", params: { threadId: tid, turnId: id, itemId: "i1", delta: "Pushed the release." } });
+          out({ method: "turn/completed", params: { threadId: tid, turn: { id, status: "failed", error: { message: "Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again.", codexErrorInfo: "unauthorized", additionalDetails: null, misalignment: null } } } });
+          break;
+        }
+        if (text.includes("AUTH_STALE")) {
+          out({ method: "turn/completed", params: { threadId: tid, turn: { id, status: "failed", error: { message: "Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again.", codexErrorInfo: "unauthorized", additionalDetails: null, misalignment: null } } } });
+          break;
+        }
+        if (text.includes("SESSION_BUDGET")) {
+          out({ method: "turn/completed", params: { threadId: tid, turn: { id, status: "failed", error: { message: "This session has reached its budget.", codexErrorInfo: "sessionBudgetExceeded", additionalDetails: null, misalignment: null } } } });
+          break;
+        }
+        if (text.includes("REROUTE")) {
+          out({ method: "model/rerouted", params: { threadId: tid, turnId: id, fromModel: "gpt-test", toModel: "gpt-small", reason: "highRiskCyberActivity" } });
+          break;
+        }
+        // ASK_ASYNC: the agent asks without waiting (request_user_input_async) and goes on, as Codex 0.160 sends it: an
+        // agentMessage item (started and completed, no deltas) with delivery "async" and its questions, its text listing
+        // them for apps that can't show them (ASK_ASYNC_TWO: two questions). ASK_ASYNC_WAIT: the turn then works on until
+        // messages are steered into it, which it takes in (userMessage items) and answers.
+        if (text.includes("ASK_ASYNC")) {
+          const two = text.includes("ASK_ASYNC_TWO");
+          const questions = [{ title: "Ship it?", options: ["Yes", "No", "Not sure"] }, ...(two ? [{ title: "Tell the team?", options: ["Yes", "No"] }] : [])];
+          const asked = { type: "agentMessage", id: `call_ask${n}`, text: questions.map((q) => [q.title, ...q.options.map((o) => `- ${o}`)].join("\n")).join("\n\n"), phase: "final_answer", memoryCitation: null, delivery: "async", questions };
+          out({ method: "item/started", params: { threadId: tid, turnId: id, item: asked } });
+          out({ method: "item/completed", params: { threadId: tid, turnId: id, item: asked } });
+          out({ method: "item/agentMessage/delta", params: { threadId: tid, turnId: id, itemId: `m-${n}`, delta: "I'll keep checking the build meanwhile." } });
+          if (text.includes("ASK_ASYNC_WAIT")) waitingTurns.set(id, { tid, taken: [] });
+          else out({ method: "turn/completed", params: { threadId: tid, turn: { id, status: "completed" } } });
+          break;
+        }
+        // ASK_INPUT:<blocking|optional|unsaid>: Codex's question request (request_user_input), as it waits for the answer
+        // (isBlocking true, Plan mode), as it can go on without one (false, Default mode), or from a Codex that doesn't
+        // say; the reply says what came back. ASK_RESOLVED: the question is answered in another app meanwhile (Codex says
+        // serverRequest/resolved). ASK_OTHER_THREAD: another thread's question, settled there.
+        const input = /ASK_INPUT:(\w+)/.exec(text);
+        if (input || text.includes("ASK_RESOLVED") || text.includes("ASK_OTHER_THREAD")) {
+          const other = text.includes("ASK_OTHER_THREAD");
+          const requestId = askId;
+          const answered = ask("item/tool/requestUserInput", {
+            threadId: other ? "th-other" : tid,
+            turnId: id,
+            itemId: `call_input${n}`,
+            questions: [{ id: "ship", header: "Release", question: "Ship it?", isOther: true, isSecret: false, options: [{ label: "Yes (Recommended)", description: "Tag and publish." }, { label: "No", description: "" }] }],
+            ...(input?.[1] === "unsaid" ? {} : { isBlocking: input?.[1] !== "optional" }),
+            autoResolutionMs: null,
+          });
+          if (!input) {
+            setTimeout(() => {
+              // Noted in the log of what came in, so a test can tell an answer sent before this from one sent after.
+              if (process.env.FAKE_CODEX_RPC_LOG) appendFileSync(process.env.FAKE_CODEX_RPC_LOG, JSON.stringify({ sent: "serverRequest/resolved", requestId }) + "\n");
+              out({ method: "serverRequest/resolved", params: { threadId: other ? "th-other" : tid, requestId } });
+              // The turn goes on a little before it ends.
+              setTimeout(() => {
+                out({ method: "item/agentMessage/delta", params: { threadId: tid, turnId: id, itemId: "i1", delta: other ? "Done." : "Answered in the Codex app." } });
+                out({ method: "turn/completed", params: { threadId: tid, turn: { id, status: "completed" } } });
+              }, 200);
+            }, 50);
+            break;
+          }
+          void answered.then((r) => {
+            out({ method: "item/agentMessage/delta", params: { threadId: tid, turnId: id, itemId: "i1", delta: `Answers: ${JSON.stringify(r)}` } });
+            out({ method: "turn/completed", params: { threadId: tid, turn: { id, status: "completed" } } });
+          });
+          break;
+        }
+        // LATE_ITEM: what the previous turn still sends after it ended (a helper's "completed" note reaching the chat's
+        // thread late) comes before this turn's own events, and before the answer to turn/start.
+        if (text.includes("LATE_ITEM") && prevTurn) out({ method: "item/completed", params: { threadId: tid, turnId: prevTurn, item: { type: "subAgentActivity", id: `subagent-completed-${prevTurn}`, kind: "completed", agentThreadId: "th-helper-a", agentPath: "/root/helper_a" } } });
+        if (text.includes("MCP_RESULT")) {
+          const item = { type: "mcpToolCall", id: "mcp-1", server: "crosstalk", tool: "read_chat", arguments: { chat: "r-test" } };
+          out({ method: "item/started", params: { threadId: tid, turnId: id, item } });
+          out({ method: "item/completed", params: { threadId: tid, turnId: id, item: { ...item, status: "completed", result: { isError: true, content: [{ type: "text", text: "Tool returned useful context " + "x".repeat(30000) }] } } } });
+        }
+        if (text.includes("V2_HELPER")) out({ method: "item/completed", params: { threadId: tid, turnId: id, item: { type: "subAgentActivity", id: "v2", kind: "started", agentThreadId: "helper-1", agentPath: "/root/helper" } } });
+        // V2_MESSAGE_ROOT: a reply that uses Codex's newer helpers (multi_agent_v2, 0.160), in the order Codex sent it in
+        // the stuck reply. The agent starts two helpers (a "started" subAgentActivity on its own thread; no thread/started
+        // and no collabAgentToolCall for them) and waits; each helper tells it what it found with send_message to /root,
+        // which Codex reports on the helper's own thread as an "interacted" subAgentActivity naming the agent it messaged:
+        // agentThreadId is the chat's own thread. The helpers' messages reach the agent inside its turn (no turn of their
+        // own on its thread). The agent gives one helper a follow-up (a second turn on that helper's thread), searches the
+        // web, and writes its answer after the helpers' turns have ended; the last helper's "completed" activity reaches the
+        // chat's thread after the reply's turn ended.
+        if (text.includes("V2_MESSAGE_ROOT")) {
+          const helpers = [
+            { thread: "th-helper-a", turn: "tu-helper-a", path: "/root/helper_a" },
+            { thread: "th-helper-b", turn: "tu-helper-b", path: "/root/helper_b" },
+          ];
+          const both = (threadId: string, turnId: string, item: unknown) => {
+            out({ method: "item/started", params: { threadId, turnId, item } });
+            out({ method: "item/completed", params: { threadId, turnId, item } });
+          };
+          const turnEvent = (method: string, threadId: string, turnId: string, status: string) => out({ method, params: { threadId, turn: { id: turnId, items: [], status } } });
+          const wait = (status: string) => ({ type: "collabAgentToolCall", id: `wait-${n}`, tool: "wait", status, senderThreadId: tid, receiverThreadIds: [], prompt: null, model: null, reasoningEffort: null, agentsStates: {} });
+          const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
+          void (async () => {
+            await pause(5); // the turn/start answer goes first
+            turnEvent("turn/started", tid, id, "inProgress");
+            out({ method: "item/agentMessage/delta", params: { threadId: tid, turnId: id, itemId: `m0-${n}`, delta: "Asking two helpers." } });
+            for (const h of helpers) {
+              both(tid, id, { type: "subAgentActivity", id: `spawn-${h.thread}`, kind: "started", agentThreadId: h.thread, agentPath: h.path });
+              turnEvent("turn/started", h.thread, h.turn, "inProgress");
+              out({ method: "item/agentMessage/delta", params: { threadId: h.thread, turnId: h.turn, itemId: `hm-${h.thread}`, delta: "helper text" } });
+            }
+            out({ method: "item/started", params: { threadId: tid, turnId: id, item: wait("inProgress") } });
+            await pause(5);
+            for (const h of helpers) both(h.thread, h.turn, { type: "subAgentActivity", id: `msg-${h.thread}`, kind: "interacted", agentThreadId: tid, agentPath: "/root" });
+            out({ method: "item/completed", params: { threadId: tid, turnId: id, item: wait("completed") } });
+            // A follow-up for the first helper: its first turn ends, and a turn of its own for the follow-up runs and ends.
+            both(tid, id, { type: "subAgentActivity", id: `followup-${n}`, kind: "interacted", agentThreadId: helpers[0].thread, agentPath: helpers[0].path });
+            turnEvent("turn/completed", helpers[0].thread, helpers[0].turn, "completed");
+            turnEvent("turn/started", helpers[0].thread, `${helpers[0].turn}-2`, "inProgress");
+            out({ method: "item/agentMessage/delta", params: { threadId: helpers[0].thread, turnId: `${helpers[0].turn}-2`, itemId: "hm-2", delta: "more helper text" } });
+            turnEvent("turn/completed", helpers[0].thread, `${helpers[0].turn}-2`, "completed");
+            await pause(5);
+            both(tid, id, { type: "webSearch", id: `ws-${n}`, query: "after the helpers", action: null });
+            turnEvent("turn/completed", helpers[1].thread, helpers[1].turn, "completed");
+            await pause(5);
+            out({ method: "item/agentMessage/delta", params: { threadId: tid, turnId: id, itemId: `m1-${n}`, delta: "Done." } });
+            both(tid, id, { type: "subAgentActivity", id: `subagent-completed-${helpers[1].turn}`, kind: "completed", agentThreadId: helpers[1].thread, agentPath: helpers[1].path });
+            out({ method: "item/completed", params: { threadId: tid, turnId: id, item: { type: "agentMessage", id: `m1-${n}`, text: "Done.", phase: null } } });
+            turnEvent("turn/completed", tid, id, "completed");
+            await pause(5);
+            both(tid, id, { type: "subAgentActivity", id: `subagent-completed-${helpers[0].turn}-2`, kind: "completed", agentThreadId: helpers[0].thread, agentPath: helpers[0].path });
+          })();
+          break;
+        }
+        // ASK_RUN:<command>[@<cwd>], ASK_NET:<command> (network access for it), ASK_STDIN:<command> (input into a
+        // terminal that's running), ASK_EDIT:<add|update|delete|move>:<path> (a file change).
+        const run = /ASK_(RUN|NET|STDIN):([^\s@]+)(?:@(\S+))?/.exec(text);
+        const edit = /ASK_EDIT:(\w+):(\S+)/.exec(text);
+        if (run || edit) {
+          const asked = run
+            ? ask("item/commandExecution/requestApproval", { threadId: tid, turnId: id, itemId: `cmd-${n}`, kind: run[1] === "STDIN" ? "writeStdin" : "command", environmentId: null, command: run[2], cwd: run[3] ?? "/tmp", ...(run[1] === "NET" ? { networkApprovalContext: { host: "example.com", protocol: "https" } } : {}) })
+            : (() => {
+                const kind = edit![1] === "move" ? { type: "update", move_path: `${edit![2]}.moved` } : edit![1] === "update" ? { type: "update", move_path: null } : { type: edit![1] };
+                const item = { type: "fileChange", id: `fc-${n}`, changes: [{ path: edit![2], kind, diff: "" }], status: "inProgress" };
+                out({ method: "item/started", params: { threadId: tid, turnId: id, item } });
+                return ask("item/fileChange/requestApproval", { threadId: tid, turnId: id, itemId: item.id });
+              })();
+          void asked.then((r) => {
+            out({ method: "item/agentMessage/delta", params: { threadId: tid, turnId: id, itemId: "i1", delta: `Decision: ${r.decision}` } });
+            out({ method: "turn/completed", params: { threadId: tid, turn: { id, status: "completed" } } });
+          });
+          break;
+        }
+        // BACKGROUND_TERMINAL: a command (a dev server) that keeps running after its turn ends; STOP_TERMINAL: it ends.
+        if (text.includes("BACKGROUND_TERMINAL") || text.includes("STOP_TERMINAL")) {
+          const item = { type: "commandExecution", id: "cmd-bg", command: "bun run dev", cwd: "/tmp", processId: "p-1", source: "unifiedExecStartup", status: "inProgress", commandActions: [] };
+          if (text.includes("STOP_TERMINAL")) out({ method: "item/completed", params: { threadId: tid, turnId: id, item: { ...item, status: "completed", exitCode: 0 } } });
+          else out({ method: "item/started", params: { threadId: tid, turnId: id, item } });
+          out({ method: "item/agentMessage/delta", params: { threadId: tid, turnId: id, itemId: "i1", delta: "Done." } });
+          out({ method: "turn/completed", params: { threadId: tid, turn: { id, status: "completed" } } });
+          break;
+        }
+        if (text.includes("LONG_STEP")) {
+          const item = { type: "commandExecution", id: `cmd-${n}`, command: "sleep 600", cwd: "/tmp", status: "inProgress", commandActions: [] };
+          out({ method: "item/started", params: { threadId: tid, turnId: id, item } });
+          long.set(id, { tid, pending: [], taken: [] });
+          break;
+        }
+        const spawn = /SPAWN:([^:\s]*):([^:\s]*)/.exec(text);
+        if (spawn) {
+          out({ method: "item/started", params: { threadId: tid, turnId: id, item: { type: "collabAgentToolCall", id: "c1", tool: "spawnAgent", status: "inProgress", prompt: "Check the tests", model: spawn[1] || null, reasoningEffort: spawn[2] || null } } });
+          // Finished, it says what the helper runs on (FAKE_CODEX_SPAWN_DONE_EFFORT: other than what the start said).
+          out({ method: "item/completed", params: { threadId: tid, turnId: id, item: { type: "collabAgentToolCall", id: "c1", tool: "spawnAgent", status: "completed", prompt: "Check the tests", model: spawn[1] || null, reasoningEffort: process.env.FAKE_CODEX_SPAWN_DONE_EFFORT ?? (spawn[2] || null) } } });
+        }
+        if (mark && !existsSync(mark)) {
+          writeFileSync(mark, String(process.pid));
+          process.on("SIGTERM", () => {});
+          frozen = true;
+          break;
+        }
+        out({ method: "item/agentMessage/delta", params: { threadId: tid, turnId: id, itemId: "i1", delta: text.startsWith("(Crosstalk stopped the step") ? "Answering your message now." : "Done." } });
+        out({ method: "turn/completed", params: { threadId: tid, turn: { id, status: "completed" } } });
+        break;
+      }
+      case "turn/steer": {
+        const waiting = waitingTurns.get(m.params.expectedTurnId);
+        if (waiting) {
+          out({ id: m.id, result: { turnId: m.params.expectedTurnId } });
+          waiting.taken.push(userItem(m.params.clientUserMessageId ?? null, m.params.input?.[0]?.text ?? ""));
+          const turnId = m.params.expectedTurnId;
+          // It reads what was steered in at its next step, a moment after the last message.
+          clearTimeout(waiting.timer);
+          waiting.timer = setTimeout(() => {
+            waitingTurns.delete(turnId);
+            for (const item of waiting.taken) {
+              out({ method: "item/started", params: { threadId: waiting.tid, turnId, item } });
+              out({ method: "item/completed", params: { threadId: waiting.tid, turnId, item } });
+            }
+            out({ method: "item/agentMessage/delta", params: { threadId: waiting.tid, turnId, itemId: "i2", delta: "Got your answer." } });
+            out({ method: "turn/completed", params: { threadId: waiting.tid, turn: { id: turnId, status: "completed" } } });
+          }, 60);
+          break;
+        }
+        const turn = long.get(m.params.expectedTurnId);
+        if (!turn) {
+          out({ id: m.id, error: { code: -32600, message: "no active turn to steer" } });
+          break;
+        }
+        turn.pending.push({ clientId: m.params.clientUserMessageId ?? null, text: m.params.input?.[0]?.text ?? "" });
+        out({ id: m.id, result: { turnId: m.params.expectedTurnId } });
+        if (process.env.FAKE_CODEX_FAIL_ON_STEER === "1") {
+          long.delete(m.params.expectedTurnId);
+          out({ method: "turn/completed", params: { threadId: m.params.threadId, turn: { id: m.params.expectedTurnId, status: "failed", error: { message: "The model had a problem.", codexErrorInfo: "other", additionalDetails: null, misalignment: null } } } });
+        }
+        break;
+      }
+      case "turn/interrupt": {
+        out({ id: m.id, result: {} });
+        const turn = long.get(m.params.turnId);
+        if (turn && process.env.FAKE_CODEX_STUCK_INTERRUPT === "1") break;
+        if (turn && process.env.FAKE_CODEX_TAKE_ON_INTERRUPT === "1") {
+          for (const p of turn.pending.splice(0)) {
+            const item = userItem(p.clientId, p.text);
+            out({ method: "item/started", params: { threadId: turn.tid, turnId: m.params.turnId, item } });
+            out({ method: "item/completed", params: { threadId: turn.tid, turnId: m.params.turnId, item } });
+            turn.taken.push(item);
+          }
+        }
+        long.delete(m.params.turnId);
+        const ended = () => out({ method: "turn/completed", params: { threadId: m.params.threadId, turn: { id: m.params.turnId, status: "interrupted", items: turn?.taken ?? [], itemsView: "summary" } } });
+        if (process.env.FAKE_CODEX_STOP_MS) setTimeout(ended, Number(process.env.FAKE_CODEX_STOP_MS));
+        else ended();
+        break;
+      }
+      default:
+        if (m.id !== undefined) out({ id: m.id, result: {} });
+    }
+  }
+}

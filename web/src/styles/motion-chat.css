@@ -1,0 +1,274 @@
+/*
+ * Motion on the chat screen, in its menus and in Settings' tabs. Imported by motion.css, which holds every token and the
+ * rules this file keeps: transform and opacity only (colour briefly, on small controls), nothing waits for an animation,
+ * everything that moves sits in the no-preference block, and Reduce Motion gets a fade of 150 ms or less, or nothing.
+ *
+ * What never happens here
+ * - Streaming text moving: a reply stays where it is as it comes (its avatar pops in), so its words are readable from
+ *   its first frame, and nothing fades or types them in. The caret keeps the blink it always had (motion.css).
+ * - The scroll position moving. Nothing in the messages moves down or grows past its own box while it comes in (scale
+ *   from inside the box, opacity, or a nudge upwards), so the chat's scroll height never changes under a reply you
+ *   follow, and the chat jumps to the newest message exactly as it did. The same goes for the box above the message box,
+ *   which scrolls too (`.composer-work`).
+ * - Anything you can tap being smaller while it comes in: what holds buttons (a card, a line above the message box, a
+ *   menu) slides a few pixels and fades, at its full size from its first frame, so a finger, and a test measuring a 44 px
+ *   target, finds it as it will be. Only your own message settles by scale, and only when there's nothing in it to tap.
+ * - A focus move, the history drawn when a chat opens or catches up, and an older page coming in: only what arrives
+ *   while the chat is up moves (ChatScreen.tsx marks it, and motion.ts `useEntrance()` under its `EntranceScope`).
+ *
+ * Classes the views put on (fixed while they play, so a redraw never plays one again; and each plays under the same name
+ * with Reduce Motion, a fade there, so turning the setting on or off never plays one again either)
+ * - `.msg.m-arrive`: a message that arrived while you followed the chat, for a second (ChatScreen.tsx takes it off then,
+ *   drawn again or not). Yours settles out of its corner by the message box; a reply's (or another chat's) avatar pops in.
+ * - `.m-drop`: something that came in on a chat that's up: a card under a message (an answer, a request, a note), a line
+ *   above the message box (the status line, Send now, helpers, Review approval), what opens under a line you tapped.
+ * - `.m-fresh`: a step, a helper, a reply's list of steps or an attachment that showed up while you watched: a short fade.
+ * - `.m-swap`, `.m-ready`: Send and Stop taking each other's place; Send's arrow when there's something to send.
+ * - `.m-tab-next`, `.m-tab-back`: Settings' tab you went to comes in from that side.
+ * Menus (`.ctl-pop`, the @ list) rise a touch out of the row they open from; a menu that closes leaves a copy that
+ * shrinks into its corner as it fades (motion.ts `leave(el, "menu")`). Chevrons turn instead of snapping.
+ */
+
+/* ------------------------------------------------------------ keyframes */
+
+/* Your message, out of its corner by the message box: scale only, from inside its own box. */
+@keyframes m-settle-mine {
+  from {
+    scale: 0.92;
+  }
+}
+/* A reply's avatar, as the reply starts (the reply's words, and anything in it to tap, stay as they are). */
+@keyframes m-avatar-in {
+  from {
+    opacity: 0;
+    scale: 0.6;
+  }
+}
+/* A menu, out of the row it opens from: its full size all the way, in place by 120 ms as 0.6.2's popped in (motion.css's
+   m-drop-in brings the rest in from above). */
+@keyframes m-menu-in {
+  from {
+    opacity: 0;
+    translate: 0 8px;
+  }
+}
+/* Settings' next tab: less than the page's own padding (14 px on a phone), so nothing ever sticks out sideways. */
+@keyframes m-tab-next {
+  from {
+    opacity: 0;
+    translate: 12px 0;
+  }
+}
+@keyframes m-tab-back {
+  from {
+    opacity: 0;
+    translate: -12px 0;
+  }
+}
+
+/* ------------------------------------------------------------ both ways: fades and colour */
+
+/* A step, a helper, a list of steps or an attachment showing up while you watch: a fade, whatever the setting. */
+.m-fresh,
+.activity.m-tapped[open] > .act-row {
+  animation: m-fade-in var(--dur-fade) var(--ease-fade);
+}
+/* Send or Stop taking the other's place fades in where it is, its full size from its first frame. */
+.composer .send.m-swap {
+  animation: m-fade-in var(--dur-fade) var(--ease-fade);
+}
+/* The controls in and around the message box and Settings' tabs change colour briefly, never in a flash. */
+.composer .send,
+.composer-icon,
+.ctl,
+.settings-tabs-row button,
+.msg-actions .link-action,
+button.chat-status,
+.helpers-head {
+  transition:
+    background-color var(--dur-paint) var(--ease-fade),
+    border-color var(--dur-paint) var(--ease-fade),
+    color var(--dur-paint) var(--ease-fade);
+}
+/* A request you answered greys out. */
+.approval {
+  transition:
+    background-color var(--dur-paint) var(--ease-fade),
+    border-color var(--dur-paint) var(--ease-fade),
+    opacity var(--dur-paint) var(--ease-fade);
+}
+/* A message's actions fade in under it. */
+.msg-actions {
+  transition: opacity var(--dur-paint) var(--ease-fade);
+}
+/* A reply's steps, open: the chevron points down (it turns there, with motion). */
+.activity > summary > .activity-chevron {
+  flex: none;
+}
+.activity[open] > summary > .activity-chevron {
+  rotate: 90deg;
+}
+
+/* ------------------------------------------------------------ with motion */
+
+@media (prefers-reduced-motion: no-preference) {
+  /*
+   * ---- Messages that arrive while you follow the chat: yours settles out of its corner (ChatScreen marks it only when
+   * there's nothing in it to tap); a reply's avatar pops in as it starts, from its foot (never past the reply's bottom).
+   */
+  .msg.human.m-arrive {
+    animation: m-settle-mine var(--dur-enter) var(--ease-snappy);
+    transform-origin: 100% 100%;
+  }
+  .msg.agent.m-arrive > .avatar {
+    animation: m-avatar-in var(--dur-badge) var(--ease-bouncy);
+    transform-origin: 50% 100%;
+  }
+
+  /*
+   * ---- A card, a line or a step's output that comes in drops a touch into place as it fades in: from above, so it never
+   * reaches past the bottom of the box it's in (the messages and the box above the message box scroll), on the smooth
+   * curve (an overshoot would), and at its full size, so every button in it is a finger's size from its first frame.
+   */
+  .m-drop,
+  .act-row[open] > pre {
+    animation: m-drop-in var(--dur-enter) var(--ease-smooth);
+  }
+
+  /* ---- A message's actions drop a touch as they show (their row's height still changes at once). */
+  .msg-actions {
+    translate: 0 -4px;
+    transition:
+      opacity var(--dur-paint) var(--ease-fade),
+      translate var(--dur-enter) var(--ease-smooth);
+  }
+  .your-msg.open .msg-actions,
+  .your-msg:focus-within .msg-actions {
+    translate: none;
+  }
+  @media (hover: hover) {
+    .your-msg:hover .msg-actions {
+      translate: none;
+    }
+  }
+
+  /*
+   * ---- Send and Stop take each other's place: the new one fades in where it is (above), and its icon pops (Stop's
+   * square; Send's arrow when it has something to send); the old one's copy fades away.
+   */
+  .composer .send.stop.m-swap > svg:not(.spin),
+  .composer .send .m-ready {
+    animation: m-pop-in var(--dur-badge) var(--ease-bouncy);
+  }
+
+  /*
+   * ---- Menus rise a touch out of the row they open from (the model, effort, permissions and context menus; the @ list),
+   * their choices a finger's size all the way; a closed one's copy shrinks into the corner it came from.
+   */
+  .ctl-pop,
+  .mention-pop {
+    animation: m-menu-in var(--dur-menu-in) var(--ease-snappy);
+  }
+  .ctl-pop.left,
+  .mention-pop {
+    transform-origin: 0 100%;
+  }
+  .ctl-pop.right {
+    transform-origin: 100% 100%;
+  }
+
+  /* ---- Settings: the tab you went to comes in from its side. */
+  .m-tab-next {
+    animation: m-tab-next var(--dur-tab) var(--ease-smooth);
+  }
+  .m-tab-back {
+    animation: m-tab-back var(--dur-tab) var(--ease-smooth);
+  }
+
+  /* ---- Chevrons turn. */
+  .chat-status-chevron,
+  .working-toggle > svg:last-child {
+    transition: transform var(--dur-rotate) var(--ease-smooth);
+  }
+  .activity > summary > .activity-chevron {
+    transition: rotate var(--dur-rotate) var(--ease-smooth);
+  }
+
+  /* ---- Press: a touch smaller while held, a spring back (motion.css's lists, for the controls here). */
+  .composer .send,
+  .composer-icon {
+    --press: var(--press-icon);
+  }
+  .ctl,
+  .settings-tabs-row button,
+  .msg-actions .link-action {
+    --press: var(--press-button);
+  }
+  button.chat-status,
+  .helpers-head {
+    --press: var(--press-card);
+  }
+  :is(.composer .send, .composer-icon, .ctl, .settings-tabs-row button, .msg-actions .link-action, button.chat-status, .helpers-head) {
+    transition:
+      background-color var(--dur-paint) var(--ease-fade),
+      border-color var(--dur-paint) var(--ease-fade),
+      color var(--dur-paint) var(--ease-fade),
+      scale var(--dur-press-out) var(--ease-bouncy);
+  }
+  :is(.composer .send, .composer-icon, .ctl, .settings-tabs-row button, .msg-actions .link-action, button.chat-status, .helpers-head):active:not(:disabled):not([aria-disabled="true"]) {
+    scale: var(--press);
+    transition:
+      background-color var(--dur-paint) var(--ease-fade),
+      border-color var(--dur-paint) var(--ease-fade),
+      color var(--dur-paint) var(--ease-fade),
+      scale var(--dur-press-in) var(--ease-fade);
+  }
+}
+
+/* ------------------------------------------------------------ Reduce Motion */
+
+@media (prefers-reduced-motion: reduce) {
+  /*
+   * What comes in fades in, 150 ms, under the name it moves by with motion (these keyframes are a fade here; m-drop-in's
+   * and m-pop-in's are in motion.css), so turning the setting on or off never plays it again. Messages simply appear (a
+   * reply's words never fade), and nothing turns.
+   */
+  @keyframes m-menu-in {
+    from {
+      opacity: 0;
+    }
+  }
+  @keyframes m-tab-next {
+    from {
+      opacity: 0;
+    }
+  }
+  @keyframes m-tab-back {
+    from {
+      opacity: 0;
+    }
+  }
+  .m-drop,
+  .act-row[open] > pre {
+    animation: m-drop-in var(--dur-fade) var(--ease-fade);
+  }
+  /* An icon simply shows (pops are off): the same animation, for no time at all, so it's never drawn. */
+  .composer .send.stop.m-swap > svg:not(.spin),
+  .composer .send .m-ready {
+    animation: m-pop-in 0s;
+  }
+  .ctl-pop,
+  .mention-pop {
+    animation: m-menu-in var(--dur-fade) var(--ease-fade);
+  }
+  .m-tab-next {
+    animation: m-tab-next var(--dur-fade) var(--ease-fade);
+  }
+  .m-tab-back {
+    animation: m-tab-back var(--dur-fade) var(--ease-fade);
+  }
+  /* Held down: dimmed, nothing moves. */
+  :is(.composer .send, .composer-icon, .ctl, .settings-tabs-row button, .msg-actions .link-action, button.chat-status, .helpers-head):active:not(:disabled):not([aria-disabled="true"]) {
+    opacity: 0.7;
+  }
+}

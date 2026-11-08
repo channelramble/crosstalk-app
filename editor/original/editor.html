@@ -1,0 +1,343 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Image Editor</title>
+<style>
+  :root { color-scheme: dark; --bg:#111214; --panel:#1b1d21; --line:#2c2f36; --text:#e8e9ec; --dim:#9a9ea8; --accent:#4f8cff; --mask:#ff2d55; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:16px/1.4 -apple-system, system-ui, sans-serif; padding:env(safe-area-inset-top) 12px calc(16px + env(safe-area-inset-bottom)); }
+  header { display:flex; align-items:baseline; justify-content:space-between; padding:12px 0 8px; }
+  h1 { font-size:18px; margin:0; }
+  #server { font-size:12px; color:var(--dim); }
+  button, select, .filebtn { font:inherit; color:var(--text); background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:10px 12px; touch-action:manipulation; }
+  button:disabled { opacity:.45; }
+  button.on { border-color:var(--accent); background:#1d2b45; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600; width:100%; padding:14px; }
+  .row { display:flex; gap:8px; align-items:center; margin:8px 0; flex-wrap:wrap; }
+  .row > .grow { flex:1; }
+  .filebtn { display:block; text-align:center; cursor:pointer; }
+  #file { display:none; }
+  #wrap { position:relative; overflow:auto; max-height:62vh; background:#0a0a0b; border:1px solid var(--line); border-radius:10px; -webkit-overflow-scrolling:touch; }
+  #stage { position:relative; margin:0 auto; }
+  #stage canvas { position:absolute; inset:0; width:100%; height:100%; }
+  #mask { opacity:.45; touch-action:none; }
+  #cmp { display:none; }
+  #empty { padding:48px 16px; text-align:center; color:var(--dim); }
+  label.small { font-size:13px; color:var(--dim); display:flex; align-items:center; gap:6px; }
+  input[type=range] { width:110px; }
+  textarea { width:100%; min-height:72px; font:inherit; color:var(--text); background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:10px; }
+  #bar { height:6px; background:var(--panel); border-radius:3px; overflow:hidden; margin-top:8px; }
+  #bar > div { height:100%; width:0; background:var(--accent); transition:width .2s; }
+  #status { font-size:14px; color:var(--dim); min-height:20px; margin-top:6px; white-space:pre-wrap; }
+  #status.err { color:#ff6b6b; }
+  .hint { font-size:13px; color:var(--dim); margin:4px 0 0; }
+  #saveview { position:fixed; inset:0; background:rgba(0,0,0,.92); display:none; flex-direction:column; align-items:center; justify-content:center; padding:16px; gap:12px; z-index:10; }
+  #saveview img { max-width:100%; max-height:75vh; -webkit-touch-callout:default; }
+  #saveview a { color:var(--accent); }
+</style>
+</head>
+<body>
+<header><h1>Image Editor</h1><span id="server">connecting…</span></header>
+
+<label class="filebtn" for="file">📷 Choose photo</label>
+<input id="file" type="file" accept="image/*">
+
+<div class="row">
+  <button id="tPaint" class="on">🖌 Paint</button>
+  <button id="tErase">⌫ Erase</button>
+  <button id="tMove">✋ Move</button>
+  <button id="clear">Clear</button>
+</div>
+<div class="row">
+  <label class="small">Brush <input id="brush" type="range" min="4" max="120" value="36"></label>
+  <label class="small">Zoom <input id="zoom" type="range" min="1" max="6" step="0.25" value="1"></label>
+</div>
+
+<div id="wrap">
+  <div id="empty">Choose a photo to start.</div>
+  <div id="stage"><canvas id="base"></canvas><canvas id="cmp"></canvas><canvas id="mask"></canvas></div>
+</div>
+<p class="hint">Paint over the part you want changed — everything else stays pixel-identical. No paint = edit the whole photo.</p>
+
+<textarea id="prompt" placeholder="Describe the edit, e.g. “replace the jacket with a black leather jacket”"></textarea>
+<div class="row">
+  <label class="small grow">Detail
+    <select id="res">
+      <option value="768">Fast (768)</option>
+      <option value="1024" selected>Standard (1024)</option>
+      <option value="1328">High (1328, slower)</option>
+    </select>
+  </label>
+</div>
+<button id="go" class="primary">Generate</button>
+<div id="bar"><div></div></div>
+<div id="status"></div>
+
+<div class="row">
+  <button id="retry" disabled>↻ Try again</button>
+  <button id="undo" disabled>↶ Undo</button>
+  <button id="compare" disabled>Hold: before</button>
+  <button id="save" disabled>⬇ Save</button>
+</div>
+
+<div id="saveview">
+  <img id="saveimg" alt="Edited image">
+  <div>Press and hold the image → <b>Save to Photos</b>, or <a id="savelink" download="edited.png">download PNG</a>.</div>
+  <button id="closesave">Close</button>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const base = $('base'), mask = $('mask'), cmp = $('cmp'), wrap = $('wrap'), stage = $('stage');
+const bctx = base.getContext('2d'), mctx = mask.getContext('2d');
+const MAX_SIDE = 4096, MAX_HISTORY = 5;
+const MODELS = {
+  unet: 'qwen-image-2.1-turbo-Q4_K_M.gguf',
+  clip: 'qwen3vl_8b-Q4_K_M.gguf',
+  vae: 'qwen_image_2.1_vae_bf16.safetensors',
+};
+const STAGES = { '1': 'Loading image model…', '2': 'Loading text encoder…', '5': 'Reading your prompt…', '6': 'Editing…', '7': 'Decoding…', '8': 'Saving…' };
+const clientId = Math.random().toString(36).slice(2) + Date.now().toString(36);
+let tool = 'paint', zoom = 1, painting = false, last = null, busy = false, current = null;
+const history = [];
+
+function status(text, err = false) { $('status').textContent = text; $('status').classList.toggle('err', err); }
+function progress(frac) { $('bar').firstElementChild.style.width = `${Math.round(frac * 100)}%`; }
+function refreshButtons() {
+  const has = base.width > 0;
+  $('go').disabled = busy || !has;
+  $('undo').disabled = busy || !history.length;
+  $('retry').disabled = busy || !history.length || !current;
+  $('compare').disabled = busy || !history.length;
+  $('save').disabled = busy || !has;
+}
+
+// ---- server ----
+fetch('/system_stats').then(r => r.json()).then(s => {
+  const d = s.devices && s.devices[0];
+  $('server').textContent = `connected · ${d ? d.type : 'cpu'} · ${Math.round(s.system.ram_total / 2 ** 30)} GB`;
+}).catch(() => { $('server').textContent = 'server offline'; });
+
+const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws?clientId=${clientId}`);
+ws.onmessage = ev => {
+  if (typeof ev.data !== 'string' || !busy) return;
+  const m = JSON.parse(ev.data);
+  if (m.type === 'executing' && m.data.node && STAGES[m.data.node]) status(STAGES[m.data.node]);
+  if (m.type === 'progress') { progress(m.data.value / m.data.max); status(`Editing… step ${m.data.value}/${m.data.max}`); }
+};
+
+// ---- loading ----
+$('file').onchange = async e => {
+  const f = e.target.files[0];
+  if (!f) return;
+  const bmp = await createImageBitmap(f);
+  const s = Math.min(1, MAX_SIDE / Math.max(bmp.width, bmp.height));
+  const w = Math.round(bmp.width * s), h = Math.round(bmp.height * s);
+  for (const c of [base, mask, cmp]) { c.width = w; c.height = h; }
+  bctx.drawImage(bmp, 0, 0, w, h);
+  history.length = 0; current = null;
+  $('empty').style.display = 'none';
+  layout(); refreshButtons();
+  status(s < 1 ? `Loaded at ${w}×${h} (scaled from ${bmp.width}×${bmp.height}).` : `Loaded ${w}×${h}.`);
+  e.target.value = '';
+};
+
+function layout() {
+  if (!base.width) return;
+  const fx = (wrap.scrollLeft + wrap.clientWidth / 2) / (stage.offsetWidth || 1);
+  const fy = (wrap.scrollTop + wrap.clientHeight / 2) / (stage.offsetHeight || 1);
+  const w = wrap.clientWidth * zoom;
+  stage.style.width = `${w}px`;
+  stage.style.height = `${w * base.height / base.width}px`;
+  wrap.scrollLeft = fx * stage.offsetWidth - wrap.clientWidth / 2;
+  wrap.scrollTop = fy * stage.offsetHeight - wrap.clientHeight / 2;
+}
+window.addEventListener('resize', layout);
+$('zoom').oninput = e => { zoom = +e.target.value; layout(); };
+
+// ---- painting ----
+function setTool(t) {
+  tool = t;
+  for (const [id, name] of [['tPaint', 'paint'], ['tErase', 'erase'], ['tMove', 'move']]) $(id).classList.toggle('on', t === name);
+  mask.style.pointerEvents = t === 'move' ? 'none' : 'auto';
+}
+$('tPaint').onclick = () => setTool('paint');
+$('tErase').onclick = () => setTool('erase');
+$('tMove').onclick = () => setTool('move');
+$('clear').onclick = () => mctx.clearRect(0, 0, mask.width, mask.height);
+
+function point(e) {
+  const r = mask.getBoundingClientRect();
+  return { x: (e.clientX - r.left) * mask.width / r.width, y: (e.clientY - r.top) * mask.height / r.height, scale: mask.width / r.width };
+}
+function stroke(a, b) {
+  mctx.globalCompositeOperation = tool === 'erase' ? 'destination-out' : 'source-over';
+  mctx.strokeStyle = mctx.fillStyle = '#ff2d55';
+  mctx.lineCap = mctx.lineJoin = 'round';
+  mctx.lineWidth = +$('brush').value * b.scale;
+  mctx.beginPath(); mctx.moveTo(a.x, a.y); mctx.lineTo(b.x + 0.01, b.y); mctx.stroke();
+}
+mask.addEventListener('pointerdown', e => {
+  if (tool === 'move' || !base.width || busy) return;
+  painting = true; mask.setPointerCapture(e.pointerId);
+  last = point(e); stroke(last, last); e.preventDefault();
+});
+mask.addEventListener('pointermove', e => { if (!painting) return; const p = point(e); stroke(last, p); last = p; });
+for (const t of ['pointerup', 'pointercancel']) mask.addEventListener(t, () => { painting = false; });
+
+// Bounding box of the painted area plus surrounding context, in image pixels; null when nothing is painted.
+function maskBox() {
+  const W = mask.width, H = mask.height, k = Math.max(1, Math.ceil(Math.max(W, H) / 1024));
+  const sw = Math.ceil(W / k), sh = Math.ceil(H / k);
+  const s = document.createElement('canvas'); s.width = sw; s.height = sh;
+  const sc = s.getContext('2d'); sc.drawImage(mask, 0, 0, sw, sh);
+  const d = sc.getImageData(0, 0, sw, sh).data;
+  let x0 = sw, y0 = sh, x1 = -1, y1 = -1;
+  for (let y = 0; y < sh; y++) for (let x = 0; x < sw; x++) {
+    if (d[(y * sw + x) * 4 + 3] > 8) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+  }
+  if (x1 < 0) return null;
+  x0 *= k; y0 *= k; x1 = (x1 + 1) * k; y1 = (y1 + 1) * k;
+  const pad = Math.max(48, Math.round(0.35 * Math.max(x1 - x0, y1 - y0)));
+  let x = x0 - pad, y = y0 - pad, w = x1 - x0 + 2 * pad, h = y1 - y0 + 2 * pad;
+  const min = Math.min(384, W, H);
+  if (w < min) { x -= (min - w) / 2; w = min; }
+  if (h < min) { y -= (min - h) / 2; h = min; }
+  x = Math.max(0, Math.round(Math.min(x, W - w))); y = Math.max(0, Math.round(Math.min(y, H - h)));
+  return { x, y, w: Math.min(W - x, Math.round(w)), h: Math.min(H - y, Math.round(h)) };
+}
+
+// ---- generation ----
+function workflow(image, prompt, resolution, seed) {
+  return {
+    '1': { class_type: 'UnetLoaderGGUF', inputs: { unet_name: MODELS.unet } },
+    '2': { class_type: 'CLIPLoaderGGUF', inputs: { clip_name: MODELS.clip, type: 'qwen_image' } },
+    '3': { class_type: 'VAELoader', inputs: { vae_name: MODELS.vae } },
+    '4': { class_type: 'LoadImage', inputs: { image } },
+    '5': { class_type: 'TextEncodeQwenImage21', inputs: { clip: ['2', 0], prompt, negative_prompt: '', vae: ['3', 0], resolution, 'images.image_1': ['4', 0] } },
+    '6': { class_type: 'KSampler', inputs: { model: ['1', 0], positive: ['5', 0], negative: ['5', 1], latent_image: ['5', 2], seed, steps: 8, cfg: 1.0, sampler_name: 'euler', scheduler: 'simple', denoise: 1.0 } },
+    '7': { class_type: 'VAEDecode', inputs: { samples: ['6', 0], vae: ['3', 0] } },
+    '8': { class_type: 'SaveImage', inputs: { images: ['7', 0], filename_prefix: 'phone_edit' } },
+  };
+}
+const toBlob = (c, type = 'image/png') => new Promise(res => c.toBlob(res, type));
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+async function upload(blob) {
+  const fd = new FormData();
+  fd.append('image', blob, `edit_${Date.now()}.png`);
+  fd.append('overwrite', 'true');
+  const r = await fetch('/upload/image', { method: 'POST', body: fd });
+  if (!r.ok) throw new Error(`Upload failed (${r.status})`);
+  const j = await r.json();
+  return j.subfolder ? `${j.subfolder}/${j.name}` : j.name;
+}
+
+async function queue(wf) {
+  const r = await fetch('/prompt', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt: wf, client_id: clientId }) });
+  const j = await r.json();
+  if (!r.ok) {
+    const nodeErr = j.node_errors && Object.values(j.node_errors).flatMap(n => n.errors.map(e => `${e.message}: ${e.details}`)).join('\n');
+    throw new Error(`${j.error?.message || 'Rejected'}${nodeErr ? '\n' + nodeErr : ''}`);
+  }
+  return j.prompt_id;
+}
+
+async function result(id) {
+  for (;;) {
+    await sleep(1500);
+    const h = (await (await fetch(`/history/${id}`)).json())[id];
+    if (!h) continue;
+    if (h.status?.status_str === 'error') {
+      const e = h.status.messages.find(m => m[0] === 'execution_error');
+      throw new Error(e ? e[1].exception_message : 'Generation failed');
+    }
+    const img = h.outputs?.['8']?.images?.[0];
+    if (img) return `/view?${new URLSearchParams({ filename: img.filename, subfolder: img.subfolder, type: img.type })}`;
+  }
+}
+
+function loadImage(url) {
+  return new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error('Could not load result')); i.src = url; });
+}
+
+async function generate() {
+  const prompt = $('prompt').value.trim();
+  if (!prompt) return status('Describe the edit first.', true);
+  const resolution = +$('res').value;
+  const box = maskBox();
+  const crop = box || { x: 0, y: 0, w: base.width, h: base.height };
+  busy = true; refreshButtons(); progress(0);
+  const t0 = Date.now();
+  try {
+    // Send only what the model will use: the crop, scaled to about 1.5× the model resolution.
+    const s = Math.min(1, resolution * 1.5 / Math.sqrt(crop.w * crop.h));
+    const c = document.createElement('canvas');
+    c.width = Math.round(crop.w * s); c.height = Math.round(crop.h * s);
+    c.getContext('2d').drawImage(base, crop.x, crop.y, crop.w, crop.h, 0, 0, c.width, c.height);
+    status('Uploading…');
+    const name = await upload(await toBlob(c));
+    const seed = Math.floor(Math.random() * 2 ** 31);
+    status('Queued… (first run loads ~10 GB of models)');
+    const img = await loadImage(await result(await queue(workflow(name, prompt, resolution, seed))));
+
+    history.push(await createImageBitmap(base));
+    if (history.length > MAX_HISTORY) history.shift().close();
+    if (box) composite(img, crop); else bctx.drawImage(img, 0, 0, base.width, base.height);
+    current = { prompt };
+    progress(1);
+    status(`Done in ${Math.round((Date.now() - t0) / 1000)} s · seed ${seed}${box ? ` · edited area ${crop.w}×${crop.h}` : ''}`);
+  } catch (err) {
+    status(String(err.message || err), true);
+  } finally {
+    busy = false; refreshButtons();
+  }
+}
+
+// Blend the result into the photo only where the mask was painted, with a soft edge.
+function composite(img, crop) {
+  const r = document.createElement('canvas'); r.width = crop.w; r.height = crop.h;
+  const rc = r.getContext('2d');
+  rc.drawImage(img, 0, 0, crop.w, crop.h);
+  const m = document.createElement('canvas'); m.width = crop.w; m.height = crop.h;
+  const mc = m.getContext('2d');
+  mc.filter = `blur(${Math.max(2, Math.round(Math.max(crop.w, crop.h) * 0.012))}px)`;
+  mc.drawImage(mask, crop.x, crop.y, crop.w, crop.h, 0, 0, crop.w, crop.h);
+  rc.globalCompositeOperation = 'destination-in';
+  rc.drawImage(m, 0, 0);
+  bctx.drawImage(r, crop.x, crop.y);
+}
+
+$('go').onclick = generate;
+$('undo').onclick = () => {
+  const prev = history.pop();
+  if (!prev) return;
+  bctx.drawImage(prev, 0, 0); prev.close();
+  current = null; refreshButtons(); status('Undone.');
+};
+$('retry').onclick = () => { $('undo').onclick(); generate(); };
+
+const showBefore = on => {
+  if (!history.length) return;
+  if (on) cmp.getContext('2d').drawImage(history[history.length - 1], 0, 0);
+  cmp.style.display = on ? 'block' : 'none';
+};
+$('compare').addEventListener('pointerdown', () => showBefore(true));
+for (const t of ['pointerup', 'pointerleave', 'pointercancel']) $('compare').addEventListener(t, () => showBefore(false));
+
+$('save').onclick = async () => {
+  status('Preparing PNG…');
+  const url = URL.createObjectURL(await toBlob(base));
+  $('saveimg').src = url; $('savelink').href = url;
+  $('saveview').style.display = 'flex';
+  status('');
+};
+$('closesave').onclick = () => { $('saveview').style.display = 'none'; URL.revokeObjectURL($('saveimg').src); };
+
+refreshButtons();
+</script>
+</body>
+</html>

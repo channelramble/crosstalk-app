@@ -1,0 +1,124 @@
+/* 0.4 costs (docs/SPEC-0.4.md, track T4): this track's styles live here, not in styles.css. */
+
+/* A limit's bar: orange from 80% and red at 100% (the shared .meter switches at 70 and 90, so callers keep warn and full). */
+.meter.cost-warn > i {
+  background: var(--orange);
+}
+.meter.cost-stopped > i {
+  background: var(--red);
+}
+
+/* Settings -> Costs */
+.cost-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+.cost-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.cost-head-text {
+  flex: 1;
+  min-width: 0;
+}
+.cost-name {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.cost-sub {
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+.cost-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+.cost-cell {
+  min-width: 0;
+}
+.cost-cell dt {
+  font-size: 12px;
+  color: var(--text-2);
+  margin: 0 0 2px;
+}
+.cost-cell dd {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.cost-note {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+.cost-limit {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 0.5px solid var(--sep);
+}
+.cost-limit > .meter {
+  align-self: stretch;
+}
+.cost-limit-title {
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.cost-used {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+.cost-state {
+  margin: 0;
+  font-weight: 600;
+}
+.cost-state.warn {
+  color: var(--orange);
+}
+.cost-state.stopped,
+.cost-error {
+  color: var(--red);
+}
+.cost-empty {
+  text-align: center;
+}
+.cost-empty-title {
+  font-size: 17px;
+  font-weight: 650;
+  margin-bottom: 4px;
+}
+.cost-prices {
+  margin-top: 12px;
+}
+.cost-foot {
+  margin: 10px 0 0;
+}
+
+/*
+ * The chat's cost line (in the context popup): a plan chat's line runs to two lines, which split evenly (no lone last
+ * word). In a group chat, the line for asks and earlier accounts (no agent's part) sits under it, set the same way.
+ */
+.chat-cost,
+.chat-cost-rest {
+  font-variant-numeric: tabular-nums;
+  text-wrap: balance;
+}
+
+/* "?" help inside a bold title or a field's label: the title is bold, the sentence under it isn't. */
+.cost-label .help-tip-text,
+.cost-limit-title .help-tip-text {
+  font-weight: 400;
+}

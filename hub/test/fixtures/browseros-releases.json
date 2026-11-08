@@ -1,0 +1,173 @@
+[
+ {
+  "tag_name": "claw-server/v0.0.90",
+  "draft": false,
+  "prerelease": false,
+  "created_at": "2026-10-30T01:31:24Z",
+  "published_at": "2026-10-30T01:31:47Z",
+  "assets": [
+   {
+    "name": "browseros-claw-server-rust-resources-darwin-arm64.zip",
+    "state": "uploaded",
+    "size": 13934794,
+    "digest": "sha256:68f525da82433642ca03a39908826e2bc341ca2afa86bf9e10a864146b047396",
+    "browser_download_url": "https://github.com/browseros-ai/BrowserOS/releases/download/claw-server/v0.0.90/browseros-claw-server-rust-resources-darwin-arm64.zip"
+   },
+   {
+    "name": "browseros-claw-server-rust-resources-darwin-x64.zip",
+    "state": "uploaded",
+    "size": 15106254,
+    "digest": "sha256:8183d518e7965d2dd6f08fbe8b03902a8fdf9bb82fc0f4f00a588fc2d3eb7b44",
+    "browser_download_url": "https://github.com/browseros-ai/BrowserOS/releases/download/claw-server/v0.0.90/browseros-claw-server-rust-resources-darwin-x64.zip"
+   },
+   {
+    "name": "browseros-claw-server-rust-resources-linux-arm64.zip",
+    "state": "uploaded",
+    "size": 14383286,
+    "digest": "sha256:6c2a5c6bc77603705d36f87576c8fb90c78e7046bb3fab7a526e15b4c2e553ee",
+    "browser_download_url": "https://github.com/browseros-ai/BrowserOS/releases/download/claw-server/v0.0.90/browseros-claw-server-rust-resources-linux-arm64.zip"
+   },
+   {
+    "name": "browseros-claw-server-rust-resources-linux-x64.zip",
+    "state": "uploaded",
+    "size": 15444007,
+    "digest": "sha256:6daa9653139bdddde8764702ba259fc99e6c22983be528159238d2c0ae91d8d7",
+    "browser_download_url": "https://github.com/browseros-ai/BrowserOS/releases/download/claw-server/v0.0.90/browseros-claw-server-rust-resources-linux-x64.zip"
+   },
+   {
+    "name": "browseros-claw-server-rust-resources-windows-x64.zip",
+    "state": "uploaded",
+    "size": 15842853,
+    "digest": "sha256:9dd91cfe32246330432a39e6e095feb767c33d2caf0f8f263a58f544927425ac",
+    "browser_download_url": "https://github.com/browseros-ai/BrowserOS/releases/download/claw-server/v0.0.90/browseros-claw-server-rust-resources-windows-x64.zip"
+   }
+  ]
+ },
+ {
+  "tag_name": "ext-browserclaw/v0.2.54.0",
+  "draft": false,
+  "prerelease": false,
+  "created_at": "2026-10-29T00:01:17Z",
+  "published_at": "2026-10-29T00:01:20Z",
+  "assets": [
+   {
+    "name": "browserclaw-0.2.54.0.crx",
+    "state": "uploaded",
+    "size": 3069078,
+    "digest": "sha256:4980d2c365c167b4abafaad55e5a487c8e7c37ffbcb6b7f769a6d64334efba33",
+    "browser_download_url": "https://github.com/browseros-ai/BrowserOS/releases/download/ext-browserclaw/v0.2.54.0/browserclaw-0.2.54.0.crx"
+   }
+  ]
+ },
+ {
+  "tag_name": "claw-onboard/v0.0.19",
+  "draft": false,
+  "prerelease": false,
+  "created_at": "2026-10-23T04:22:56Z",
+  "published_at": "2026-10-23T04:23:00Z",
+  "assets": [
+   {
+    "name": "browseros-claw-onboard-resources.zip",
+    "state": "uploaded",
+    "size": 173905,
+    "digest": "sha256:55b1382d46a2d2117e3b6627308f6c006913ad0d92608b523aa2e2df13d9898e",
+    "browser_download_url": "https://github.com/browseros-ai/BrowserOS/releases/download/claw-onboard/v0.0.19/browseros-claw-onboard-resources.zip"
+   }
+  ]
+ },
+ {
+  "tag_name": "browserclaw/v0.51.2.4",
+  "draft": false,
+  "prerelease": false,
+  "created_at": "2026-10-23T20:11:20Z",
+  "published_at": "2026-10-24T01:28:36Z",
+  "assets": [
+   {
+    "name": "BrowserOS_neo_v0.51.2.4_x64_installer.exe",
+    "state": "uploaded",
+    "size": 138417208,
+    "digest": "sha256:f457cd856ccdd0aeeb75f467a6e6985cd67f1378288d1fbfa8b2932a9d08d5d3",
+    "browser_download_url": "https://github.com/browseros-ai/BrowserOS/releases/download/browserclaw/v0.51.2.4/BrowserOS_neo_v0.51.2.4_x64_installer.exe"
+   },
+   {
+    "name": "BrowserOS_neo_v0.51.2.4_x64_installer.zip",
+    "state": "uploaded",
+    "size": 138429093,
+    "digest": "sha256:fd61f8da504bf9dc01e6138cef5616bffd1ac13ada127d7f9f2e43d3db78a619",
+    "browser_download_url": "https://github.com/browseros-ai/BrowserOS/releases/download/browserclaw/v0.51.2.4/BrowserOS_neo_v0.51.2.4_x64_installer.zip"
+   }
+  ]
+ },
+ {
+  "tag_name": "browserclaw/v0.51.2.3",
+  "draft": false,
+  "prerelease": false,
+  "created_at": "2026-10-23T04:23:27Z",
+  "published_at": "2026-10-23T21:55:41Z",
+  "assets": [
+   {
+    "name": "BrowserOS_neo_v0.51.2.3_amd64.deb",
+    "state": "uploaded",
+    "size": 183745076,
+    "digest": "sha256:e1985dd0c0499cae37463bb339d1aa37a429b4f105945909cbb3024e69dd2656",
+    "browser_download_url": "https://github.com/browseros-ai/BrowserOS/releases/download/browserclaw/v0.51.2.3/BrowserOS_neo_v0.51.2.3_amd64.deb"
+   },
+   {
+    "name": "BrowserOS_neo_v0.51.2.3_arm64.AppImage",
+    "state": "uploaded",
+    "size": 208325128,
+    "digest": "sha256:68e61a10282c98caabf19d500371f18d04c1e1cfa969d917c839b23fe7f48997",
+    "browser_download_url": "https://github.com/browseros-ai/BrowserOS/releases/download/browserclaw/v0.51.2.3/BrowserOS_neo_v0.51.2.3_arm64.AppImage"
+   },
+   {
+    "name": "BrowserOS_neo_v0.51.2.3_arm64.deb",
+    "state": "uploaded",
+    "size": 173710400,
+    "digest": "sha256:699cbbffec1a5dcb70a7647076d4c5731f5eb1f991c35f5c2319a24e5847a994",
+    "browser_download_url": "https://github.com/browseros-ai/BrowserOS/releases/download/browserclaw/v0.51.2.3/BrowserOS_neo_v0.51.2.3_arm64.deb"
+   },
+   {
+    "name": "BrowserOS_neo_v0.51.2.3_arm64.dmg",
+    "state": "uploaded",
+    "size": 165186976,
+    "digest": "sha256:71de41267c6a9bd991c2d560125304082aa32a45a86f572fd819ce6e521e8a56",
+    "browser_download_url": "https://github.com/browseros-ai/BrowserOS/releases/download/browserclaw/v0.51.2.3/BrowserOS_neo_v0.51.2.3_arm64.dmg"
+   },
+   {
+    "name": "BrowserOS_neo_v0.51.2.3_universal.dmg",
+    "state": "uploaded",
+    "size": 303994039,
+    "digest": "sha256:3bde6654410c88041f42aca145ea2716586ffe27e8a5eb231cb4984dc3d0f225",
+    "browser_download_url": "https://github.com/browseros-ai/BrowserOS/releases/download/browserclaw/v0.51.2.3/BrowserOS_neo_v0.51.2.3_universal.dmg"
+   },
+   {
+    "name": "BrowserOS_neo_v0.51.2.3_x64.AppImage",
+    "state": "uploaded",
+    "size": 220596728,
+    "digest": "sha256:602f3fe36b7366a5eb32f894e1ffc24a03469d43771ae8f7f2ec918ae7211676",
+    "browser_download_url": "https://github.com/browseros-ai/BrowserOS/releases/download/browserclaw/v0.51.2.3/BrowserOS_neo_v0.51.2.3_x64.AppImage"
+   },
+   {
+    "name": "BrowserOS_neo_v0.51.2.3_x64.dmg",
+    "state": "uploaded",
+    "size": 180953608,
+    "digest": "sha256:8eb7626cdc291ace6e70b19dc6dc8d1999a4a0492a0d13ee580a6a06ed3a14b6",
+    "browser_download_url": "https://github.com/browseros-ai/BrowserOS/releases/download/browserclaw/v0.51.2.3/BrowserOS_neo_v0.51.2.3_x64.dmg"
+   },
+   {
+    "name": "BrowserOS_neo_v0.51.2.4_x64_installer.exe",
+    "state": "uploaded",
+    "size": 138417208,
+    "digest": "sha256:f457cd856ccdd0aeeb75f467a6e6985cd67f1378288d1fbfa8b2932a9d08d5d3",
+    "browser_download_url": "https://github.com/browseros-ai/BrowserOS/releases/download/browserclaw/v0.51.2.3/BrowserOS_neo_v0.51.2.4_x64_installer.exe"
+   },
+   {
+    "name": "BrowserOS_neo_v0.51.2.4_x64_installer.zip",
+    "state": "uploaded",
+    "size": 138429093,
+    "digest": "sha256:fd61f8da504bf9dc01e6138cef5616bffd1ac13ada127d7f9f2e43d3db78a619",
+    "browser_download_url": "https://github.com/browseros-ai/BrowserOS/releases/download/browserclaw/v0.51.2.3/BrowserOS_neo_v0.51.2.4_x64_installer.zip"
+   }
+  ]
+ }
+]

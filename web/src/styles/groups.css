@@ -1,0 +1,215 @@
+/* ---- 0.5 Group chats: several agents in one chat ---- */
+
+/* A group chat's mark where there's no agent to show (the New chat menu, the list's heading). */
+.avatar.group-mark {
+  --c: var(--surface-3);
+  color: var(--text-2);
+}
+/* The list's Group chats heading isn't a link (an agent's heading opens its page). */
+.csb-agent.static {
+  cursor: default;
+}
+@media (hover: hover) {
+  .csb-agent.static:hover {
+    background: none;
+    color: var(--text-2);
+  }
+}
+/* A group chat's avatars, stacked: as small as one avatar's room allows. */
+.group-avatar {
+  flex: none;
+  align-items: center;
+}
+.group-avatar .avatar {
+  border-color: var(--surface);
+}
+.group-avatar.sm .avatar {
+  margin-left: -8px;
+}
+.group-avatar.sm .avatar:first-child,
+.group-avatar .avatar:first-child {
+  margin-left: 0;
+}
+.csb-chat.pinned .group-avatar.sm .avatar {
+  width: 18px;
+  height: 18px;
+  font-size: 8px;
+}
+
+/* ---- New group chat ---- */
+.group-intro {
+  margin: 0 0 12px;
+}
+.group-picks {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.group-pick {
+  border: 1px solid var(--sep-strong);
+  border-radius: 12px;
+  background: var(--surface);
+}
+.group-pick-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding-left: 10px;
+}
+.group-pick-main {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: flex-start;
+  min-width: 0;
+  min-height: 48px;
+  justify-content: center;
+  padding: 6px 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+.group-pick-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+}
+.group-pick-sub {
+  max-width: 100%;
+  overflow: hidden;
+  font-size: 12px;
+  color: var(--text-2);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.group-pick-chevron {
+  flex: none;
+  color: var(--text-3);
+  transition: transform 0.15s;
+}
+.group-pick-chevron.expanded {
+  transform: rotate(180deg);
+}
+.group-pick .icon-btn {
+  min-width: 44px;
+  min-height: 44px;
+}
+.group-pick-options {
+  padding: 4px 12px 10px;
+}
+.group-add {
+  margin-top: 8px;
+}
+
+/* ---- In the chat: who answers, above the message box ---- */
+.group-answers {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 880px;
+  margin: 0 auto 6px;
+  padding: 0 6px;
+  font-size: 12.5px;
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+.group-answers.named {
+  color: var(--text);
+  font-weight: 600;
+}
+.group-answers svg {
+  flex: none;
+}
+
+/* The agent the controls under the box are for (a group chat has several). */
+.ctl-member {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 38%;
+  min-width: 0;
+}
+.ctl-member .ellipsis {
+  min-width: 0;
+}
+
+/* A group chat's status lines: one per agent at work, each with its own Stop, then who's next. */
+.group-status-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  max-width: 880px;
+  margin: 0 auto 8px;
+}
+.group-status-main {
+  flex: 1;
+  min-width: 0;
+}
+.group-status-main .chat-status,
+.group-status-main .chat-trace {
+  margin: 0;
+}
+.group-stop {
+  flex: none;
+  min-width: 44px;
+  min-height: 44px;
+}
+.group-queue {
+  max-width: 880px;
+  margin: 0 auto 4px;
+  padding: 0 6px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+/* ---- A group chat's settings: its agents ---- */
+.group-members {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.group-member {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  min-width: 0;
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: var(--surface);
+}
+.group-member-text {
+  display: flex;
+  flex: 1 1 160px;
+  flex-direction: column;
+  min-width: 0;
+}
+.group-member-sub {
+  font-size: 12px;
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+.group-member-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.group-member-actions .btn {
+  min-height: 44px;
+}
+
+/* Home: starting a group chat, under the agents. */
+.group-start {
+  min-height: 44px;
+  margin-top: 10px;
+}

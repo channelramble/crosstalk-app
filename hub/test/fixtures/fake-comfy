@@ -1,0 +1,93 @@
+#!/usr/bin/env bun
+// Stand-in for the image editor's ComfyUI server (hub/src/imageEditor.ts tests and e2e/imageEditor.spec.ts). A test
+// install copies it to ComfyUI/main.py, and its start.sh runs it like the real one: `bun ComfyUI/main.py --port N` from
+// the install's folder. It answers what the hub asks: /system_stats, /queue (edits not done yet, with their client ids),
+// /upload/image, /prompt, /history (and deleting from it) and /editor. How it behaves comes from fake-comfy.json in its
+// folder, read for every request (start.sh passes the hub's bare environment, so no variables):
+//   startMs: waits this long before listening;   fail: prints this and exits 1 instead;
+//   warmMs: an edit takes this long (100 ms);     warmError: an edit fails with this;   reject: /prompt refuses with this;
+//   busy: /queue also shows someone's edit running;   queueDown: /queue answers 500, as a blocked one does;
+//   ignoreTerm: SIGTERM doesn't end it.
+// Each start ({ started: pid }) and request is noted in fake-comfy.log there (one JSON line). It ends by itself once
+// whoever started it has gone.
+import { appendFileSync, existsSync, readFileSync } from "node:fs";
+
+// start.sh runs it in a process group of its own, which nothing ends when a test run is killed before its afterEach
+// (hub/test/standins.ts): once whoever started it is gone, so is this.
+const starter = process.ppid;
+setInterval(() => {
+  if (process.ppid !== starter) process.exit(0);
+}, 500).unref();
+
+const port = Number(process.argv[process.argv.indexOf("--port") + 1]);
+type Config = { startMs?: number; fail?: string; warmMs?: number; warmError?: string; reject?: string; busy?: boolean; queueDown?: boolean; ignoreTerm?: boolean };
+const config = (): Config => (existsSync("fake-comfy.json") ? JSON.parse(readFileSync("fake-comfy.json", "utf8")) : {});
+const note = (entry: object) => appendFileSync("fake-comfy.log", JSON.stringify(entry) + "\n");
+
+const first = config();
+note({ started: process.pid });
+console.log("Starting server");
+if (first.ignoreTerm) process.on("SIGTERM", () => console.log("Ignoring SIGTERM"));
+if (first.startMs) await Bun.sleep(first.startMs);
+if (first.fail) {
+  console.error("Traceback (most recent call last):");
+  console.error(first.fail);
+  process.exit(1);
+}
+
+const prompts = new Map<string, { at: number; deleted: boolean; client: string | null }>();
+let n = 0;
+const json = (data: unknown, status = 200) => Response.json(data, { status });
+
+Bun.serve({
+  port,
+  hostname: "127.0.0.1",
+  async fetch(req) {
+    const url = new URL(req.url);
+    const c = config();
+    const path = url.pathname;
+    if (req.method === "GET" && path === "/system_stats") return json({ system: { os: "darwin", comfyui_version: "fake" }, devices: [] });
+    if (req.method === "GET" && path === "/queue") {
+      // A real one that is loading models blocks its own event loop, so the hub's fetch fails or times out.
+      if (c.queueDown) return new Response("busy", { status: 500 });
+      // Like ComfyUI's: [number, prompt_id, prompt, extra_data, outputs].
+      const waiting = [...prompts].filter(([, p]) => !p.deleted && Date.now() - p.at < (c.warmMs ?? 100)).map(([id, p], i) => [i, id, {}, { client_id: p.client }, []]);
+      return json({ queue_running: [...(c.busy ? [[99, "p-someone", {}, { client_id: "phone-editor" }, []]] : []), ...waiting], queue_pending: [] });
+    }
+    if (req.method === "GET" && path === "/editor") return new Response("<!doctype html><title>Edit</title>", { headers: { "content-type": "text/html" } });
+    if (req.method === "POST" && path === "/upload/image") {
+      const form = await req.formData();
+      const image = form.get("image") as File | null;
+      note({ path, name: image?.name ?? null, bytes: image?.size ?? 0, overwrite: form.get("overwrite") });
+      return json({ name: image?.name ?? "x.png", subfolder: "", type: "input" });
+    }
+    if (req.method === "POST" && path === "/prompt") {
+      const body = (await req.json()) as { prompt: unknown; client_id?: string };
+      note({ path, prompt: body.prompt, client: body.client_id ?? null });
+      if (c.reject) return json({ error: { message: c.reject }, node_errors: {} }, 400);
+      const id = `p${++n}`;
+      prompts.set(id, { at: Date.now(), deleted: false, client: body.client_id ?? null });
+      return json({ prompt_id: id, number: n });
+    }
+    const history = /^\/history\/(.+)$/.exec(path);
+    if (req.method === "GET" && history) {
+      const p = prompts.get(history[1]);
+      if (!p || p.deleted || Date.now() - p.at < (c.warmMs ?? 100)) return json({});
+      const status = c.warmError
+        ? { status_str: "error", completed: false, messages: [["execution_error", { exception_message: c.warmError }]] }
+        : { status_str: "success", completed: true, messages: [] };
+      return json({ [history[1]]: { status, outputs: {} } });
+    }
+    if (req.method === "POST" && path === "/history") {
+      const body = (await req.json()) as { delete?: string[] };
+      note({ path, delete: body.delete ?? [] });
+      for (const id of body.delete ?? []) {
+        const p = prompts.get(id);
+        if (p) p.deleted = true;
+      }
+      return json({});
+    }
+    return new Response("not found", { status: 404 });
+  },
+});
+console.log(`To see the GUI go to: http://127.0.0.1:${port}`);

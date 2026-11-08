@@ -1,0 +1,41 @@
+#!/usr/bin/env bun
+// Stand-in for `codex app-server`'s sign-in calls (newline-delimited JSON-RPC). Completes the sign-in after
+// FAKE_COMPLETE_MS if set; otherwise the attempt never finishes (like a code nobody entered). FAKE_LOGIN_FAIL=1: it
+// completes as failed instead. FAKE_COMPLETE_FILE: it completes once that file exists (the code was approved on the page:
+// a browser test says when, web/e2e/signIn.spec.ts). FAKE_CODEX_AUTH_FILE holds the sign-in's state ("in" or "out", the
+// way auth.json holds Codex's): a finished sign-in writes "in", and account/read answers from it.
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+
+if (process.argv[2] === "--version") {
+  process.stdout.write("codex-cli 0.160.0\n");
+  process.exit(0);
+}
+const send = (o) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...o }) + "\n");
+const authFile = process.env.FAKE_CODEX_AUTH_FILE;
+const signedIn = () => (authFile && existsSync(authFile) ? readFileSync(authFile, "utf8").trim() === "in" : false);
+for await (const line of console) {
+  const m = JSON.parse(line);
+  if (m.method === "initialize") send({ id: m.id, result: { userAgent: "fake" } });
+  else if (m.method === "account/login/start") {
+    send({ id: m.id, result: { type: "chatgptDeviceCode", loginId: `l-${process.pid}`, verificationUrl: "https://example.com/device", userCode: "ABCD-EFGH" } });
+    const complete = () => {
+      if (process.env.FAKE_LOGIN_FAIL === "1") return send({ method: "account/login/completed", params: { loginId: `l-${process.pid}`, success: false, error: "The device code was declined." } });
+      if (authFile) writeFileSync(authFile, "in");
+      send({ method: "account/login/completed", params: { loginId: `l-${process.pid}`, success: true } });
+    };
+    const ms = Number(process.env.FAKE_COMPLETE_MS);
+    const approved = process.env.FAKE_COMPLETE_FILE;
+    if (ms) setTimeout(complete, ms);
+    else if (approved) {
+      const watch = setInterval(() => {
+        if (!existsSync(approved)) return;
+        clearInterval(watch);
+        complete();
+      }, 100);
+    }
+  } else if (m.method === "account/read") {
+    send({ id: m.id, result: { account: signedIn() ? { type: "chatgpt", email: "person@example.com", planType: "pro" } : null, requiresOpenaiAuth: true } });
+  } else if (m.method === "account/rateLimits/read") {
+    send({ id: m.id, result: { rateLimits: { limitName: null, primary: null, secondary: null, planType: "pro" } } });
+  } else if (m.id !== undefined) send({ id: m.id, result: null });
+}

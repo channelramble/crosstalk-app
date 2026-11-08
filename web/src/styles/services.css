@@ -1,0 +1,426 @@
+/* 0.4 services (docs/SPEC-0.4.md, track T7): Settings → AI services. This track's styles live here, not in styles.css. */
+
+.svc-intro {
+  margin: 0 0 10px;
+}
+.svc-card {
+  padding: 4px 16px;
+}
+.svc-sub {
+  margin: 0;
+  font-size: 15px;
+}
+.svc-found,
+.svc-agents {
+  margin-top: 22px;
+}
+
+/* One account per row. Every line may wrap: a long name or model never widens the page. */
+.svc-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 0;
+  min-width: 0;
+}
+.svc-row + .svc-row {
+  border-top: 1px solid var(--sep);
+}
+.svc-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+.svc-name {
+  font-weight: 600;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.svc-kind,
+.svc-names {
+  overflow-wrap: anywhere;
+}
+.svc-chip {
+  flex: none;
+  padding: 2px 9px;
+  border-radius: 99px;
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  background: var(--surface-3);
+  color: var(--text-2);
+}
+.svc-chip.warn {
+  background: var(--orange-2);
+  color: var(--orange);
+}
+.svc-chip.stopped {
+  background: var(--red-2);
+  color: var(--red);
+}
+.svc-status {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+}
+.svc-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-3);
+}
+.svc-dot.ok {
+  background: var(--green);
+}
+.svc-dot.warn {
+  background: var(--orange);
+}
+.svc-dot.bad {
+  background: var(--red);
+}
+.svc-actions {
+  gap: 6px;
+  margin-top: 6px;
+}
+.svc-row p,
+.svc-found p {
+  margin: 0;
+}
+
+/* A check's ✓ and ✗ rows, then its problems. It waits on the screen with nothing in it (so a reader is told what a
+   check found), and takes up no room until there is something to say. */
+.svc-result {
+  margin: 6px 0 4px;
+}
+.svc-result:empty {
+  margin: 0;
+}
+.svc-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 13.5px;
+}
+.svc-lines li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.svc-mark {
+  flex: none;
+  width: 1.2em;
+  font-weight: 700;
+}
+.svc-lines .ok .svc-mark {
+  color: var(--green);
+}
+.svc-lines .bad .svc-mark {
+  color: var(--red);
+}
+.svc-problem {
+  margin: 6px 0 0;
+  font-size: 13px;
+  color: var(--red);
+  overflow-wrap: anywhere;
+}
+.svc-stale {
+  color: var(--orange);
+}
+
+.svc-add {
+  margin-top: 12px;
+}
+
+/* Found on this machine. */
+.svc-found > .row {
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.svc-server {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 0;
+  border-top: 1px solid var(--sep);
+}
+.svc-server-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.svc-server .pill,
+.svc-server .btn {
+  flex: none;
+}
+
+/* Add an AI service. */
+.svc-back {
+  margin: 0 0 4px -8px;
+}
+.svc-sheet-title {
+  margin: 4px 0 2px;
+  font-size: 17px;
+}
+.svc-steps {
+  margin: 8px 0 12px;
+  padding: 0;
+  list-style: none;
+  counter-reset: step;
+}
+.svc-steps > li {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 14px;
+  padding-left: 32px;
+  counter-increment: step;
+  overflow-wrap: anywhere;
+}
+.svc-steps > li::before {
+  content: counter(step);
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--accent-2);
+  color: var(--accent);
+  font-size: 12.5px;
+  font-weight: 700;
+}
+.svc-steps .field {
+  align-self: stretch;
+  margin-bottom: 0;
+}
+.svc-open {
+  text-decoration: none;
+}
+.svc-label {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 6px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+.svc-label label {
+  font: inherit;
+}
+.svc-agent {
+  margin-top: 12px;
+}
+/* Four agents to pick from don't fit one line of a phone: two by two, rather than three and one left over. */
+@media (max-width: 480px) {
+  .svc-agent .seg:has(> :nth-child(4)) {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+}
+.svc-models {
+  min-width: 0;
+  margin: 12px 0 14px;
+  padding: 0;
+  border: 0;
+}
+.svc-models legend {
+  padding: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+.svc-models p {
+  margin: 2px 0 6px;
+}
+.svc-model-list {
+  display: flex;
+  flex-direction: column;
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+}
+/* A catalogue search is running and these rows are the last one's answer (as the message search dims its hits). */
+.svc-models[aria-busy="true"] .svc-model-list {
+  opacity: 0.55;
+}
+.svc-model-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border-top: 1px solid var(--sep);
+}
+.svc-model {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  min-height: 44px;
+  padding: 4px 0;
+  cursor: pointer;
+}
+.svc-model input {
+  flex: none;
+  width: 20px;
+  height: 20px;
+}
+.svc-model-id {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.svc-model-list .pill,
+.svc-model-list .btn {
+  flex: none;
+}
+
+/* A model found by searching a big catalogue (Featherless): a long Hugging Face name over its facts, and marks that
+   wrap under it rather than squeezing the name off a phone screen. */
+.svc-model-list li.svc-found-row {
+  flex-wrap: wrap;
+  padding: 2px 0;
+}
+.svc-model-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+/* NanoGPT's own name for a model ("DeepSeek V4.1 Flash Uncensored") over the id an agent is given. */
+.svc-model-name {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+/* The NanoGPT chip whose part of the list is on show. */
+.svc-chips .btn[aria-pressed="true"] {
+  border-color: var(--accent, currentColor);
+}
+/* What a NanoGPT account has to spend, on its row in Settings → AI services. */
+.svc-funds {
+  margin: 2px 0 0;
+}
+/* A service's own terms for agents, where it's added (Featherless's Chat plan doesn't allow them): a warning that is
+   read before a key is checked, not a line of small print. */
+.svc-terms {
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  border-left: 3px solid var(--orange);
+  border-radius: 6px;
+  background: var(--orange-2);
+  font-size: 13.5px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+/* Which plan a checked key is on (Featherless), under the check and on the account's row: the Chat plan in red, a plan
+   Crosstalk doesn't know in orange, the Developer plan in the usual small print. */
+.svc-plan {
+  margin: 6px 0 0;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.svc-plan p {
+  margin: 0;
+}
+.svc-plan .btn {
+  margin-top: 6px;
+}
+.svc-plan.ok {
+  color: var(--text-2);
+}
+.svc-plan.warn {
+  color: var(--orange);
+}
+.svc-plan.bad {
+  padding: 8px 10px;
+  border-left: 3px solid var(--red);
+  border-radius: 6px;
+  background: var(--red-2);
+  color: var(--text);
+}
+.svc-plan-line {
+  margin: 2px 0 0;
+}
+/* One-tap searches under the box (Uncensored, Qwen 3, Kimi K2). */
+.svc-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 2px 0 4px;
+}
+.svc-foot-error {
+  flex: 1 1 100%;
+  margin: 0;
+  font-size: 13px;
+  color: var(--red);
+}
+.dialog-foot:has(.svc-foot-error) {
+  flex-wrap: wrap;
+}
+
+/* A "?" beside a label or heading: its button stays on the line, and the sentence it opens takes a line of its own under it. */
+.svc-label .help-tip,
+.svc-lines .help-tip,
+.svc-found .help-tip {
+  display: contents;
+}
+.svc-label .help-tip-text,
+.svc-lines .help-tip-text,
+.svc-found .help-tip-text {
+  flex: 1 1 100%;
+  order: 9;
+  max-width: none;
+}
+
+/* An agent's install, where it's needed (AgentInstall.tsx): the line that says how it's going, its terminal, one button. */
+.svc-install {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 10px 0 12px;
+  min-width: 0;
+}
+.svc-install-line {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin: 0;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+.svc-install-line svg {
+  flex: none;
+  margin-top: 2px;
+}
+.svc-install.done .svc-install-line {
+  color: var(--green);
+}
+.svc-install .term-box {
+  height: 190px;
+}
+.svc-install .svc-actions {
+  margin-top: 0;
+}
+.svc-agent-card p {
+  margin: 0 0 6px;
+}
+.svc-bin {
+  overflow-wrap: anywhere;
+}

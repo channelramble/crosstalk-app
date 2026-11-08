@@ -1,0 +1,22 @@
+{
+  "name": "@crosstalk/hub",
+  "version": "0.6.8",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "CROSSTALK_HOME=../.crosstalk-dev bun --watch src/main.ts serve",
+    "start": "bun src/main.ts serve",
+    "test": "bun test",
+    "typecheck": "tsc -p tsconfig.json",
+    "build": "bun run scripts/build.ts",
+    "e2e": "bun run scripts/e2e.ts"
+  },
+  "dependencies": {
+    "@crosstalk/shared": "workspace:*",
+    "@muse-code/sdk": "1.4.2"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.9.0"
+  }
+}

@@ -1,0 +1,576 @@
+/*
+ * Motion: how the app moves, all in one place. Imported last (main.tsx), after every other stylesheet.
+ *
+ * The rules
+ * - Nothing waits for an animation. What opens is live and tappable from its first frame. What closes is gone from
+ *   React, the focus, the accessibility tree and the tests the moment it closes, and an inert copy of it plays the way
+ *   out (motion.ts `leave`, `[data-ghost]` below). Never keep a real element mounted for its exit, never make something
+ *   untappable while it moves, and never wait for animationend.
+ * - What 0.6.2 already moved moves no longer than it did there, so nothing is in place later than it was: a sheet is at
+ *   rest by 220 ms (0.6.2's rose from 40% in 220 ms; this one rises from there too, 1% past its place by 150 ms, and
+ *   settles), the drawer slides in over the same 200 ms, a notice is in place by 180 ms (0.6.2's popped in for 180 ms),
+ *   and the model, effort, permissions and context menus by 120 ms (their 0.6.2 pop). Nothing moves the page behind a
+ *   sheet (it would still be shrinking every 44 px target for a moment after the sheet closed). Exits are free: their
+ *   copies take no taps.
+ * - What 0.6.2 drew at once and now comes in (a card or a line in a chat, a row's options, the New chat menu and its
+ *   steps, the @ list, Settings' next tab) or glides (the chat list's rows, the notices) takes a tap where it's drawn
+ *   from its first frame. Playwright, though, clicks only what has stopped moving: a test run with motion on
+ *   (CROSSTALK_E2E_MOTION=1) waits for these, up to --dur-flip (a row gliding) or --dur-enter (a card or a line), which
+ *   0.6.2 never made it do. The suite runs with Reduce Motion unless asked (playwright.config.ts), where nothing moves
+ *   and nothing is waited for.
+ * - Anything you can tap is its full size while it comes in (it slides a few pixels and fades): a finger, and a test
+ *   measuring a 44 px target, finds it as it will be. Only what holds nothing to tap may grow in (a count, a dot, an icon
+ *   inside its button, your own message with nothing in it to tap), and exit copies may shrink as they go.
+ * - Only transform and opacity animate (and transform's own parts: translate, scale, rotate). Never width, height,
+ *   top/left, margins, padding, z-index or any other property the main thread has to work out. Colours may change on
+ *   small controls, over 150 ms or less.
+ * - One transform keyframe set is all % or all px, never both, not even from one keyframe to the next: WebKit applies the
+ *   text size (html zoom) twice to a mix while it animates (measured 2026-10-31).
+ * - Curves inside @keyframes are written out: var() there is ignored by both engines. Everywhere else, use the tokens.
+ * - Apple's springs ship as cubic-bezier fits: released Safari runs linear() on the main thread (WebKit bug 312407),
+ *   which a streaming reply keeps busy. Every other engine gets the exact springs (`:root[data-springs="exact"]`).
+ * - Never animate streaming text, the scroll position while following a reply, or a focus move.
+ *
+ * Reduce Motion: one policy that every rule plugs into
+ * - Everything that moves or repeats goes in the `prefers-reduced-motion: no-preference` block below, and nowhere else.
+ *   Under Reduce Motion that block is skipped, so a new animation can't leak in.
+ * - The `reduce` block says what stands in for it there: a fade of --dur-fade (150 ms) or less, or nothing at all.
+ *   motion.ts makes no exit copies and no list movement then, and a smooth scroll asked for anywhere is a jump.
+ * - An entrance plays the same animation under both settings, by name: the reduce block plays it for --dur-fade and
+ *   redefines its @keyframes there as a fade (in the file that defines them, after them, so they win), or, where Reduce
+ *   Motion has nothing at all (a pop), plays it for 0s, which is never drawn. Never a second name: an animation whose
+ *   name changes starts again, so turning Reduce Motion on or off (from the phone's own Settings, the app still open)
+ *   would play every entrance on the screen once more. A mark that's only ever on for a moment needn't: `.m-arrive`,
+ *   which ChatScreen.tsx takes off a second after it puts it on.
+ * - web/src/motion.test.ts checks these rules on every stylesheet; web/e2e/motion.spec.ts checks them in the app.
+ *
+ * Hooks for the screens
+ * - Tokens (:root, next): every duration and curve. Use them; add one here rather than writing a number elsewhere.
+ * - `[data-ghost="<kind>"]`: the copy motion.ts `leave(el, kind)` leaves where something closed. Each kind's exit is
+ *   in the "Exits" part below (sheet, drawer, scrim, toast, jump, menu, row). A new kind needs its exit there, or its
+ *   copy goes at once. `[data-quiet]` on a copy: it leaves with a sheet, so it fades.
+ * - Where an exit starts when it closed mid-entrance: `--m-from-x`, `--m-from-y` (% of its own size) and `--m-from-o`
+ *   (how faded in it was; `--m-from-o-before` for its ::before). An exit's keyframes start from them.
+ * - `.m-enter`: a part appearing on a screen that's already up (motion.ts `useEntrance()`): it rises in, or fades.
+ * - `[data-flip]`: a row motion.ts `FlipGroup` glides to its new place.
+ * - Press feedback: add a selector to the two press lists below (and the reduce block's), and give it --press if it
+ *   isn't a plain button (--press-icon for an icon-only button, --press-card for a row or a card).
+ *
+ * Not built yet (the motion spec of 2026-10-31 has them; each would follow these rules):
+ * - Push and pop between screens (view transitions: only the old screen captured, so the new one takes taps at once).
+ * - Swipe-to-dismiss sheets (a grabber, the head as the drag zone, velocity projection, rubber-banding).
+ * - The transcript glide (the messages drawn offset by what just moved them, easing back), and with it the caret drawn
+ *   inline: the caret still sits on a line of its own, so a reply's end still drops the chat about 20 px.
+ * - Rows moving in Home's Recent list; ConnStrip and MacDialogStrip dropping in from behind the header; "Sending…",
+ *   "Loading…" and spinners held back 300 ms so fast operations never flash; the search hit's flash as a ::before's
+ *   opacity (search.css still fades its background).
+ */
+
+/* The chat list's motion (the drawer and the docked list, the New chat menu): its own file, on the same rules. */
+@import "./motion-lists.css";
+/* The chat screen's motion (messages, the box you type in and what's above it, its menus) and Settings' tabs. */
+@import "./motion-chat.css";
+
+/* ------------------------------------------------------------ tokens */
+
+:root {
+  /*
+   * Curves. Apple's springs (SwiftUI .smooth, .snappy, .bouncy: duration and bounce, WWDC23 "Animate with springs"),
+   * fitted as cubic-bezier over their settle time, which is what their durations below are.
+   */
+  --ease-smooth: cubic-bezier(0.31, 0.56, 0.12, 1); /* bounce 0 */
+  --ease-snappy: cubic-bezier(0.29, 0.46, 0.1, 1.13); /* bounce 0.15 */
+  --ease-bouncy: cubic-bezier(0.41, 1.08, 0.06, 1.08); /* bounce 0.3 */
+  /* UIKit's sheet and push curve. */
+  --ease-ios: cubic-bezier(0.32, 0.72, 0, 1);
+  /* The quick ease-out sheets and the drawer always came in on: what they hold is reachable as soon as it was. */
+  --ease-out: cubic-bezier(0.2, 0.9, 0.3, 1);
+  /* Core Animation's default: fades and colour. */
+  --ease-fade: cubic-bezier(0.25, 0.1, 0.25, 1);
+
+  /* Durations. */
+  --dur-press-in: 90ms;
+  --dur-press-out: 340ms;
+  --dur-fade: 150ms; /* every fade under Reduce Motion, and no more */
+  --dur-paint: 120ms; /* a colour change on a small control */
+  --dur-sheet-in: 220ms; /* at rest by then, as 0.6.2's was: 1% past its place by 150 ms, then the settle */
+  --dur-sheet-out: 300ms;
+  --dur-drawer-in: 200ms; /* as 0.6.2's */
+  --dur-drawer-out: 260ms;
+  --dur-scrim: 300ms;
+  --dur-push: 540ms;
+  --dur-menu-in: 120ms; /* as 0.6.2's menus popped in */
+  --dur-menu-out: 160ms;
+  --dur-toast-in: 180ms; /* as 0.6.2's notices popped in */
+  --dur-toast-out: 240ms;
+  --dur-switch: 360ms;
+  --dur-enter: 320ms;
+  --dur-flip: 430ms;
+  --dur-nudge: 380ms;
+  --dur-rotate: 300ms;
+  --dur-tab: 180ms; /* Settings' next tab coming in from its side */
+  --dur-badge: 420ms;
+  --dur-caret: 1100ms;
+
+  /* How far a tappable thing shrinks while it's held. */
+  --press-button: 0.97;
+  /* Icon-only buttons are small: a touch more, but never so much that a press near the edge slides off a 44 px target. */
+  --press-icon: 0.94;
+  --press-card: 0.985;
+}
+
+/* The exact springs, where linear() runs off the main thread (motion.ts initMotion: every engine but Safari's). */
+@supports (transition-timing-function: linear(0, 1)) {
+  :root[data-springs="exact"] {
+    --ease-smooth: linear(0, 0.005 1.3%, 0.019 2.5%, 0.046 4%, 0.08 5.5%, 0.163 8.5%, 0.362 15%, 0.457 18.3%, 0.549 21.8%, 0.63 25.3%, 0.694 28.5%, 0.753 32%, 0.805 35.8%, 0.847 39.5%, 0.886 44%, 0.919 49%, 0.944 54.5%, 0.964 60.8%, 0.978 67.5%, 0.988 75.5%, 1);
+    --ease-snappy: linear(0, 0.005 1.3%, 0.022 2.8%, 0.054 4.5%, 0.095 6.3%, 0.19 9.5%, 0.409 16.3%, 0.51 19.5%, 0.608 23%, 0.687 26.3%, 0.756 29.5%, 0.813 32.8%, 0.863 36.3%, 0.903 39.8%, 0.939 44%, 0.966 48.5%, 0.985 53.5%, 0.997 59%, 1.004 65%, 1.006 72.5%, 1);
+    --ease-bouncy: linear(0, 0.006 1.3%, 0.028 2.8%, 0.063 4.3%, 0.116 6%, 0.227 9%, 0.476 15%, 0.584 17.8%, 0.691 20.8%, 0.775 23.5%, 0.847 26.3%, 0.91 29.3%, 0.958 32.3%, 0.994 35.3%, 1.017 38%, 1.033 41%, 1.043 44.3%, 1.046 47.8%, 1.042 53.3%, 1.015 68%, 1.004 77%, 0.998 89%, 1);
+  }
+}
+
+/* ------------------------------------------------------------ keyframes (each moving one has its fade in the reduce block) */
+
+@keyframes m-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+/* From as faded in as it was when it closed (motion.ts sets --m-from-o on the copy). */
+@keyframes m-fade-out {
+  from {
+    opacity: var(--m-from-o, 1);
+  }
+  to {
+    opacity: 0;
+  }
+}
+/* A sheet: rises and fades in on --ease-out, 1% past its place by 150 ms (68%), then settles back: at rest by 220 ms. */
+@keyframes m-sheet-in {
+  from {
+    transform: translateY(40%);
+    opacity: 0;
+    animation-timing-function: cubic-bezier(0.2, 0.9, 0.3, 1);
+  }
+  68% {
+    transform: translateY(-1%);
+    opacity: 1;
+    animation-timing-function: cubic-bezier(0.37, 0, 0.63, 1);
+  }
+  to {
+    transform: translateY(0%);
+  }
+}
+@keyframes m-sheet-out {
+  from {
+    transform: translateY(var(--m-from-y, 0%));
+    opacity: var(--m-from-o, 1);
+  }
+  to {
+    transform: translateY(100%);
+    opacity: var(--m-from-o, 1);
+  }
+}
+@keyframes m-drawer-in {
+  from {
+    transform: translateX(-100%);
+  }
+}
+@keyframes m-drawer-out {
+  from {
+    transform: translateX(var(--m-from-x, 0%));
+    opacity: var(--m-from-o, 1);
+  }
+  to {
+    transform: translateX(-100%);
+    opacity: var(--m-from-o, 1);
+  }
+}
+/* A notice rises a touch into place as it fades in, at its full size: its top never reaches up over the header's
+   buttons, and its Dismiss is the size it will be from its first frame. */
+@keyframes m-toast-in {
+  from {
+    opacity: 0;
+    translate: 0 8px;
+  }
+}
+/* Its copy shrinks back into its top edge as it fades (`.toast[data-ghost]`'s transform-origin). */
+@keyframes m-toast-out {
+  from {
+    transform: translateY(var(--m-from-y, 0%));
+    opacity: var(--m-from-o, 1);
+  }
+  to {
+    transform: translateY(var(--m-from-y, 0%));
+    scale: 0.92;
+    opacity: 0;
+  }
+}
+/* A count, a dot or an icon popping up (the `scale` property: it adds to a transform already there). Never on
+   something you tap: on what's in it. */
+@keyframes m-pop-in {
+  from {
+    scale: 0.4;
+    opacity: 0;
+  }
+  to {
+    scale: 1;
+  }
+}
+@keyframes m-pop-out {
+  to {
+    scale: 0.6;
+    opacity: 0;
+  }
+}
+@keyframes m-menu-out {
+  from {
+    transform: translateY(var(--m-from-y, 0%));
+    opacity: var(--m-from-o, 1);
+  }
+  to {
+    transform: translateY(var(--m-from-y, 0%));
+    scale: 0.96;
+    opacity: 0;
+  }
+}
+/* Something coming in on a screen that's up (.m-enter), and an inline question dropping in under its button. */
+@keyframes m-rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+@keyframes m-drop-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+}
+/* What says "working", as it always moved (the chat's own pass reshapes these). */
+@keyframes pulse {
+  50% {
+    opacity: 0.45;
+  }
+}
+@keyframes blink {
+  0%,
+  80%,
+  100% {
+    opacity: 0.25;
+  }
+  40% {
+    opacity: 1;
+  }
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes csb-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes mic-pulse {
+  50% {
+    box-shadow: 0 0 0 4px var(--red-2);
+  }
+}
+@keyframes thought-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+@keyframes upload-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+/* ------------------------------------------------------------ both ways: fades and colour, never movement */
+
+/* Hover on a computer and a control's state (styles.css keeps hover colours to pointers that hover: a finger leaves
+   none behind). */
+.btn,
+.icon-btn,
+.seg button,
+.choice-card,
+.agent-card,
+.list-row,
+.jump-latest-btn {
+  transition:
+    background-color var(--dur-paint) var(--ease-fade),
+    border-color var(--dur-paint) var(--ease-fade),
+    box-shadow var(--dur-paint) var(--ease-fade),
+    color var(--dur-paint) var(--ease-fade);
+}
+/* A switch's track turns green by fading its colour in (styles.css draws it as span::before). */
+.switch span::before {
+  transition: opacity var(--dur-fade) var(--ease-fade);
+}
+/* The ×2 on a notice that came again: a box of its own, so it can pop. */
+.toast-count {
+  display: inline-block;
+}
+/* A notice's copy shrinks back into its top edge: it never reaches up over the header's buttons. */
+.toast[data-ghost] {
+  transform-origin: 50% 0;
+}
+/* The dim behind a sheet fades in, whatever the setting. */
+.overlay::before {
+  animation: m-fade-in var(--dur-fade) var(--ease-fade);
+}
+/* Jump to latest fades in (as it always did) and is drawn a whole height above its place (styles.css): a press, and its
+   copy's exit, shrink it about where it shows, so its middle stays where a tap goes. */
+.jump-latest-btn {
+  transform-origin: 50% -50%;
+  animation: m-fade-in var(--dur-fade) var(--ease-fade);
+}
+
+/* ------------------------------------------------------------ with motion */
+
+@media (prefers-reduced-motion: no-preference) {
+  /* ---- Press: a touch smaller while held, a spring back on release. */
+  .btn,
+  .seg button {
+    --press: var(--press-button);
+  }
+  .icon-btn,
+  .jump-latest-btn {
+    --press: var(--press-icon);
+  }
+  .agent-card,
+  .choice-card,
+  .list-row {
+    --press: var(--press-card);
+  }
+  :is(.btn, .icon-btn, .seg button, .choice-card, .agent-card, .list-row[role="button"], button.list-row, .jump-latest-btn) {
+    transition:
+      background-color var(--dur-paint) var(--ease-fade),
+      border-color var(--dur-paint) var(--ease-fade),
+      box-shadow var(--dur-paint) var(--ease-fade),
+      color var(--dur-paint) var(--ease-fade),
+      scale var(--dur-press-out) var(--ease-bouncy);
+  }
+  :is(.btn, .icon-btn, .seg button, .jump-latest-btn):active:not(:disabled):not([aria-disabled="true"]) {
+    scale: var(--press);
+    transition:
+      background-color var(--dur-paint) var(--ease-fade),
+      border-color var(--dur-paint) var(--ease-fade),
+      box-shadow var(--dur-paint) var(--ease-fade),
+      color var(--dur-paint) var(--ease-fade),
+      scale var(--dur-press-in) var(--ease-fade);
+  }
+  /* Rows and cards wait a moment first, so a finger that starts a scroll on one never shrinks it. */
+  :is(.choice-card, .agent-card, .list-row[role="button"], button.list-row):active:not(:disabled):not([aria-disabled="true"]) {
+    scale: var(--press);
+    transition:
+      background-color var(--dur-paint) var(--ease-fade),
+      border-color var(--dur-paint) var(--ease-fade),
+      box-shadow var(--dur-paint) var(--ease-fade),
+      color var(--dur-paint) var(--ease-fade),
+      scale var(--dur-press-in) var(--ease-fade) 60ms;
+  }
+
+  /* ---- Switch: the thumb springs across (the track's colour fades, above). */
+  .switch span::after {
+    transition: transform var(--dur-switch) var(--ease-snappy);
+  }
+
+  /* ---- Sheets (ui.tsx Dialog): the dim fades in (above), the sheet rises from 40% and settles by 220 ms. */
+  .app.mobile .dialog {
+    animation: m-sheet-in var(--dur-sheet-in);
+    /* Its own colour under it, so the settle never shows a gap at the bottom edge. */
+    box-shadow:
+      var(--shadow-pop),
+      0 40px 0 var(--surface);
+  }
+
+  /* ---- Notices (App.tsx): each rises a touch into place, at its full size; a repeat's count pops; when one goes, the
+     others glide (FlipGroup). */
+  .toast {
+    animation: m-toast-in var(--dur-toast-in) var(--ease-snappy);
+  }
+  .toast-count {
+    animation: m-pop-in var(--dur-badge) var(--ease-bouncy);
+  }
+
+  /* ---- The chats drawer (App.tsx). */
+  .chat-sidebar.drawer {
+    animation: m-drawer-in var(--dur-drawer-in) var(--ease-out);
+  }
+  .drawer-scrim {
+    animation: m-fade-in var(--dur-scrim) var(--ease-fade);
+  }
+
+  /* ---- Coming in on a screen that's up. */
+  .m-enter {
+    animation: m-rise-in var(--dur-enter) var(--ease-snappy);
+  }
+  .confirm-inline {
+    animation: m-drop-in var(--dur-enter) var(--ease-snappy);
+  }
+
+  /*
+   * ---- Bars fill by scaling from their left end (styles.css: --fill), never by changing width. Not by sliding either:
+   * a slid fill's box reaches past its bar, clipped on screen but not for anything that measures it. The ring's arc grows.
+   */
+  .meter > i,
+  .pool-bar > span {
+    transition: transform 0.4s var(--ease-smooth);
+  }
+  .upload-bar > span {
+    transition: transform 0.15s linear;
+  }
+  .ring-fill {
+    transition: stroke-dasharray 0.4s;
+  }
+
+  /* ---- What says "working" keeps moving. */
+  .avatar .state.thinking,
+  .avatar .state.working {
+    animation: pulse 1.4s ease-in-out infinite;
+  }
+  .typing i {
+    animation: blink 1.2s infinite;
+  }
+  .typing i:nth-child(2) {
+    animation-delay: 0.15s;
+  }
+  .typing i:nth-child(3) {
+    animation-delay: 0.3s;
+  }
+  .cursor::after {
+    animation: blink 1s infinite;
+  }
+  .spin {
+    animation: spin 1s linear infinite;
+  }
+  .csb-dot.busy {
+    animation: csb-spin 1s linear infinite;
+  }
+  .composer-icon.mic.on {
+    animation: mic-pulse 1.4s ease-in-out infinite;
+  }
+  .working-thought.live > svg {
+    animation: thought-pulse 1.4s ease-in-out infinite;
+  }
+  .upload-bar > span.indeterminate {
+    animation: upload-pulse 1.2s ease-in-out infinite;
+  }
+
+  /*
+   * ---- Exits: the copies motion.ts `leave` puts where something closed. Inert, hidden from screen readers and from
+   * every selector (a closed shadow root), and gone when their animation ends. Nothing else in a copy moves. Each starts
+   * where, and as faded in as, the real one was drawn when it closed.
+   */
+  [data-ghost] *,
+  [data-ghost] *::before,
+  [data-ghost] *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+  [data-ghost="sheet"]::before {
+    --m-from-o: var(--m-from-o-before, 1);
+    animation: m-fade-out var(--dur-sheet-out) var(--ease-fade) forwards !important;
+  }
+  [data-ghost="sheet"] > .dialog {
+    animation: m-sheet-out var(--dur-sheet-out) var(--ease-ios) forwards !important;
+  }
+  [data-ghost="drawer"] {
+    animation: m-drawer-out var(--dur-drawer-out) var(--ease-ios) forwards !important;
+  }
+  [data-ghost="scrim"],
+  [data-ghost][data-quiet] {
+    animation: m-fade-out var(--dur-drawer-out) var(--ease-fade) forwards !important;
+  }
+  [data-ghost="toast"] {
+    animation: m-toast-out var(--dur-toast-out) var(--ease-ios) forwards !important;
+  }
+  [data-ghost="jump"] .jump-latest-btn {
+    animation: m-pop-out var(--dur-menu-out) var(--ease-fade) forwards !important;
+  }
+  [data-ghost="menu"] {
+    animation: m-menu-out var(--dur-menu-out) var(--ease-fade) forwards !important;
+  }
+  [data-ghost="row"] {
+    animation: m-fade-out var(--dur-menu-out) var(--ease-fade) forwards !important;
+  }
+}
+
+/* ------------------------------------------------------------ Reduce Motion */
+
+@media (prefers-reduced-motion: reduce) {
+  /*
+   * What comes in fades in, 150 ms, under the name it moves by with motion (its keyframes are a fade here), so turning
+   * the setting on or off never plays it again; what goes is simply gone (motion.ts makes no copies).
+   */
+  @keyframes m-sheet-in {
+    from {
+      opacity: 0;
+    }
+  }
+  @keyframes m-drawer-in {
+    from {
+      opacity: 0;
+    }
+  }
+  @keyframes m-toast-in {
+    from {
+      opacity: 0;
+    }
+  }
+  @keyframes m-pop-in {
+    from {
+      opacity: 0;
+    }
+  }
+  @keyframes m-rise-in {
+    from {
+      opacity: 0;
+    }
+  }
+  @keyframes m-drop-in {
+    from {
+      opacity: 0;
+    }
+  }
+  .app.mobile .dialog {
+    animation: m-sheet-in var(--dur-fade) var(--ease-fade);
+  }
+  .toast {
+    animation: m-toast-in var(--dur-fade) var(--ease-fade);
+  }
+  .toast-count {
+    animation: m-pop-in var(--dur-fade) var(--ease-fade);
+  }
+  .chat-sidebar.drawer {
+    animation: m-drawer-in var(--dur-fade) var(--ease-fade);
+  }
+  .drawer-scrim {
+    animation: m-fade-in var(--dur-fade) var(--ease-fade);
+  }
+  .m-enter {
+    animation: m-rise-in var(--dur-fade) var(--ease-fade);
+  }
+  .confirm-inline {
+    animation: m-drop-in var(--dur-fade) var(--ease-fade);
+  }
+  /* Held down: dimmed, nothing moves. */
+  :is(.btn, .icon-btn, .seg button, .choice-card, .agent-card, .list-row[role="button"], button.list-row, .jump-latest-btn):active:not(:disabled):not([aria-disabled="true"]) {
+    opacity: 0.7;
+  }
+  /* Still stand-ins for what pulses or turns (loaders' spinners too: still, they still say something's going on): the
+     mic's ring stays on, a working chat's dot is a whole ring. */
+  .composer-icon.mic.on {
+    box-shadow: 0 0 0 4px var(--red-2);
+  }
+  .csb-dot.busy {
+    border-right-color: var(--accent);
+  }
+  /* A chevron in another stylesheet turns at once (until it moves here). */
+  .group-pick-chevron {
+    transition: none;
+  }
+}

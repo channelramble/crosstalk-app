@@ -1,0 +1,41 @@
+# Builds the hub for every platform and publishes a GitHub Release when a version tag (v1.2.3) is pushed.
+# The release has what install.sh and install.ps1 download: the hub per platform, both platform installers, and SHA256SUMS.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    # macOS: Apple silicon hubs must carry a signature, and codesign is only here. Everything else cross-compiles.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - name: Build the hub (web app embedded) for macOS and Linux
+        run: bun hub/scripts/build.ts darwin-arm64 darwin-x64 linux-x64 linux-arm64
+      - name: Collect the release files
+        run: |
+          mkdir dist
+          cp hub/out/crosstalk-hub-* dist/
+          # An ad-hoc signature, so the download runs on Apple silicon (install-macos.sh signs it again on your Mac).
+          for f in dist/crosstalk-hub-darwin-*; do codesign --force --sign - --identifier com.crosstalk.hub "$f"; done
+          cp deploy/install-macos.sh dist/install-macos.sh
+          cp deploy/install.sh dist/install-linux.sh
+          cp install.sh install.ps1 dist/
+          cd dist && shasum -a 256 * > SHA256SUMS && cat SHA256SUMS
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          gh release create "$TAG" dist/* --title "Crosstalk ${TAG#v}" --notes-file CHANGELOG.md --verify-tag || gh release upload "$TAG" dist/* --clobber

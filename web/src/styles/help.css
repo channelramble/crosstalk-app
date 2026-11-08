@@ -1,0 +1,41 @@
+/* The "?" help tip (views/HelpTip.tsx): one plain sentence under a technical word. */
+.help-tip {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  vertical-align: middle;
+}
+.help-tip-btn {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--sep-strong);
+  background: transparent;
+  color: var(--text-2);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+/* The circle stays small; the part that answers a tap is 44 px square. */
+.help-tip-btn::after {
+  content: "";
+  position: absolute;
+  inset: -10px;
+}
+.help-tip-btn[aria-expanded="true"] {
+  color: var(--text);
+  border-color: var(--accent);
+}
+.help-tip-text {
+  display: block;
+  margin-top: 6px;
+  max-width: 34ch;
+  color: var(--text-2);
+  font-size: 14px;
+  line-height: 1.4;
+}

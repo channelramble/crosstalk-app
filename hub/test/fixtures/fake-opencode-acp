@@ -1,0 +1,117 @@
+#!/usr/bin/env bun
+// A scripted `opencode acp` for driver tests. FAKE_OC_SCRIPT names a JSON file:
+//   { "caps": agentCapabilities, "replay": [updates sent during session/load], "prompts": [ [steps...], ... ] }
+// Each prompt's steps run in order: {"u": update}, {"sleep": ms} (a cancel ends it), {"stuck": ms} (nothing does),
+// {"ask": toolCall} (a permission request; with "cancelAfter": ms it's taken back then, and the prompt goes on), {"exit": code},
+// {"result": promptResult} or {"error": {code, message, data}} (which ends it). A prompt past the last gets end_turn.
+// "resumeErrors" are what the first session/resumes answer (code -32000: it exits instead, unless "answered"), "newFails" the first
+// session/news, whichever process gets them, "modelFails" every attempt to set the model.
+// FAKE_OC_LOG names a file every message it receives is appended to, as JSON lines.
+// FAKE_OC_INSTRUCTIONS_OUT names a file it writes its instructions to as it starts: the files its config names, read as the
+// real one reads them (the hub writes them just for this process, and they go when it does).
+import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+
+const script = JSON.parse(readFileSync(process.env.FAKE_OC_SCRIPT!, "utf8"));
+if (process.env.FAKE_OC_INSTRUCTIONS_OUT) {
+  const { instructions } = JSON.parse(readFileSync(process.env.OPENCODE_CONFIG!, "utf8")) as { instructions: string[] };
+  writeFileSync(process.env.FAKE_OC_INSTRUCTIONS_OUT, instructions.map((file) => readFileSync(file, "utf8")).join("\n"));
+}
+const prompts: any[][] = [...(script.prompts ?? [])]; // eslint-disable-line @typescript-eslint/no-explicit-any
+const out = (o: unknown) => process.stdout.write(`${JSON.stringify(o)}\n`);
+const waiting = new Map<number, (r: unknown) => void>();
+let nextId = 1000;
+let session = "ses_fake";
+let cancelled = false;
+// Failures are said once per test, not once per process: a new process finds in the log that it was already said.
+const said = () => (process.env.FAKE_OC_LOG ? readFileSync(process.env.FAKE_OC_LOG, "utf8") : "");
+const seenRetry = () => (said().match(/"method":"session\/resume"/g)?.length ?? 0) > (script.resumeErrors?.length ?? 0);
+const resumeErrors: any[] = [...(script.resumeErrors ?? [])]; // eslint-disable-line @typescript-eslint/no-explicit-any
+
+const update = (u: unknown) => out({ jsonrpc: "2.0", method: "session/update", params: { sessionId: session, update: u } });
+function ask(toolCall: unknown): Promise<unknown> {
+  const id = nextId++;
+  out({ jsonrpc: "2.0", id, method: "session/request_permission", params: { sessionId: session, toolCall, options: [{ optionId: "once", kind: "allow_once", name: "Allow once" }, { optionId: "always", kind: "allow_always", name: "Always allow" }, { optionId: "reject", kind: "reject_once", name: "Reject" }] } });
+  return new Promise((res) => waiting.set(id, res));
+}
+
+async function prompt(id: number) {
+  cancelled = false;
+  for (const step of prompts.shift() ?? []) {
+    if (cancelled) break;
+    if (step.u) update(step.u);
+    if (step.stuck) await new Promise((r) => setTimeout(r, step.stuck));
+    for (let left = step.sleep ?? 0; left > 0 && !cancelled; left -= 20) await new Promise((r) => setTimeout(r, 20));
+    if (step.exit !== undefined) process.exit(step.exit);
+    if (step.ask) {
+      const asking = ask(step.ask);
+      if (step.cancelAfter) {
+        const id = nextId - 1;
+        await new Promise((r) => setTimeout(r, step.cancelAfter));
+        out({ jsonrpc: "2.0", method: "$/cancel_request", params: { requestId: id } });
+        waiting.delete(id);
+        continue;
+      }
+      const a = (await asking) as { outcome?: { optionId?: string } };
+      if (a?.outcome?.optionId === "reject") return out({ jsonrpc: "2.0", id, result: { stopReason: "cancelled" } });
+    }
+    if (step.error) return out({ jsonrpc: "2.0", id, error: step.error });
+    if (step.result) return out({ jsonrpc: "2.0", id, result: step.result });
+  }
+  out({ jsonrpc: "2.0", id, result: { stopReason: cancelled ? "cancelled" : "end_turn" } });
+}
+
+let buf = "";
+for await (const chunk of Bun.stdin.stream()) {
+  buf += new TextDecoder().decode(chunk);
+  let nl: number;
+  while ((nl = buf.indexOf("\n")) >= 0) {
+    const line = buf.slice(0, nl);
+    buf = buf.slice(nl + 1);
+    if (!line.trim()) continue;
+    const m = JSON.parse(line);
+    if (process.env.FAKE_OC_LOG) appendFileSync(process.env.FAKE_OC_LOG, `${line}\n`);
+    if (m.id !== undefined && waiting.has(m.id) && !m.method) {
+      waiting.get(m.id)!(m.result);
+      waiting.delete(m.id);
+      continue;
+    }
+    switch (m.method) {
+      case "initialize":
+        out({ jsonrpc: "2.0", id: m.id, result: { protocolVersion: 1, agentCapabilities: script.caps ?? { loadSession: true, sessionCapabilities: { resume: {} } }, authMethods: [] } });
+        break;
+      case "session/new":
+        {
+          // The log has this one in it already.
+          const failure = script.newFails?.[(said().match(/"method":"session\/new"/g)?.length ?? 1) - 1];
+          out({ jsonrpc: "2.0", id: m.id, ...(failure ? { error: failure } : { result: { sessionId: session, configOptions: [] } }) });
+        }
+        break;
+      case "session/resume":
+        if (script.resumeFails) out({ jsonrpc: "2.0", id: m.id, error: { code: -32602, message: "no such session" } });
+        else if (resumeErrors.length && !seenRetry()) {
+          const e = resumeErrors.shift();
+          if (e.code === -32000 && !e.answered) process.exit(1);
+          out({ jsonrpc: "2.0", id: m.id, error: e });
+        } else {
+          session = m.params.sessionId;
+          out({ jsonrpc: "2.0", id: m.id, result: { configOptions: [] } });
+        }
+        break;
+      case "session/load":
+        session = m.params.sessionId;
+        for (const u of script.replay ?? []) update(u);
+        out({ jsonrpc: "2.0", id: m.id, result: { configOptions: [] } });
+        break;
+      case "session/set_config_option":
+        if (script.modelFails && m.params.configId === "model") out({ jsonrpc: "2.0", id: m.id, error: script.modelFails });
+        else out({ jsonrpc: "2.0", id: m.id, result: { configOptions: [] } });
+        break;
+      case "session/prompt":
+        void prompt(m.id);
+        break;
+      case "session/cancel":
+        cancelled = true;
+        break;
+    }
+  }
+}

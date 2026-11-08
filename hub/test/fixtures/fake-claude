@@ -1,0 +1,633 @@
+#!/usr/bin/env bun
+// Stand-in for `claude -p --input-format stream-json --output-format stream-json` used by driver tests.
+// Emits the same event shapes Claude Code's headless mode documents.
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+
+// ---- Sign-in, scripted (never Claude Code's real one). FAKE_CLAUDE_AUTH_FILE holds the shared sign-in's state, the way
+// the keychain item holds Claude Code's: "in" (signed in, the default), or "out" (cleared, as Claude Code clears it when
+// the server refuses a refresh token). `auth status` reads it; `auth login` writes "in" when it's given the right code.
+const authFile = process.env.FAKE_CLAUDE_AUTH_FILE;
+const authState = () => (authFile && existsSync(authFile) ? readFileSync(authFile, "utf8").trim() : "in");
+if (process.argv[2] === "--version") {
+  process.stdout.write("2.1.316 (Claude Code)\n");
+  process.exit(0);
+}
+if (process.argv[2] === "auth" && process.argv[3] === "status") {
+  // As Claude Code 2.1.316 prints it (JSON unless --text), exiting 0 when signed in and 1 when not.
+  const loggedIn = authState() === "in";
+  const status = loggedIn
+    ? { loggedIn: true, authMethod: "claude.ai", apiProvider: "firstParty", email: "person@example.com", orgId: "org-test", orgName: "Test org", subscriptionType: "max" }
+    : { loggedIn: false, authMethod: "none", apiProvider: "firstParty" };
+  process.stdout.write(JSON.stringify(status, null, 2) + "\n");
+  process.exit(loggedIn ? 0 : 1);
+}
+if (process.argv[2] === "auth" && process.argv[3] === "login") {
+  // As `claude auth login` (2.1.289-2.1.316) does it: the link (an OSC 8 link on a terminal), then it waits for the
+  // code#state the callback page shows, a line at a time. FAKE_CLAUDE_LOGIN_CODE: the code part the page shows
+  // (default "fake-auth-code-123456"); FAKE_CLAUDE_LOGIN_STATE_OUT: where the test finds the state; FAKE_CLAUDE_LOGIN_ECHO=1:
+  // what's typed comes back on the screen, as a terminal that echoes shows it. A wrong code ends it (exit 1).
+  // FAKE_CLAUDE_LOGIN_ENV_OUT: what it was started with that decides where a browser opens (it must open none).
+  if (process.env.FAKE_CLAUDE_LOGIN_ENV_OUT) writeFileSync(process.env.FAKE_CLAUDE_LOGIN_ENV_OUT, JSON.stringify({ BROWSER: process.env.BROWSER ?? null, stdinTTY: !!process.stdin.isTTY }));
+  const state = [...crypto.getRandomValues(new Uint8Array(16))].map((b) => b.toString(16).padStart(2, "0")).join("");
+  if (process.env.FAKE_CLAUDE_LOGIN_STATE_OUT) writeFileSync(process.env.FAKE_CLAUDE_LOGIN_STATE_OUT, state);
+  const url = `https://claude.com/cai/oauth/authorize?code=true&client_id=fake-client&response_type=code&redirect_uri=https%3A%2F%2Fplatform.claude.com%2Foauth%2Fcode%2Fcallback&scope=user%3Ainference&code_challenge=fakechallenge&code_challenge_method=S256&state=${state}`;
+  const link = process.stdout.isTTY ? `\x1b]8;;${url}\x07\x1b[34m${url}\x1b[39m\x1b]8;;\x07` : url;
+  process.stdout.write("Opening browser to sign in…\n");
+  process.stdout.write(`If the browser didn't open, visit: ${link}\n`);
+  process.stdout.write("Paste code here if prompted > ");
+  const expected = process.env.FAKE_CLAUDE_LOGIN_CODE || "fake-auth-code-123456";
+  for await (const line of console) {
+    if (process.env.FAKE_CLAUDE_LOGIN_ECHO === "1") process.stdout.write(`${line}\r\n`);
+    const [code, st] = line.trim().split("#");
+    if (!code || !st) {
+      process.stderr.write("Invalid code. Please make sure the full code was copied.\n");
+      continue;
+    }
+    if (code !== expected || st !== state) {
+      // FAKE_CLAUDE_LOGIN_SAY_CODE=1: a sign-in that repeats what it was given in its failure (Crosstalk must not).
+      process.stderr.write(process.env.FAKE_CLAUDE_LOGIN_SAY_CODE === "1" ? `Login failed: couldn't exchange ${line.trim()}\n` : "Login failed: Request failed with status code 400\n");
+      process.exit(1);
+    }
+    if (authFile) writeFileSync(authFile, "in");
+    process.stdout.write("Login successful.\n");
+    process.exit(0);
+  }
+  process.exit(1);
+}
+
+const argsOut = process.env.FAKE_CLAUDE_ARGS_OUT;
+if (argsOut) appendFileSync(argsOut, JSON.stringify(process.argv.slice(2)) + "\n");
+const envOut = process.env.FAKE_CLAUDE_ENV_OUT;
+if (envOut) appendFileSync(envOut, JSON.stringify(Object.fromEntries(Object.entries(process.env).filter(([k]) => /^(CLAUDE_CODE_|CROSSTALK_)/.test(k)))) + "\n");
+// FAKE_CLAUDE_CWD_OUT: the folder each start runs in, a JSON line per start.
+if (process.env.FAKE_CLAUDE_CWD_OUT) appendFileSync(process.env.FAKE_CLAUDE_CWD_OUT, JSON.stringify(process.cwd()) + "\n");
+// FAKE_CLAUDE_RUN_MODELS="claude-opus-5,": the model each start of this fake comes up on, in turn (counted by the lines
+// FAKE_CLAUDE_ARGS_OUT holds; an empty entry comes up on the model it was started on), as Claude Code can when it puts
+// another model in place of the one it was asked for. FAKE_CLAUDE_RUN_LIMITS="1": the starts whose every reply hits the
+// plan limit, as PLAN_LIMIT does.
+const startNo = argsOut && existsSync(argsOut) ? readFileSync(argsOut, "utf8").trim().split("\n").length : 1;
+const runModel = (process.env.FAKE_CLAUDE_RUN_MODELS ?? "").split(",")[startNo - 1] || null;
+const limitRun = (process.env.FAKE_CLAUDE_RUN_LIMITS ?? "").split(",").includes(String(startNo));
+// FAKE_CLAUDE_STALE_STARTS="1": the starts that hold a sign-in gone stale (counted the same way): every reply of theirs
+// fails before any request, as Claude Code 2.1.289 chats can. A fresh start reads the sign-in as
+// FAKE_CLAUDE_AUTH_FILE has it: "out" fails the same way.
+const staleRun = (process.env.FAKE_CLAUDE_STALE_STARTS ?? "").split(",").includes(String(startNo));
+// FAKE_CLAUDE_STALE_MIDWAY_STARTS="1": the starts whose sign-in can't be renewed partway through a reply, as on an API
+// call between two steps of a long one: it runs a command (`git push origin main`), says so, and then fails as stale.
+const staleMidwayRun = (process.env.FAKE_CLAUDE_STALE_MIDWAY_STARTS ?? "").split(",").includes(String(startNo));
+const modelIdx = process.argv.indexOf("--model");
+const model = runModel || process.env.FAKE_CLAUDE_INIT_MODEL || (modelIdx > 0 && process.argv[modelIdx + 1] !== "default" ? process.argv[modelIdx + 1] : "claude-test");
+
+const resumeIdx = process.argv.indexOf("--resume");
+const resumed = resumeIdx > 0 ? process.argv[resumeIdx + 1] : null;
+// --fork-session continues in a new session; --resume-session-at ends the copy at that entry.
+const forking = process.argv.includes("--fork-session");
+const atIdx = process.argv.indexOf("--resume-session-at");
+const sessionId = forking ? process.env.FAKE_CLAUDE_FORK_ID || "99999999-8888-7777-6666-555555555555" : resumed ?? "11111111-2222-3333-4444-555555555555";
+// FAKE_CLAUDE_PROJECTS: like Claude Code, find a resumed session in this folder's project directory (and write a fork there).
+const projects = process.env.FAKE_CLAUDE_PROJECTS;
+if (projects && resumed) {
+  const dir = join(projects, process.cwd().replace(/[^a-zA-Z0-9]/g, "-"));
+  const from = join(dir, `${resumed}.jsonl`);
+  if (!existsSync(from)) {
+    process.stderr.write(`No conversation found with session ID: ${resumed}\n`);
+    process.exit(1);
+  }
+  if (forking) {
+    const lines = readFileSync(from, "utf8").split("\n").filter(Boolean);
+    const at = atIdx > 0 ? lines.findIndex((l) => JSON.parse(l).uuid === process.argv[atIdx + 1]) : -1;
+    // Like Claude Code, --resume-session-at finds only messages on the conversation's current path (from its newest
+    // entry back): one a rewind left behind, or a missing one, is an error it exits on.
+    if (atIdx > 0) {
+      const entries = lines.map((l) => JSON.parse(l)).filter((e) => typeof e.uuid === "string" && "parentUuid" in e);
+      const byId = new Map(entries.map((e) => [e.uuid, e]));
+      const path = new Set<string>();
+      for (let e = entries.at(-1); e; e = e.parentUuid ? byId.get(e.parentUuid) : undefined) path.add(e.uuid);
+      if (!path.has(process.argv[atIdx + 1])) {
+        const msg = `No message found with message.uuid of: ${process.argv[atIdx + 1]}`;
+        process.stderr.write(msg + "\n");
+        process.stdout.write(JSON.stringify({ type: "result", subtype: "error_during_execution", is_error: true, num_turns: 0, session_id: sessionId, errors: [msg] }) + "\n");
+        process.exit(1);
+      }
+    }
+    writeFileSync(join(dir, `${sessionId}.jsonl`), (at >= 0 ? lines.slice(0, at + 1) : lines).map((l) => `${JSON.stringify({ ...JSON.parse(l), sessionId })}\n`).join(""));
+  }
+}
+// FAKE_CLAUDE_TOTALS="0.5,0.9": the total_cost_usd of each result that reports one, in turn, instead of the constants below.
+// Claude Code reports a running total per process, so a real run's are cumulative; a new process starts its list again.
+const totals = (process.env.FAKE_CLAUDE_TOTALS ?? "").split(",").filter(Boolean).map(Number);
+// FAKE_CLAUDE_TRANSCRIPT: the session as Claude Code keeps it, a JSON line per message ({ role, text, model, start }: the
+// model that wrote it and which start of the fake it was). Like Claude Code, a message is written in as it's taken up
+// (a turn's own, a queued one, a background task's <task-notification>), and a resumed start whose session ends on a line
+// nothing answered closes it with Claude Code's own "No response requested." when its next input comes: that line is
+// never answered then.
+const transcript = process.env.FAKE_CLAUDE_TRANSCRIPT;
+const record = (role: "user" | "assistant", text: string, by: string | null) => {
+  if (transcript) appendFileSync(transcript, JSON.stringify({ role, text, model: role === "assistant" ? by : null, start: startNo }) + "\n");
+};
+let unansweredChecked = !resumed;
+const takeUp = (text: string) => {
+  if (!unansweredChecked) {
+    unansweredChecked = true;
+    const last = transcript && existsSync(transcript) ? readFileSync(transcript, "utf8").trim().split("\n").filter(Boolean).at(-1) : undefined;
+    if (last && JSON.parse(last).role === "user") record("assistant", "No response requested.", "<synthetic>");
+  }
+  record("user", text, null);
+};
+const out = (o: any) => {
+  if (o.type === "result" && typeof o.total_cost_usd === "number" && totals.length) o.total_cost_usd = totals.shift();
+  process.stdout.write(JSON.stringify(o) + "\n");
+  if (o.type === "result") record("assistant", String(o.result ?? ""), model);
+};
+let initSent = false;
+let pendingInterrupt: (() => void) | null = null;
+// FAKE_CLAUDE_QUEUE=1: like Claude Code, a message sent while a turn runs waits in a queue and runs after it, a plain
+// interrupt keeps it queued, interrupt with send_now (interrupt_send_now_v1, unless FAKE_CLAUDE_NO_SEND_NOW) stops the
+// turn for it, and interrupt with cancel_queued (interrupt_cancel_queued_v1, unless FAKE_CLAUDE_NO_CANCEL_QUEUED) empties
+// the queue and lists what it took under `cancelled`. LONG_STEP starts a command that runs until interrupted, SLOW:<ms> a
+// reply that takes that long. FAKE_CLAUDE_TAKE_IN=1: the running turn takes a queued message in at once (it isn't queued any more, and isn't
+// answered unless asked again). FAKE_CLAUDE_STOP_MS: how long a stopped LONG_STEP takes to wind down.
+const queueMode = process.env.FAKE_CLAUDE_QUEUE === "1";
+const queue: { uuid: string; text: string }[] = [];
+let busy = false;
+let stopLong: (() => void) | null = null;
+const capabilities = ["interrupt_receipt_v1", ...(queueMode && !process.env.FAKE_CLAUDE_NO_SEND_NOW ? ["interrupt_send_now_v1"] : []), ...(queueMode && !process.env.FAKE_CLAUDE_NO_CANCEL_QUEUED ? ["interrupt_cancel_queued_v1"] : [])];
+// FAKE_CLAUDE_WAKE_MS: how long the first words of a turn Claude Code starts by itself take (a background task's report,
+// a message queued behind a reply that ended): its request has gone out, and the API is reading the conversation. Set,
+// queued messages wait for it too.
+const wakeMs = Number(process.env.FAKE_CLAUDE_WAKE_MS ?? 600);
+// Like Claude Code with CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS (the driver always sets it), it says when it starts and
+// stops working (system/session_state_changed): "running" as it takes something up with nothing else running (a message,
+// a background task's report), "idle" once it has nothing left to do, never in between two turns it runs back to back
+// (a reply, then the report it hadn't taken in). FAKE_CLAUDE_NO_STATE=1: a Claude Code that never says.
+const saysState = process.env.CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS === "1" && process.env.FAKE_CLAUDE_NO_STATE !== "1";
+let working = 0;
+const sayState = (s: "running" | "idle") => saysState && out({ type: "system", subtype: "session_state_changed", state: s, uuid: crypto.randomUUID(), session_id: sessionId });
+const begin = () => {
+  if (working++ === 0) sayState("running");
+};
+const end = () => {
+  if (--working === 0) sayState("idle");
+};
+
+const delta = (text: string) => out({ type: "stream_event", parent_tool_use_id: null, session_id: sessionId, event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text } } });
+const msgStart = () => out({ type: "stream_event", parent_tool_use_id: null, session_id: sessionId, event: { type: "message_start", message: { id: "msg_" + Math.random() } } });
+
+// ---- A background job. BACKGROUND_JOB: the reply starts the
+// test suite with Bash's run_in_background (a local_bash task) and ends while it runs. The job finishes once the file
+// FAKE_CLAUDE_JOB_DONE names exists (else after 200 ms). Then, as Claude Code does: task_updated and task_notification
+// go out, its <task-notification> is written into the session as Claude Code takes it up, and after FAKE_CLAUDE_WAKE_MS
+// (default 600: longer than the hub's 300 ms batching of task reports) Claude Code answers it in a turn of its own,
+// carrying on with the plan. FAKE_CLAUDE_NO_WAKE=1: the job is reported and nothing answers it (Claude Code takes the
+// report in without a word: "running", then "idle", as it does one that asks nothing). Within the reply instead:
+// BACKGROUND_JOB FOLDED, the job finishes during the reply's next step (reading the plan), and the request after that
+// step carries its report (Claude Code attaches what came in before it put the request together); BACKGROUND_JOB LATE,
+// it finishes while the reply's last request is already on its way, which hasn't it, so Claude Code answers it in a turn
+// of its own after the reply. SLOW:<ms>: that step (or that request) takes so long.
+const JOB_OUTPUT = "/private/tmp/claude-501/fake-project/fake-session/tasks/job1.output";
+const JOB_SUMMARY = 'Background command "Run the test suite" completed (exit code 0)';
+const CARRY_ON = "The test suite passed. Carrying on with the plan: fixing the flaky test next.";
+function reportJob() {
+  out({ type: "system", subtype: "task_updated", task_id: "job1", patch: { status: "completed", end_time: Date.now() }, session_id: sessionId });
+  out({ type: "system", subtype: "task_notification", task_id: "job1", tool_use_id: "toolu_job", status: "completed", output_file: JOB_OUTPUT, summary: JOB_SUMMARY, session_id: sessionId });
+}
+async function finishJob() {
+  const done = process.env.FAKE_CLAUDE_JOB_DONE;
+  if (done) while (!existsSync(done)) await Bun.sleep(20);
+  else await Bun.sleep(200);
+  reportJob();
+  if (process.env.FAKE_CLAUDE_NO_WAKE !== "1") return answerJob();
+  begin();
+  end();
+}
+/**
+ * Claude Code takes the job's report up, writes it into the session, and answers it once the API's first words are back.
+ * FAKE_CLAUDE_WAKE_LIMIT=1: the 5-hour window ran out as the job finished, so that request is refused before any words,
+ * as Claude Code reports a plan limit (a rejected rate_limit_event, its synthetic error reply, a result with the API's
+ * 429). FAKE_CLAUDE_WAKE_STREAM_MS: how long its answer takes after its first event (message_start), so the hub can stop
+ * it before it has written or done anything.
+ */
+async function answerJob() {
+  begin();
+  takeUp(`<task-notification>\n<task-id>job1</task-id>\n<tool-use-id>toolu_job</tool-use-id>\n<output-file>${JOB_OUTPUT}</output-file>\n<status>completed</status>\n<summary>${JOB_SUMMARY}</summary>\n</task-notification>`);
+  await Bun.sleep(wakeMs);
+  if (process.env.FAKE_CLAUDE_WAKE_LIMIT === "1") {
+    const said = "You've hit your session limit · resets 11pm";
+    out({ type: "rate_limit_event", session_id: sessionId, rate_limit_info: { status: "rejected", utilization: 1, resetsAt: Math.floor(Date.now() / 1000) + 1800, rateLimitType: "five_hour" } });
+    out({ type: "assistant", parent_tool_use_id: null, session_id: sessionId, error: "rate_limit", message: { model: "<synthetic>", content: [{ type: "text", text: said }] } });
+    out({ type: "result", subtype: "success", is_error: true, api_error_status: 429, api_error: null, result: `${said} · progress saved`, num_turns: 1, session_id: sessionId, usage: { input_tokens: 10, output_tokens: 0 }, total_cost_usd: 0 });
+    end();
+    return;
+  }
+  msgStart();
+  // Its answer takes FAKE_CLAUDE_WAKE_STREAM_MS after the first event. Interrupted meanwhile, it stops there, as Claude
+  // Code does: the model wrote nothing and ran nothing, the answer is never written into the session, and the result says
+  // it was interrupted.
+  const stream = Number(process.env.FAKE_CLAUDE_WAKE_STREAM_MS ?? 0);
+  if (stream > 0) {
+    const stopped = await new Promise<boolean>((res) => {
+      const timer = setTimeout(() => {
+        pendingInterrupt = null;
+        res(false);
+      }, stream);
+      pendingInterrupt = () => {
+        clearTimeout(timer);
+        res(true);
+      };
+    });
+    if (stopped) {
+      process.stdout.write(JSON.stringify({ type: "result", subtype: "error_during_execution", is_error: true, session_id: sessionId, usage: { input_tokens: 30, output_tokens: 0 }, total_cost_usd: 0.001, errors: ["interrupted"] }) + "\n");
+      end();
+      return;
+    }
+  }
+  delta(CARRY_ON);
+  out({ type: "assistant", parent_tool_use_id: null, session_id: sessionId, message: { model, content: [{ type: "text", text: CARRY_ON }] } });
+  out({ type: "result", subtype: "success", is_error: false, result: CARRY_ON, num_turns: 1, session_id: sessionId, usage: { input_tokens: 30, output_tokens: 14 }, total_cost_usd: 0.003 });
+  end();
+}
+
+async function turn(text: string, takenUp = false) {
+  if (!takenUp) takeUp(text);
+  const initOverride = /INIT:(\S+)/.exec(text)?.[1];
+  if (!initSent || initOverride) {
+    initSent = true;
+    out({ type: "system", subtype: "init", session_id: sessionId, model: initOverride || model, tools: ["Bash"], mcp_servers: [{ name: "crosstalk", status: "connected" }], capabilities, claude_code_version: "2.1.316" });
+  }
+  // A sign-in that stopped working, in Claude Code's own shapes: its synthetic reply carries the SDK error kind, the
+  // result its words. STALE_LOGIN (or a stale start, or a cleared sign-in): a sign-in gone stale. REFRESH_BUSY: another
+  // process was renewing it. RESTART_TO_SIGN_IN: 2.1.316's "Restart Claude Code to finish signing in." DISK_FULL: the
+  // sign-in couldn't be saved (not a sign-in problem). Each costs nothing: no request leaves. And answers of the API
+  // itself, which 2.1.316 words alike for a 401 and a 403: FIRST_PARTY_401 (Anthropic refused the sign-in: stale),
+  // FORBIDDEN_403 (the organization is disabled: not a sign-in problem), GATEWAY_401 (a gateway's own token: no
+  // api_error_origin, not Claude Code's sign-in).
+  type AuthFail = { kind: string; words: string; apiError?: string; status?: number; origin?: string };
+  const authFail: AuthFail | null =
+    staleRun || authState() === "out" || text.includes("STALE_LOGIN")
+      ? { kind: "authentication_failed", words: "Failed to authenticate: OAuth session expired and could not be refreshed" }
+      : text.includes("REFRESH_BUSY")
+        ? { kind: "server_error", words: "Failed to refresh OAuth token: another Claude Code process is refreshing it or exited mid-refresh. This is usually transient; retry in a minute, and if it persists close other Claude Code processes or sign in again" }
+        : text.includes("RESTART_TO_SIGN_IN")
+          ? { kind: "invalid_request", words: "Restart Claude Code to finish signing in.", apiError: "stored_login_refused" }
+          : text.includes("DISK_FULL")
+            ? { kind: "invalid_request", words: "Failed to refresh OAuth token: the disk that holds the Claude Code config directory (~/.claude by default), or your disk quota on it, is full. Delete files you no longer need on that disk and retry; signing in again won't help" }
+            : text.includes("FIRST_PARTY_401")
+              ? { kind: "authentication_failed", words: 'Failed to authenticate. API Error: 401 {"type":"error","error":{"type":"authentication_error","message":"OAuth token has expired."}}', status: 401, origin: "first_party" }
+              : text.includes("FORBIDDEN_403")
+                ? { kind: "authentication_failed", words: 'Failed to authenticate. API Error: 403 {"type":"error","error":{"type":"permission_error","message":"This organization has been disabled."}}', status: 403, origin: "first_party" }
+                : text.includes("GATEWAY_401")
+                  ? { kind: "authentication_failed", words: 'Failed to authenticate. API Error: 401 {"error":{"message":"Authentication Error, Invalid proxy server token passed","type":"auth_error","code":"401"}}', status: 401 }
+                  : null;
+  const failAuth = (f: AuthFail) => {
+    const api = { ...(f.status ? { api_error_status: f.status } : {}), ...(f.origin ? { api_error_origin: f.origin } : {}), ...(f.apiError ? { api_error: f.apiError } : {}) };
+    out({ type: "assistant", parent_tool_use_id: null, session_id: sessionId, message: { id: `msg_${Math.random()}`, model: "<synthetic>", role: "assistant", content: [{ type: "text", text: f.words }], usage: { input_tokens: 0, output_tokens: 0 } }, error: f.kind, ...api });
+    out({ type: "result", subtype: "success", is_error: true, num_turns: 1, result: f.words, session_id: sessionId, usage: { input_tokens: 0, output_tokens: 0 }, total_cost_usd: 0, ...api });
+  };
+  if (authFail) return failAuth(authFail);
+  if (staleMidwayRun) {
+    msgStart();
+    delta("Pushing the release.");
+    out({ type: "assistant", parent_tool_use_id: null, session_id: sessionId, message: { model, content: [{ type: "text", text: "Pushing the release." }, { type: "tool_use", id: "toolu_push", name: "Bash", input: { command: "git push origin main", description: "Push the release" } }] } });
+    out({ type: "user", parent_tool_use_id: null, session_id: sessionId, message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_push", content: "To github.com:example/app.git\n   1a2b3c4..5d6e7f8  main -> main", is_error: false }] } });
+    // The next API call needs a fresh token, and it can't be had.
+    return failAuth({ kind: "authentication_failed", words: "Failed to authenticate: OAuth session expired and could not be refreshed" });
+  }
+  if (queueMode && text.includes("LONG_STEP")) {
+    msgStart();
+    delta("Running the long check.");
+    out({ type: "assistant", parent_tool_use_id: null, session_id: sessionId, message: { model, content: [{ type: "text", text: "Running the long check." }, { type: "tool_use", id: "toolu_long", name: "Bash", input: { command: "sleep 600", description: "Wait for the long check" } }] } });
+    await new Promise<void>((res) => (stopLong = res));
+    stopLong = null;
+    if (process.env.FAKE_CLAUDE_STOP_MS) await Bun.sleep(Number(process.env.FAKE_CLAUDE_STOP_MS));
+    out({ type: "user", parent_tool_use_id: null, session_id: sessionId, message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_long", content: "Interrupted by user", is_error: true }] } });
+    out({ type: "result", subtype: "error_during_execution", is_error: true, session_id: sessionId, usage: { input_tokens: 40, output_tokens: 4 }, total_cost_usd: 0.01, errors: ["interrupted"] });
+    return;
+  }
+  const slow = queueMode ? /SLOW:(\d+)/.exec(text) : null;
+  if (slow) {
+    msgStart();
+    delta("Working on it.");
+    await Bun.sleep(Number(slow[1]));
+    out({ type: "assistant", parent_tool_use_id: null, session_id: sessionId, message: { model, content: [{ type: "text", text: "Working on it." }] } });
+    out({ type: "result", subtype: "success", is_error: false, result: "Working on it.", session_id: sessionId, usage: { input_tokens: 20, output_tokens: 4 }, total_cost_usd: 0.002 });
+    return;
+  }
+  if (queueMode && !text.includes("BACKGROUND_JOB")) {
+    msgStart();
+    delta(`Got it: ${text}`);
+    out({ type: "assistant", parent_tool_use_id: null, session_id: sessionId, message: { model, content: [{ type: "text", text: `Got it: ${text}` }] } });
+    out({ type: "result", subtype: "success", is_error: false, result: `Got it: ${text}`, session_id: sessionId, usage: { input_tokens: 20, output_tokens: 6 }, total_cost_usd: 0.002 });
+    return;
+  }
+  if (initOverride && initOverride !== model) {
+    await Promise.race([new Promise<void>((res) => (pendingInterrupt = res)), Bun.sleep(400)]);
+    pendingInterrupt = null;
+    out({ type: "result", subtype: "error_during_execution", is_error: true, session_id: sessionId, errors: ["interrupted"] });
+    return;
+  }
+  // Model checks: another model answers (MODEL:<id>), a helper agent answers on one (HELPER:<id>), the safety filter
+  // stops the reply (REFUSE), or the reply comes at normal speed (SPEED).
+  const other = /MODEL:(\S+)/.exec(text);
+  const helper = /HELPER:(\S+)/.exec(text);
+  if (other || helper || text.includes("REFUSE") || text.includes("SPEED") || text.includes("FALLBACK")) {
+    msgStart();
+    delta("Working on it.");
+    out({ type: "assistant", parent_tool_use_id: null, session_id: sessionId, message: { model, content: [{ type: "text", text: "Working on it." }], usage: { input_tokens: 5, output_tokens: 3, speed: "standard" } } });
+    if (helper) out({ type: "assistant", parent_tool_use_id: "toolu_task", session_id: sessionId, message: { model: helper[1], content: [{ type: "text", text: "Helper here." }] } });
+    if (other) out({ type: "assistant", parent_tool_use_id: null, session_id: sessionId, message: { model: other[1], content: [{ type: "text", text: "Now on another model." }] } });
+    if (text.includes("FALLBACK")) out({ type: "system", subtype: "model_refusal_fallback", fallback_model: "claude-opus-4-8" });
+    if (text.includes("REFUSE")) {
+      out({ type: "assistant", parent_tool_use_id: null, session_id: sessionId, message: { model, stop_reason: "refusal", content: [{ type: "text", text: "" }] }, error: "refusal" });
+      out({ type: "result", subtype: "error_during_execution", is_error: true, session_id: sessionId, usage: { input_tokens: 5, output_tokens: 3 }, errors: ["refusal"] });
+      return;
+    }
+    if (other || helper || text.includes("FALLBACK")) {
+      // The hub stops the reply by interrupting it; if it doesn't, the reply finishes.
+      const stopped = await Promise.race([new Promise<boolean>((res) => (pendingInterrupt = () => res(true))), Bun.sleep(400).then(() => false)]);
+      pendingInterrupt = null;
+      if (stopped) out({ type: "result", subtype: "error_during_execution", is_error: true, session_id: sessionId, usage: { input_tokens: 10, output_tokens: 2 }, errors: ["interrupted"] });
+      else out({ type: "result", subtype: "success", is_error: false, result: "Working on it.", session_id: sessionId, usage: { input_tokens: 5, output_tokens: 3 }, total_cost_usd: 0 });
+      return;
+    }
+    out({ type: "result", subtype: "success", is_error: false, result: "Working on it.", session_id: sessionId, usage: { input_tokens: 5, output_tokens: 3 }, total_cost_usd: 0 });
+    return;
+  }
+  // Scheduling a prompt for later (SCHEDULE:<cron with _ for spaces>, or SCHEDULE_EVERY: for a recurring job),
+  // cancelling one (UNSCHEDULE:<id>), or a /loop wakeup (WAKEUP:<seconds>, WAKEUP:stop): the tool call and its result,
+  // worded as Claude Code words them.
+  const sched = /\bSCHEDULE(_EVERY)?:(\S+)/.exec(text);
+  const unsched = /\bUNSCHEDULE:(\S+)/.exec(text);
+  const wake = /\bWAKEUP:(\w+)/.exec(text);
+  if (sched || unsched || wake) {
+    const [name, input, result]: [string, Record<string, unknown>, string] = sched
+      ? ["CronCreate", { cron: sched[2].replace(/_/g, " "), prompt: "Check the CI again", recurring: !!sched[1] }, `Scheduled ${sched[1] ? "recurring job" : "one-shot task"} job42 (soon). Session-only (not written to disk, dies when Claude exits). ${sched[1] ? "Auto-expires after 7 days. Use CronDelete to cancel sooner." : "It will fire once then auto-delete."}`]
+      : unsched
+        ? ["CronDelete", { id: unsched[1] }, `Cancelled job ${unsched[1]}.`]
+        : ["ScheduleWakeup", wake![1] === "stop" ? { stop: true } : { delaySeconds: Number(wake![1]), reason: "Check back", prompt: "/loop", noop: false }, "Wakeup scheduled."];
+    msgStart();
+    out({ type: "assistant", parent_tool_use_id: null, session_id: sessionId, message: { model, content: [{ type: "text", text: "On it." }, { type: "tool_use", id: "toolu_sched", name, input }] } });
+    out({ type: "user", parent_tool_use_id: null, session_id: sessionId, message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_sched", content: result, is_error: false }] } });
+    out({ type: "result", subtype: "success", is_error: false, result: "On it.", num_turns: 1, session_id: sessionId, usage: { input_tokens: 10, output_tokens: 3 }, total_cost_usd: 0 });
+    return;
+  }
+  if (text.includes("FAIL_AUTH")) {
+    out({ type: "assistant", parent_tool_use_id: null, session_id: sessionId, message: { model: "<synthetic>", content: [{ type: "text", text: "Not logged in · Please run /login" }] }, error: "authentication_failed" });
+    out({ type: "result", subtype: "success", is_error: true, result: "Not logged in · Please run /login", session_id: sessionId, usage: {}, total_cost_usd: 0 });
+    return;
+  }
+  // PLAN_LIMIT: a plan limit, as Claude Code reports one — the window is rejected, and the result carries the API's 429.
+  // PLAN_LIMIT_NO_RESET: the same with nothing anywhere saying when it comes back.
+  if (text.includes("PLAN_LIMIT") || limitRun) {
+    const noReset = text.includes("PLAN_LIMIT_NO_RESET");
+    out({ type: "rate_limit_event", session_id: sessionId, rate_limit_info: { status: "rejected", utilization: 1, ...(noReset ? {} : { resetsAt: Math.floor(Date.now() / 1000) + 1800 }), rateLimitType: "five_hour" } });
+    out({ type: "result", subtype: "success", is_error: true, api_error_status: 429, api_error: null, result: noReset ? "You've hit your session limit · progress saved" : "You've hit your session limit · resets 11pm · progress saved", session_id: sessionId, usage: { input_tokens: 10, output_tokens: 0 }, total_cost_usd: 0 });
+    return;
+  }
+  // OVERAGE_ERROR: a window at 100% that still lets requests through (paid extra usage, "allowed_warning"), and then an
+  // ordinary failure. Nothing was refused, so this must stay a plain failure and never be re-run by itself.
+  if (text.includes("OVERAGE_ERROR")) {
+    out({ type: "rate_limit_event", session_id: sessionId, rate_limit_info: { status: "allowed_warning", utilization: 1, resetsAt: Math.floor(Date.now() / 1000) + 1800, rateLimitType: "seven_day" } });
+    out({ type: "result", subtype: "success", is_error: true, api_error_status: 500, api_error: null, result: 'API Error: 500 {"type":"error","error":{"type":"api_error"}}', session_id: sessionId, usage: { input_tokens: 10, output_tokens: 0 }, total_cost_usd: 0 });
+    return;
+  }
+  // LIMIT_THEN_OUTPUT: a request of this turn was refused, a later one got through (the model writes), and the turn then
+  // fails for another reason. The limit isn't what ended it, so it must not wait either.
+  if (text.includes("LIMIT_THEN_OUTPUT")) {
+    out({ type: "rate_limit_event", session_id: sessionId, rate_limit_info: { status: "rejected", utilization: 1, resetsAt: Math.floor(Date.now() / 1000) + 1800, rateLimitType: "five_hour" } });
+    msgStart();
+    delta("Carrying on.");
+    out({ type: "result", subtype: "success", is_error: true, api_error_status: 500, api_error: null, result: "API Error: 500 upstream", session_id: sessionId, usage: { input_tokens: 10, output_tokens: 3 }, total_cost_usd: 0 });
+    return;
+  }
+  // CREDITS_REQUIRED: reads like a limit ("credits_required", a 429) but never resets: it must stay a plain failure.
+  if (text.includes("CREDITS_REQUIRED")) {
+    out({ type: "result", subtype: "success", is_error: true, api_error_status: 429, api_error: "model_requires_usage_credits", result: "credits_required: this model needs usage credits", session_id: sessionId, usage: { input_tokens: 5, output_tokens: 0 }, total_cost_usd: 0 });
+    return;
+  }
+  if (text.includes("BACKGROUND_JOB")) {
+    const folded = text.includes("FOLDED");
+    const late = text.includes("LATE");
+    const pause = Number(/SLOW:(\d+)/.exec(text)?.[1] ?? 0);
+    const started = "Starting the test suite in the background.";
+    const step = "Reading the plan while it runs.";
+    const later = folded ? CARRY_ON : "I'll carry on with the plan when it finishes.";
+    msgStart();
+    // JOB_AFTER:<ms>: the reply works this long before it starts the job, then ends at once.
+    const jobAfter = Number(/JOB_AFTER:(\d+)/.exec(text)?.[1] ?? 0);
+    if (jobAfter) await Bun.sleep(jobAfter);
+    delta(started);
+    out({ type: "assistant", parent_tool_use_id: null, session_id: sessionId, message: { model, content: [{ type: "text", text: started }, { type: "tool_use", id: "toolu_job", name: "Bash", input: { command: "bun test", description: "Run the test suite", run_in_background: true } }] } });
+    out({ type: "system", subtype: "task_started", task_id: "job1", tool_use_id: "toolu_job", description: "Run the test suite", task_type: "local_bash", is_backgrounded: true, session_id: sessionId });
+    out({ type: "user", parent_tool_use_id: null, session_id: sessionId, message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_job", content: `Command running in background with ID: job1. Output is being written to: ${JOB_OUTPUT}`, is_error: false }] } });
+    if (folded) {
+      msgStart();
+      delta(step);
+      out({ type: "assistant", parent_tool_use_id: null, session_id: sessionId, message: { model, content: [{ type: "text", text: step }, { type: "tool_use", id: "toolu_plan", name: "Bash", input: { command: "cat plan.md", description: "Read the plan" } }] } });
+      if (pause) await Bun.sleep(pause);
+      reportJob(); // done while that step runs: before its result, so the request after it carries the report
+      out({ type: "user", parent_tool_use_id: null, session_id: sessionId, message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_plan", content: "1. Fix the flaky test\n2. Retry the network call", is_error: false }] } });
+    } else if (pause) await Bun.sleep(pause);
+    if (late) reportJob(); // done as the last request is on its way: that request hasn't it
+    msgStart();
+    delta(later);
+    out({ type: "assistant", parent_tool_use_id: null, session_id: sessionId, message: { model, content: [{ type: "text", text: later }] } });
+    out({ type: "result", subtype: "success", is_error: false, result: [started, folded ? step : null, later].filter(Boolean).join("\n\n"), num_turns: folded ? 3 : 2, session_id: sessionId, usage: { input_tokens: 40, output_tokens: 20 }, total_cost_usd: 0.004 });
+    if (late) void answerJob();
+    else if (!folded) void finishJob();
+    return;
+  }
+  if (text.includes("BACKGROUND_HELPER")) {
+    // Starts a background helper and ends the reply; when the helper reports back, carries on by itself.
+    out({ type: "system", subtype: "task_started", task_id: "task1", description: "Check the build", subagent_type: "general-purpose", is_backgrounded: true, task_type: "local_agent", session_id: sessionId });
+    msgStart();
+    delta("Started a helper.");
+    out({ type: "assistant", parent_tool_use_id: null, session_id: sessionId, message: { content: [{ type: "text", text: "Started a helper." }] } });
+    out({ type: "result", subtype: "success", is_error: false, result: "Started a helper.", session_id: sessionId, usage: { input_tokens: 10, output_tokens: 5 }, total_cost_usd: 0 });
+    setTimeout(() => {
+      out({ type: "system", subtype: "task_progress", task_id: "task1", description: "Check the build", usage: { total_tokens: 1234, tool_uses: 3, duration_ms: 500 }, last_tool_name: "Bash", summary: "Running the tests", session_id: sessionId });
+      out({ type: "system", subtype: "task_notification", task_id: "task1", status: "completed", summary: "All tests pass", output_file: "", session_id: sessionId });
+      begin();
+      msgStart();
+      delta("The helper says all tests pass.");
+      out({ type: "assistant", parent_tool_use_id: null, session_id: sessionId, message: { content: [{ type: "text", text: "The helper says all tests pass." }] } });
+      out({ type: "result", subtype: "success", is_error: false, result: "The helper says all tests pass.", session_id: sessionId, usage: { input_tokens: 10, output_tokens: 5 }, total_cost_usd: 0 });
+      end();
+    }, 200);
+    return;
+  }
+  if (text.trim() === "/compact") {
+    out({ type: "system", subtype: "status", status: "compacting", session_id: sessionId });
+    out({ type: "system", subtype: "compact_boundary", session_id: sessionId, compact_metadata: { trigger: "manual", pre_tokens: 21511, post_tokens: 1941 } });
+    out({ type: "user", session_id: sessionId, message: { role: "user", content: "<local-command-stdout>Compacted </local-command-stdout>" } });
+    out({ type: "result", subtype: "success", is_error: false, result: "", session_id: sessionId, usage: { input_tokens: 0, output_tokens: 0 }, total_cost_usd: 0 });
+    return;
+  }
+  if (text.includes("AFTER_RESTART")) {
+    // A background task cut off by a restart reports in first; Claude Code closes it with a placeholder turn.
+    out({ type: "assistant", parent_tool_use_id: null, session_id: sessionId, message: { model: "<synthetic>", content: [{ type: "text", text: "No response requested." }], usage: { input_tokens: 0, output_tokens: 0 } } });
+    out({ type: "result", subtype: "success", is_error: false, result: "No response requested.", session_id: sessionId, usage: { input_tokens: 0, output_tokens: 0 }, total_cost_usd: 0 });
+  }
+  msgStart();
+  delta("Looking at ");
+  delta("the files.");
+  out({ type: "assistant", parent_tool_use_id: null, session_id: sessionId, message: { content: [{ type: "text", text: "Looking at the files." }, { type: "tool_use", id: "toolu_1", name: "Bash", input: { command: "ls -la", description: "List files" } }] } });
+  if (text.includes("INTERRUPT_ME")) {
+    await new Promise<void>((res) => (pendingInterrupt = res));
+    out({ type: "result", subtype: "error_during_execution", is_error: true, session_id: sessionId, usage: { input_tokens: 10, output_tokens: 2 }, errors: ["interrupted"] });
+    return;
+  }
+  out({ type: "user", parent_tool_use_id: null, session_id: sessionId, message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_1", content: "README.md\nsrc", is_error: false }] } });
+  msgStart();
+  delta("Done. ");
+  delta("@codex please review.");
+  out({ type: "assistant", parent_tool_use_id: null, session_id: sessionId, message: { content: [{ type: "text", text: "Done. @codex please review." }] } });
+  out({ type: "rate_limit_event", session_id: sessionId, rate_limit_info: { status: "allowed_warning", utilization: 0.42, resetsAt: Math.floor(Date.now() / 1000) + 3600, rateLimitType: "five_hour" } });
+  out({ type: "result", subtype: "success", is_error: false, result: "Looking at the files.\n\nDone. @codex please review.", session_id: sessionId, usage: { input_tokens: 1200, cache_read_input_tokens: 300, output_tokens: 80 }, total_cost_usd: 0.0123 });
+}
+
+/**
+ * Queue mode: one turn at a time; what was queued meanwhile runs next, in a turn of its own (with FAKE_CLAUDE_WAKE_MS,
+ * taken up into the session at once and answered once the API's first words come back). FAKE_CLAUDE_IDLE_BETWEEN=1: the
+ * message was still on its way down Claude Code's input as the reply ended, so it said "idle" first, then "running" as it
+ * took the message up.
+ */
+async function run(text: string, takenUp = false) {
+  if (!busy) begin();
+  busy = true;
+  await turn(text, takenUp);
+  const next = queue.shift();
+  if (next && process.env.FAKE_CLAUDE_IDLE_BETWEEN === "1") {
+    end();
+    begin();
+  }
+  if (next && process.env.FAKE_CLAUDE_WAKE_MS) {
+    takeUp(next.text);
+    await Bun.sleep(wakeMs);
+    return void run(next.text, true);
+  }
+  if (next) return void run(next.text);
+  busy = false;
+  end();
+}
+
+// The model list and context windows Claude Code reports (initialize, get_context_usage).
+const FAKE_MODELS = [
+  { value: "default", resolvedModel: "claude-opus-5-5", displayName: "Default (recommended)", description: "Opus 5.5 · Best for everyday, complex tasks" },
+  { value: "opus", resolvedModel: "claude-opus-5-5", displayName: "Opus 5.5", description: "For complex work" },
+  { value: "claude-sonnet-4-6", resolvedModel: "claude-sonnet-4-6", displayName: "Sonnet 4.6", description: "Efficient for routine tasks" },
+  { value: "haiku", resolvedModel: "claude-haiku-4-5-20251001", displayName: "Haiku 4.5", description: "Fastest for quick answers" },
+  { value: "retired", resolvedModel: "claude-retired-1", displayName: "Retired", description: "Not on this plan" },
+];
+// Rows its picker shows but this account can't pick (Claude Code's `unavailable_models`).
+const FAKE_UNAVAILABLE = [{ value: "claude-fable-5-1", resolvedModel: "claude-fable-5-1", displayName: "Fable (disabled)", description: "Fable 5.1 · requires usage credits", disabled: true }];
+// Windows by model, Claude Code's own (claude-sonnet-4-6: 200k, though the API's model can take more); the last two are
+// models its picker doesn't list (More models of an API key).
+const FAKE_WINDOWS: Record<string, number> = { "claude-opus-5-5": 1_000_000, "claude-sonnet-4-6": 200_000, "claude-haiku-4-5-20251001": 200_000, "claude-opus-4-8": 1_000_000, "claude-sonnet-4-5-20250929": 200_000 };
+// Like Claude Code, a check started with --model runs that model: an alias or "default" as its picker resolves it, a full
+// name as given. FAKE_CLAUDE_STAND_IN="claude-opus-4-8=claude-opus-5-5": started on the first, it runs the second instead,
+// without asking Anthropic (the user's or an organization's settings put another model in its place).
+const standIn: Record<string, string> = Object.fromEntries((process.env.FAKE_CLAUDE_STAND_IN ?? "").split(",").filter(Boolean).map((p) => p.split("=") as [string, string]));
+const launchedOn = modelIdx > 0 ? process.argv[modelIdx + 1] : "default";
+let sizedModel = standIn[launchedOn] ?? FAKE_MODELS.find((x) => x.value === launchedOn)?.resolvedModel ?? launchedOn;
+// Where its requests go, as Claude Code picks it: --settings' env (JSON, or a file of it), else the user's own settings'
+// env (FAKE_CLAUDE_USER_BASE_URL: it wins over the environment), else ANTHROPIC_BASE_URL, else Anthropic.
+const settingsIdx = process.argv.indexOf("--settings");
+const flagSettings = (() => {
+  if (settingsIdx < 0) return {};
+  const v = process.argv[settingsIdx + 1] ?? "";
+  try {
+    return JSON.parse(v.trim().startsWith("{") ? v : readFileSync(v, "utf8"));
+  } catch {
+    return {};
+  }
+})();
+const baseUrl: string | undefined = flagSettings.env?.ANTHROPIC_BASE_URL || process.env.FAKE_CLAUDE_USER_BASE_URL || process.env.ANTHROPIC_BASE_URL || undefined;
+// FAKE_CLAUDE_CACHED_DENY="claude-fable-5-1": models its cached model access (`modelAccessCache` in ~/.claude.json, the
+// plan's, which an API-key session shares) marks as not entitled. Like Claude Code, started with --model on one, it first
+// checks that model with a real one-token request. To a server on this machine it's really sent: an error there means
+// the check failed, and it runs its default model instead. Any other address is Anthropic's: FAKE_CLAUDE_PAID_OUT notes
+// the request (never sent), and the check counts as passed.
+const cachedDeny = new Set((process.env.FAKE_CLAUDE_CACHED_DENY ?? "").split(",").filter(Boolean));
+if (modelIdx > 0 && cachedDeny.has(launchedOn) && !standIn[launchedOn]) {
+  const check = { model: launchedOn, max_tokens: 1, messages: [{ role: "user", content: [{ type: "text", text: "Hi" }] }] };
+  if (baseUrl && /^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?(\/|$)/.test(baseUrl)) {
+    const passed = await fetch(`${baseUrl.replace(/\/+$/, "")}/v1/messages?beta=true`, { method: "POST", headers: { "content-type": "application/json", "x-api-key": process.env.ANTHROPIC_API_KEY ?? "" }, body: JSON.stringify(check) }).then(
+      (r) => r.ok,
+      () => false,
+    );
+    if (!passed) sizedModel = FAKE_MODELS[0].resolvedModel;
+  } else if (process.env.FAKE_CLAUDE_PAID_OUT) appendFileSync(process.env.FAKE_CLAUDE_PAID_OUT, JSON.stringify({ ...check, to: baseUrl ?? "https://api.anthropic.com" }) + "\n");
+}
+
+let buf = "";
+for await (const chunk of Bun.stdin.stream()) {
+  buf += new TextDecoder().decode(chunk);
+  let nl: number;
+  while ((nl = buf.indexOf("\n")) >= 0) {
+    const line = buf.slice(0, nl);
+    buf = buf.slice(nl + 1);
+    if (!line.trim()) continue;
+    const msg = JSON.parse(line);
+    if (msg.type === "control_request" && msg.request?.subtype === "interrupt") {
+      if (process.env.FAKE_CLAUDE_INTERRUPT_LOG) appendFileSync(process.env.FAKE_CLAUDE_INTERRUPT_LOG, JSON.stringify(msg) + "\n");
+      if (queueMode && msg.request.cancel_queued === true && capabilities.includes("interrupt_cancel_queued_v1")) {
+        const cancelled = queue.splice(0).map((q) => q.uuid);
+        const receipt = () => out({ type: "control_response", response: { subtype: "success", request_id: msg.request_id, response: { still_queued: [], cancelled } } });
+        // FAKE_CLAUDE_RECEIPT_MS: its receipt comes this long after the turn has reported its end.
+        if (process.env.FAKE_CLAUDE_RECEIPT_MS) setTimeout(receipt, Number(process.env.FAKE_CLAUDE_RECEIPT_MS));
+        else receipt();
+        stopLong?.();
+        continue;
+      }
+      if (queueMode) {
+        const sendNow = msg.request.send_now === true && msg.request.cancel_queued !== true && capabilities.includes("interrupt_send_now_v1");
+        const named = msg.request.message_uuid;
+        const waiting = queue.some((q) => !named || q.uuid === named);
+        const still_queued = queue.map((q) => q.uuid);
+        if (sendNow && (!busy || !waiting)) out({ type: "control_response", response: { subtype: "success", request_id: msg.request_id, response: { still_queued, send_now: "nothing_waiting" } } });
+        else {
+          out({ type: "control_response", response: { subtype: "success", request_id: msg.request_id, response: { still_queued, ...(sendNow ? { send_now: "stopped" } : {}) } } });
+          stopLong?.();
+        }
+        continue;
+      }
+      out({ type: "control_response", response: { subtype: "success", request_id: msg.request_id } });
+      pendingInterrupt?.();
+      pendingInterrupt = null;
+    } else if (msg.type === "control_request" && ["initialize", "set_model", "get_context_usage"].includes(msg.request?.subtype)) {
+      // What Crosstalk asks to list the models and their context windows: answered locally, no prompt involved.
+      const sub = msg.request.subtype;
+      const ok = (response: unknown = {}) => out({ type: "control_response", response: { subtype: "success", request_id: msg.request_id, response } });
+      if (sub === "initialize") ok({ models: FAKE_MODELS, unavailable_models: FAKE_UNAVAILABLE });
+      else if (sub === "set_model") {
+        // Like Claude Code: switched to a full model name (not an alias, "default" or the default model's own name), it
+        // first checks the name with a real one-token request to Anthropic. FAKE_CLAUDE_PAID_OUT notes each one.
+        const name = String(msg.request.model ?? "default");
+        if (process.env.FAKE_CLAUDE_PAID_OUT && /^claude-/.test(name) && name !== FAKE_MODELS[0].resolvedModel) appendFileSync(process.env.FAKE_CLAUDE_PAID_OUT, JSON.stringify({ model: name, max_tokens: 1, messages: [{ role: "user", content: "Hi" }] }) + "\n");
+        const m = FAKE_MODELS.find((x) => x.value === msg.request.model);
+        if (!m || !FAKE_WINDOWS[m.resolvedModel]) out({ type: "control_response", response: { subtype: "error", request_id: msg.request_id, error: `Model ${msg.request.model} isn't available` } });
+        else {
+          sizedModel = m.resolvedModel;
+          ok();
+        }
+      } else {
+        // A model it has no window for (one not on this plan): no size to give.
+        const w = FAKE_WINDOWS[sizedModel];
+        ok({ model: sizedModel, ...(w ? { maxTokens: w, rawMaxTokens: w, autoCompactThreshold: w - 33_000 } : {}), isAutoCompactEnabled: true, totalTokens: 15_000, percentage: 1 });
+      }
+    } else if (msg.type === "user") {
+      const text = msg.message.content.map((c: { text?: string }) => c.text ?? "").join("");
+      if (process.env.FAKE_CLAUDE_INPUT_OUT) appendFileSync(process.env.FAKE_CLAUDE_INPUT_OUT, JSON.stringify(text) + "\n");
+      if (queueMode && busy) {
+        if (process.env.FAKE_CLAUDE_TAKE_IN !== "1") queue.push({ uuid: msg.uuid, text });
+        continue;
+      }
+      if (queueMode) void run(text);
+      else {
+        begin();
+        void turn(text).finally(end);
+      }
+    }
+  }
+}

@@ -1,0 +1,144 @@
+/* 0.5 Templates: Settings → Templates (views/TemplatesSection.tsx) and New chat → From a template (views/TemplatePick.tsx). */
+
+.tpl-intro {
+  margin: -2px 0 10px;
+}
+.tpl-note p {
+  margin: 0 0 8px;
+}
+.tpl-empty {
+  margin: 10px 0 0;
+}
+
+/* The list: a row per template, its ⋯ opening a tray of options under it (as the chat list's rows do). */
+.tpl-list {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+}
+.tpl-item {
+  border-bottom: 0.5px solid var(--sep);
+}
+.tpl-item:last-child {
+  border-bottom: 0;
+}
+.tpl-item.open {
+  background: var(--surface);
+}
+.tpl-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 10px 10px 14px;
+}
+.tpl-text {
+  flex: 1;
+  min-width: 0;
+}
+.tpl-name {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.tpl-line,
+.tpl-preview {
+  font-size: 12.5px;
+  color: var(--text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tpl-preview {
+  color: var(--text-3);
+}
+.tpl-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+}
+.tpl-tray {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px 10px 14px;
+}
+.tpl-place {
+  font-size: 12px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+.tpl-tray-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 0 10px;
+  border: 0.5px solid var(--sep-strong);
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+}
+@media (hover: hover) {
+  .tpl-tray-btn:hover {
+    background: var(--surface-3);
+  }
+}
+.tpl-tray-btn.danger {
+  color: var(--red);
+}
+.tpl-tray-btn[aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: default;
+}
+.tpl-starters {
+  display: block;
+  margin: 12px 0 0;
+  text-align: left;
+}
+.tpl-starters:disabled {
+  opacity: 0.5;
+}
+.tpl-message {
+  max-height: 40vh;
+}
+.tpl-delete {
+  margin-top: 4px;
+}
+
+/* New chat → From a template: the blanks to fill in, then the first message itself. */
+.tpl-blanks {
+  min-width: 0;
+  margin: 0 0 14px;
+  padding: 10px 12px 0;
+  border: 0.5px solid var(--sep);
+  border-radius: 10px;
+}
+.tpl-blanks legend {
+  padding: 0 4px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+.tpl-blanks .field {
+  margin-bottom: 10px;
+}
+.tpl-blanks-left {
+  margin: -4px 0 10px;
+}
+
+/* Finger-sized, as the app's own buttons are on phones (styles.css). */
+@media (max-width: 760px), (pointer: coarse) {
+  .tpl-tray-btn {
+    min-height: 44px;
+    padding: 0 12px;
+    font-size: 14px;
+  }
+  .tpl-starters {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+  }
+}

@@ -1,0 +1,217 @@
+/* Settings → Set up with an AI agent (views/AgentSetupSection.tsx). Every line may wrap: a long command or name never
+   widens the page, down to 320 px. */
+
+.agent-setup {
+  min-width: 0;
+}
+.agent-setup p {
+  margin: 0;
+}
+.as-summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  font-size: 15px;
+}
+.as-ok {
+  flex: none;
+  color: var(--green);
+}
+.as-all-done {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 12px;
+}
+.as-all-done .link-btn {
+  margin: 0;
+  min-height: 44px;
+}
+.as-intro {
+  margin: 6px 0 12px !important;
+  line-height: 1.45;
+}
+.as-error {
+  color: var(--red);
+  overflow-wrap: anywhere;
+}
+
+/* How "Add for me" ended, above the terminal in its dialog (AddResult): the line, then the one thing left to do. */
+.as-result {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  margin: 0 0 10px;
+}
+.as-result p {
+  margin: 0;
+}
+.as-result-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+}
+
+/* The two steps: add the tools, then tell the agent. */
+.as-steps {
+  margin: 0 0 6px;
+  padding-left: 20px;
+}
+.as-steps > li {
+  margin-bottom: 14px;
+  min-width: 0;
+}
+.as-step-title {
+  font-weight: 600;
+  font-size: 14px;
+  margin-bottom: 8px;
+}
+.as-connect + .as-connect {
+  margin-top: 12px;
+}
+.as-buttons {
+  gap: 8px;
+}
+.as-agent {
+  font-size: 13px;
+  color: var(--text-2);
+  margin-bottom: 4px;
+}
+.as-command {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 0;
+}
+.as-text {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 0.5px solid var(--sep);
+  background: var(--code-bg);
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-all;
+  /* One tap selects it all, for copying by hand where Copy can't. */
+  user-select: all;
+  -webkit-user-select: all;
+}
+.as-text.prose {
+  font-family: var(--font);
+  font-size: 14px;
+  word-break: normal;
+}
+
+/* What's left: a row per item, opening to its fix. */
+.as-group-title {
+  margin: 10px 0 4px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+.as-list {
+  border-top: 0.5px solid var(--sep);
+}
+.as-row {
+  border-bottom: 0.5px solid var(--sep);
+}
+.as-row-btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 44px;
+  padding: 8px 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.as-state {
+  flex: none;
+  padding: 2px 8px;
+  border-radius: 99px;
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  background: var(--surface-3);
+  color: var(--text-2);
+}
+.as-state.user {
+  background: var(--orange-2);
+  color: var(--orange);
+}
+.as-state.missing {
+  background: var(--accent-2);
+  color: var(--accent);
+}
+.as-state.done {
+  background: var(--green-2);
+  color: var(--green);
+}
+/* The person's choice: no colour that reads as a warning. */
+.as-state.optional {
+  background: var(--surface-3);
+  color: var(--text);
+}
+.as-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 14.5px;
+  overflow-wrap: anywhere;
+}
+.as-chev {
+  flex: none;
+  color: var(--text-3);
+  transition: transform 0.15s;
+}
+.as-row.open .as-chev {
+  transform: rotate(180deg);
+}
+.as-fix {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 0 12px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.as-fix-text {
+  line-height: 1.45;
+}
+.as-actions {
+  gap: 8px;
+}
+.as-fold-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-2);
+  font: inherit;
+  font-size: 13.5px;
+  cursor: pointer;
+}
+.as-footer {
+  margin-top: 10px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .as-chev {
+    transition: none;
+  }
+}

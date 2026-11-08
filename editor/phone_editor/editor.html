@@ -1,0 +1,2064 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Image Editor</title>
+<style>
+  :root { color-scheme: dark; --bg:#111214; --panel:#1b1d21; --line:#2c2f36; --text:#e8e9ec; --dim:#9a9ea8; --accent:#4f8cff; --mask:#ff2d55; --bad:#ff6b6b; --tip:#f2c46d; }
+  * { box-sizing: border-box; }
+  [hidden] { display:none !important; }
+  body { margin:0; background:var(--bg); color:var(--text); font:16px/1.4 -apple-system, system-ui, sans-serif; padding:env(safe-area-inset-top) 12px calc(16px + env(safe-area-inset-bottom)); overflow-x:hidden; }
+  header { display:flex; align-items:baseline; justify-content:space-between; gap:8px; padding:12px 0 4px; }
+  h1 { font-size:18px; margin:0; }
+  #server { font-size:12px; color:var(--dim); text-align:right; }
+  button, select, .filebtn { font:inherit; color:var(--text); background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:10px 12px; touch-action:manipulation; max-width:100%; }
+  button:disabled { opacity:.45; }
+  button.on { border-color:var(--accent); background:#1d2b45; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600; width:100%; padding:14px; }
+  button.wide { width:100%; }
+  button.stop { border-color:#6b3434; }
+  button:focus-visible, select:focus-visible, textarea:focus-visible, .filebtn:focus-within, input:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  .row { display:flex; gap:8px; align-items:center; margin:8px 0; flex-wrap:wrap; }
+  .row > .grow { flex:1; min-width:0; }
+  .filebtn { display:block; text-align:center; cursor:pointer; }
+  #file { position:absolute; width:1px; height:1px; opacity:0; }
+  #wrap { position:relative; overflow:auto; max-height:56vh; background:#0a0a0b; border:1px solid var(--line); border-radius:10px; -webkit-overflow-scrolling:touch; }
+  #stage { position:relative; margin:0 auto; }
+  #stage canvas { position:absolute; inset:0; width:100%; height:100%; }
+  #mask { opacity:.45; touch-action:none; }
+  #cmp { display:none; }
+  #empty { padding:40px 16px; text-align:center; color:var(--dim); }
+  label.small { font-size:13px; color:var(--dim); display:flex; align-items:center; gap:6px; }
+  input[type=range] { width:100px; max-width:45vw; }
+  textarea { width:100%; min-height:72px; font:inherit; color:var(--text); background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:10px; }
+  #bar { height:6px; background:var(--panel); border-radius:3px; overflow:hidden; margin-top:8px; }
+  #bar > div { height:100%; width:0; background:var(--accent); transition:width .2s; }
+  #bar.waiting > div { width:100%; background:linear-gradient(90deg,var(--panel),var(--accent),var(--panel)); background-size:200% 100%; animation:slide 1.4s linear infinite; }
+  @keyframes slide { from { background-position:100% 0 } to { background-position:-100% 0 } }
+  @media (prefers-reduced-motion: reduce) { #bar.waiting > div { animation:none } }
+  #status { font-size:14px; color:var(--dim); min-height:20px; margin-top:6px; white-space:pre-wrap; }
+  #problem { font-size:14px; color:var(--bad); margin-top:6px; white-space:pre-wrap; }
+  #problem:empty { display:none; }
+  #shared { font-size:13px; color:var(--dim); border:1px solid var(--line); border-radius:10px; padding:8px 10px; margin:4px 0 10px; }
+  #shared b { color:var(--text); font-weight:600; }
+  .hint { font-size:13px; color:var(--dim); margin:4px 0 0; }
+  /* Two rows of one line each, always there while a photo is: painting never moves the buttons below. */
+  #detail { margin-top:6px; }
+  #detail span { display:block; height:1.4em; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  #detail .tip { color:var(--tip); }
+  #words { font-size:13px; color:var(--dim); margin:6px 0 0; display:none; }
+  #words.show { display:block; }
+  #words q { color:var(--text); }
+  #saveview { position:fixed; inset:0; background:rgba(0,0,0,.92); display:none; flex-direction:column; align-items:center; justify-content:center; padding:16px; gap:12px; z-index:10; text-align:center; }
+  #saveview img { max-width:100%; max-height:70vh; -webkit-touch-callout:default; }
+  #saveview a { color:var(--accent); }
+  dialog { color:var(--text); background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:16px; max-width:min(92vw,360px); }
+  dialog::backdrop { background:rgba(0,0,0,.7); }
+  dialog h2 { font-size:17px; margin:0 0 8px; }
+  dialog p { font-size:14px; color:var(--dim); margin:0 0 14px; }
+</style>
+</head>
+<body>
+<header><h1>Image Editor</h1><span id="server">connecting…</span></header>
+
+<p id="shared">One shared edit. Opening on another device shows the same thing.</p>
+
+<label class="filebtn" for="file">📷 Choose photo</label>
+<input id="file" type="file" accept="image/*">
+
+<div class="row">
+  <button id="tPaint" class="on" aria-pressed="true">🖌 Paint</button>
+  <button id="tErase" aria-pressed="false">⌫ Erase</button>
+  <button id="tMove" aria-pressed="false">✋ Move</button>
+  <button id="clearpaint">Clear paint</button>
+</div>
+<div class="row">
+  <label class="small">Brush <input id="brush" type="range" min="4" max="120" value="36"></label>
+  <label class="small">Zoom <input id="zoom" type="range" min="1" max="6" step="0.25" value="1"></label>
+</div>
+
+<div id="wrap">
+  <div id="empty">Choose a photo to start.</div>
+  <div id="stage"><canvas id="base"></canvas><canvas id="cmp"></canvas><canvas id="mask"></canvas></div>
+</div>
+<p id="detail" class="hint" hidden><span id="detailText"></span><span id="detailTip"></span></p>
+<p class="hint">Paint over the part you want changed; the rest of the photo stays as it is. No paint edits the whole photo. Your paint stays on this device until you tap Edit photo. The photo, the words and the result are shared.</p>
+
+<label class="small" for="prompt" style="margin-top:10px">Describe the edit</label>
+<textarea id="prompt" placeholder="e.g. “replace the jacket with a black leather jacket”" maxlength="2000"></textarea>
+<p id="words">Typed on <b id="wordsWho">another device</b>: <q id="wordsText"></q> <button id="useWords">Use their words</button></p>
+<div class="row">
+  <label class="small grow">Detail
+    <select id="res">
+      <option value="768">Fast (768)</option>
+      <option value="1024" selected>Standard (1024)</option>
+      <option value="1328">High (1328, slower)</option>
+    </select>
+  </label>
+</div>
+<button id="go" class="primary">Edit photo</button>
+<div id="bar"><div></div></div>
+<div id="status" role="status" aria-live="polite"></div>
+<div id="problem" role="alert" hidden></div>
+<div class="row" id="fixrow" hidden><button id="fix">Try again</button></div>
+<div class="row" id="stoprow" hidden><button id="stop" class="wide stop">■ Stop this edit</button></div>
+
+<div class="row">
+  <button id="retry" disabled>↻ Edit again</button>
+  <button id="undo" disabled>↶ Undo</button>
+  <button id="compare" disabled>Hold: before</button>
+  <button id="save" disabled>⬇ Save</button>
+  <button id="seeresult" hidden>See what the model made</button>
+</div>
+<button id="newedit" class="wide">Clear &amp; start new edit</button>
+
+<div id="saveview">
+  <img id="saveimg" alt="Edited image">
+  <div>Press and hold the image → <b>Save to Photos</b>, or <a id="savelink" download="edited.png">download PNG</a>.</div>
+  <button id="closesave">Close</button>
+</div>
+
+<dialog id="ask">
+  <h2 id="askTitle">Are you sure?</h2>
+  <p id="askBody"></p>
+  <div class="row" style="justify-content:flex-end">
+    <button id="askNo">Keep it</button>
+    <button id="askYes" class="primary" style="width:auto">Yes</button>
+  </div>
+</dialog>
+
+<script>
+/*
+ * One shared edit, held on the ComfyUI server.
+ *
+ * Why it is built this way:
+ *  - The session lives in a file on the server, written and read through ComfyUI's own
+ *    GET/POST/DELETE /userdata/{file} (app/user_manager.py). No new route, so nothing here
+ *    needs ComfyUI to be restarted: copying this page over is picked up on the next page load.
+ *  - Only ids, words, filenames, sizes and times go in that file (a few KB at most). Pictures stay
+ *    where ComfyUI already keeps them: uploads in input/crosstalk-editor (POST /upload/image), results
+ *    in output/phone_edit, both read back with GET /view.
+ *  - Two devices cannot share one websocket id: server.py does `self.sockets[sid] = ws` and drops
+ *    the old socket with the same id, so the second device would evict the first. Each page therefore
+ *    subscribes under its own id, and every page follows a running edit by polling /history/{prompt_id}
+ *    and /queue. Step progress only exists for the page that submitted (execution events go to the
+ *    submitting client's id), so the others show the plainer "editing" state.
+ *  - A finished edit is put into the photo from what the server holds, never from this page's canvas:
+ *    the job records the photo it started on (job.base), the area it cropped (job.crop) and the painted
+ *    area it uploaded (job.mask). Whoever finishes it -- the page that started it, the same device after a
+ *    reload, another device, or the first page opened after nobody was watching -- loads those three and
+ *    the model's picture and blends them. Exactly one page does it: it first takes that job's finish claim.
+ *    No painted area on the server means no blend: the result is offered as the model made it instead.
+ *  - Claims (one edit at a time, one finisher per job) are taken atomically: the claim is written under a
+ *    name of this page's own, then moved onto the claim's name with ?overwrite=false. ComfyUI's move
+ *    handler checks and moves with nothing awaited in between, so exactly one page can win.
+ *  - Writes to the session are rebased on what the server says right then, and each write leaves its
+ *    token in the session's `lineage`. A write that started before this one and landed after it would
+ *    drop that token: the page sees that on its next read and puts back what it had changed, field by
+ *    field, wherever nobody else changed that field since. So a photo chosen on one device survives the
+ *    other device's typing landing in the same moment.
+ *  - The pictures the page uploads go under a few names per device that it reuses (RING), never one the
+ *    session, its undo history, a running job or the last result still points at. So input/ holds at
+ *    most RING.base + RING.crop + RING.mask pictures per device, however many edits are made.
+ */
+const $ = id => document.getElementById(id);
+const base = $('base'), mask = $('mask'), cmp = $('cmp'), wrap = $('wrap'), stage = $('stage');
+const bctx = base.getContext('2d'), mctx = mask.getContext('2d');
+
+/** The working photo travels to every device and back, so it is capped smaller than a local-only one. */
+const SHARED_MAX_SIDE = 2048;
+const MAX_UNDO = 5;
+const MAX_PROMPT = 2000;
+const SESSION_FILE = 'crosstalk-editor-session.json';
+/** "One edit at a time": held from Edit until that edit is over. */
+const CLAIM_FILE = 'crosstalk-editor-claim.json';
+/** "One page puts this result in": one file per job, and per try when the page that took it went away. */
+const finishFile = (jobId, attempt) => `crosstalk-editor-finish.${jobId}.${attempt}.json`;
+/** The page's own pictures: input/<UPLOADS>/<device>-<kind>-<n>.png, n going round RING[kind]. */
+const UPLOADS = 'crosstalk-editor';
+const RING = { base: 8, crop: 3, mask: 4 };
+/** Results: output/<OUTPUTS>/<job id>_00001_.png, so a finished edit is found even after ComfyUI forgot it. */
+const OUTPUTS = 'phone_edit';
+/** A claim nobody turned into a recorded job is taken over after this long. */
+const CLAIM_STALE_MS = 90_000;
+/** A finish claim held this long (as this page saw it, or by its own clock) belongs to a page that went away. */
+const FINISH_STALE_MS = 45_000, FINISH_OLD_MS = 180_000;
+/** A page that didn't start the edit gives the one that did this long to put the result in itself. */
+const FINISH_DEFER_MS = 1500;
+/** How often the session is read: while an edit is new, once it has run a while, and otherwise. */
+const POLL_BUSY_MS = 1200, POLL_SLOW_MS = 4000, POLL_IDLE_MS = 2500;
+/** A job missing from both /queue and /history this many polls running is gone. */
+const GONE_AFTER = 3;
+/**
+ * A job is recorded in the session before it is sent to ComfyUI (`queued: false` until it has been). Until then it is
+ * in neither /queue nor /history, so nobody calls it gone before it is this old by its starter's clock: a phone on a
+ * slow link, or locked between the two steps, is still on its way.
+ */
+const QUEUE_GRACE_MS = 60_000;
+/**
+ * ComfyUI checks its interrupt flag as it queues each layer (comfy/ops.py run_every_op) and between nodes; on a GPU the
+ * layers of a step are queued well before they run, so in practice a stop lands once the step it is on is done (a minute
+ * or two on a typical machine, far longer when it swaps), or once a model it is loading is in.
+ */
+const STOPPING_WORDS = "ComfyUI stops after the step it's on, which can take a few minutes.";
+/** How long a write is checked against writes that started before it and landed after it. */
+const RECHECK_MS = 15_000;
+const LINEAGE = 32;
+/** What a session holds, besides who wrote it last. */
+const FIELDS = ['image', 'prompt', 'detail', 'job', 'result', 'undo', 'done', 'stopped'];
+const JSON_HEADERS = { 'Content-Type': 'application/json' };
+
+const MODELS = {
+  unet: 'qwen-image-2.1-turbo-Q4_K_M.gguf',
+  clip: 'qwen3vl_8b-Q4_K_M.gguf',
+  vae: 'qwen_image_2.1_vae_bf16.safetensors',
+};
+const STAGES = { '1': 'Loading image model…', '2': 'Loading text encoder…', '5': 'Reading your prompt…', '6': 'Editing…', '7': 'Decoding…', '8': 'Saving…' };
+
+// ---- who this is ----
+function uuid4() {
+  // crypto.randomUUID needs a secure context; this page is also served over plain http on Tailscale.
+  const b = crypto.getRandomValues(new Uint8Array(16));
+  b[6] = (b[6] & 0x0f) | 0x40;
+  b[8] = (b[8] & 0x3f) | 0x80;
+  const h = [...b].map(x => x.toString(16).padStart(2, '0')).join('');
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+}
+const local = {
+  get(key) { try { return localStorage.getItem(key); } catch { return null; } },
+  set(key, value) { try { localStorage.setItem(key, value); } catch { /* private mode: kept for this page only */ } },
+};
+const kept = (key, make) => {
+  const was = local.get(key);
+  if (was) return was;
+  const now = make();
+  local.set(key, now);
+  return now;
+};
+function guessName() {
+  const ua = navigator.userAgent;
+  if (/iPad|Tablet/i.test(ua)) return 'Tablet';
+  if (/iPhone|Android.*Mobile|Mobile/i.test(ua)) return 'Phone';
+  return 'Computer';
+}
+/** This device: steady across reloads, so "you" and "another device" stay right. */
+const deviceId = kept('crosstalk.editor.device', () => 'd_' + uuid4().slice(0, 8));
+const deviceName = kept('crosstalk.editor.name', guessName);
+/** This page: two tabs on one device must not evict each other's websocket, and a reload is a new page. */
+const clientId = `${deviceId}.${uuid4().slice(0, 8)}`;
+
+// ---- state ----
+let tool = 'paint', zoom = 1, painting = false, lastPoint = null;
+/** This page is in the middle of something it started (upload, queue, finish). */
+let working = false;
+/** The jobs this page is putting in right now (finish): never two of one job at once. */
+const puttingIn = new Set();
+/** The session as last read from the server (jobs this page saw end taken out), and its revision. */
+let session = null, serverRev = 0;
+/** Writes are not interleaved with reads, and a read during a write is dropped. */
+let writing = 0;
+/** Which picture is on the base canvas (refKey), so it is not reloaded for nothing. */
+let shownImage = null, imageSeq = 0;
+/** The job the paint on this page belongs to (null: paint of this page's own, not sent yet), and the last job whose painted area was loaded here. */
+let paintedFor = null, maskTried = null;
+/** The job being followed: { id, since, missing, doneAt, attempt, heldSince, finishing }. */
+let watch = null;
+/** Words that came from another device while this one was typing. */
+let theirWords = null;
+let promptTimer = null, pollTimer = null, detailTimer = null;
+/** Goes up whenever the paint changes, so the detail line is worked out only when there is something new to say. */
+let maskVersion = 0, detailKey = null;
+/** The before-picture for "Hold: before", loaded when it is first wanted. */
+let beforeImage = null, beforeKey = null;
+/** What the button under a problem does, and what the problem is about. */
+let fixAction = null, problemKind = null;
+/**
+ * A photo chosen here that the server wouldn't take into the shared session yet, and the session photo it replaces
+ * (`pendingOver`). It stays on screen over that photo until it is shared, or another device changes the edit.
+ */
+let pendingImage = null, pendingOver = null;
+/** A finished edit shown on this page that isn't in the shared session yet (the server won't save): { jobId, made, ref }. */
+let held = null;
+/** A job this page sent whose place in the session couldn't be checked yet (see confirmSent). */
+let sentHere = null;
+/** Status of the last refused session write, for saying why. */
+let lastRefusal = null;
+/** Words and a Detail choice made here and not yet seen on the server: a read from before them never puts them back. */
+let wordsMine = null, wordsMineUntil = 0, detailMine = null, detailMineUntil = 0;
+/** Jobs this page saw end, so no older copy of the session (or a write the server refused) brings them back. */
+const forgotten = new Set();
+/** Writes of this page still checked against writes that started before them (see "lineage" above). */
+const unconfirmed = [];
+/** This page's own session writes go one at a time, so it can never overwrite itself. */
+let chain = Promise.resolve();
+
+// ---- small helpers ----
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const toBlob = (c, type = 'image/png') => new Promise((res, rej) => c.toBlob(b => (b ? res(b) : rej(new Error("the picture couldn't be made"))), type));
+const refKey = r => (r ? `${r.type || 'input'}/${r.subfolder || ''}/${r.filename}#${r.v || ''}` : null);
+const viewUrl = r => `/view?${new URLSearchParams({ filename: r.filename, subfolder: r.subfolder || '', type: r.type || 'input', ...(r.v ? { v: r.v } : {}) })}`;
+const same = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+const clone = x => JSON.parse(JSON.stringify(x));
+function canvasOf(w, h) {
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  return c;
+}
+function ago(at) {
+  if (!at) return 'just now';
+  const s = Math.max(0, Math.round((Date.now() - at) / 1000));
+  if (s < 10) return 'just now';
+  return `${took(s * 1000)} ago`;
+}
+/** A length of time in plain words: "12 s", "3 min", "1 h 20 min". */
+function took(ms) {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 90) return `${s} s`;
+  const m = Math.round(s / 60);
+  if (m < 90) return `${m} min`;
+  return `${Math.floor(m / 60)} h ${m % 60} min`;
+}
+
+/**
+ * Writes text only when it changed. Safari drops a tap when the text inside the pressed button is replaced between
+ * touching and lifting -- and a read of the session can land in between and redraw the buttons -- so an unchanged
+ * label must never be written again.
+ */
+function setText(el, text) { if (el.textContent !== text) el.textContent = text; }
+function status(text) { setText($('status'), text); }
+function problem(text, fix = null, label = 'Try again', kind = 'edit') {
+  setText($('problem'), text || '');
+  $('problem').hidden = !text;
+  fixAction = text ? fix : null;
+  problemKind = text ? kind : null;
+  $('fixrow').hidden = !fixAction;
+  if (fixAction) setText($('fix'), label);
+}
+/** Clears a problem only when it is the one this caller put there. */
+function problemGone(kind) { if (problemKind === kind) problem(''); }
+function progress(frac) {
+  $('bar').classList.remove('waiting');
+  $('bar').firstElementChild.style.width = `${Math.round(Math.max(0, Math.min(1, frac)) * 100)}%`;
+}
+function pulse(on) {
+  $('bar').classList.toggle('waiting', on);
+  if (!on) $('bar').firstElementChild.style.width = '0';
+}
+
+function ask(title, body, yes = 'Yes', no = 'Keep it') {
+  const dlg = $('ask');
+  $('askTitle').textContent = title;
+  $('askBody').textContent = body;
+  $('askYes').textContent = yes;
+  $('askNo').textContent = no;
+  return new Promise(resolve => {
+    const done = ok => {
+      $('askYes').onclick = $('askNo').onclick = null;
+      dlg.onclose = null;
+      dlg.close();
+      resolve(ok);
+    };
+    $('askYes').onclick = () => done(true);
+    $('askNo').onclick = () => done(false);
+    dlg.onclose = () => resolve(false);
+    if (dlg.showModal) dlg.showModal();
+    else dlg.setAttribute('open', '');
+    $('askNo').focus();
+  });
+}
+
+/** The model's own picture of a result: new sessions keep it as `out`, older ones spread it into the result. */
+const rawResult = r => (r ? r.out || (r.filename ? { filename: r.filename, subfolder: r.subfolder || '', type: r.type || 'output' } : null) : null);
+
+/** The finished edit shown on this page but not shared yet, when it belongs to the session's job. */
+const heldNow = () => (held && session?.job?.id === held.jobId ? held : null);
+
+function refreshButtons() {
+  const has = base.width > 0;
+  const job = session?.job;
+  const here = job?.by === deviceId;
+  // Finished in ComfyUI, only its result still to be put in: nothing left to stop.
+  const finished = !!job && watch?.id === job.id && !!watch.doneAt;
+  $('go').disabled = working || !has || !!job;
+  setText($('go'), job ? (here ? 'Editing…' : `Editing on ${job.byName || 'another device'}…`) : 'Edit photo');
+  $('undo').disabled = working || !!job || !(session?.undo?.length);
+  $('retry').disabled = working || !!job || !has || !session?.result || !($('prompt').value.trim() || session?.prompt);
+  $('compare').disabled = working || !!job || !(session?.undo?.length);
+  $('save').disabled = !has;
+  $('newedit').disabled = working;
+  $('stoprow').hidden = !job || finished;
+  $('stop').disabled = working || !!job?.stopping;
+  setText($('stop'), job?.stopping ? `Stopping${job.stopping.by === deviceId ? '' : ` on ${job.stopping.byName || 'another device'}`}…` : '■ Stop this edit');
+  // Only when the result isn't in the shared photo: blended in, the photo already shows it. A result only this page
+  // holds (the server won't save) is offered either way.
+  $('seeresult').hidden = !heldNow() && (!rawResult(session?.result) || !!session?.result?.image);
+}
+
+// ---- the server ----
+let serverLine = null;
+fetch('/system_stats').then(r => r.json()).then(s => {
+  const d = s.devices && s.devices[0];
+  serverLine = `connected · ${d ? d.type : 'cpu'} · ${Math.round(s.system.ram_total / 2 ** 30)} GB`;
+  setText($('server'), serverLine);
+}).catch(() => setText($('server'), 'server offline'));
+
+function connect() {
+  let ws;
+  try {
+    ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws?clientId=${encodeURIComponent(clientId)}`);
+  } catch {
+    return;
+  }
+  ws.onmessage = ev => {
+    if (typeof ev.data !== 'string') return;
+    let m;
+    try { m = JSON.parse(ev.data); } catch { return; }
+    // Queue changes are broadcast to every socket: a free nudge to read the session again. So is a stop.
+    if (m.type === 'status' || m.type === 'execution_interrupted') { schedulePoll(0); return; }
+    const pid = m.data?.prompt_id;
+    if (watch && pid === watch.id && (m.type === 'execution_success' || m.type === 'execution_error' || m.type === 'executed')) schedulePoll(0);
+    // Execution events only ever reach the page that submitted: its own clientId, not its device's id.
+    if (!watch || session?.job?.id !== watch.id || session.job.client !== clientId) return;
+    if (pid && pid !== watch.id) return;
+    if (m.type === 'executing' && m.data?.node && STAGES[m.data.node]) status(STAGES[m.data.node]);
+    if (m.type === 'progress' && m.data?.max) { progress(m.data.value / m.data.max); status(`Editing… step ${m.data.value}/${m.data.max}`); }
+  };
+  ws.onclose = () => setTimeout(connect, 3000);
+}
+connect();
+
+// ---- the shared session ----
+const userdata = name => `/userdata/${encodeURIComponent(name)}`;
+
+/** Reads the session file. null: there is none. undefined: the server could not be asked. */
+async function readSession() {
+  try {
+    const r = await fetch(`${userdata(SESSION_FILE)}?t=${Date.now()}`, { cache: 'no-store' });
+    if (r.status === 404) return null;
+    if (!r.ok) return undefined;
+    const s = JSON.parse(await r.text());
+    return s && typeof s === 'object' && s.v === 1 ? s : null;
+  } catch {
+    return undefined;
+  }
+}
+async function readJson(name) {
+  try {
+    const r = await fetch(`${userdata(name)}?t=${Date.now()}`, { cache: 'no-store' });
+    if (!r.ok) return null;
+    return JSON.parse(await r.text());
+  } catch {
+    return null;
+  }
+}
+
+/** A new session: its own id (`sid`), so writes made in an earlier session are never mistaken for this one's. */
+const blank = () => ({ v: 1, sid: uuid4().slice(0, 8), rev: 0, image: null, prompt: '', detail: +$('res').value, job: null, result: null, undo: [], done: 0, stopped: null, lineage: [] });
+/** A job this page saw end is not brought back by a copy of the session that still has it. */
+const scrub = s => (s && s.job && forgotten.has(s.job.id) ? { ...s, job: null } : s);
+function diff(from, to) {
+  const patch = {}, before = {};
+  for (const f of FIELDS) if (!same(from[f], to[f])) { patch[f] = to[f] ?? null; before[f] = from[f] ?? null; }
+  return { patch, before };
+}
+
+/**
+ * Saves a change, rebased on what the server says right now: the session is read again here, so a change to one
+ * field never carries this page's stale copy of the others (the photo another device just chose, a result, the
+ * undo list). A `make` that gives its argument back unchanged writes nothing. This page's changes run one at a
+ * time. Returns what is on the server afterwards; null when nothing could be written.
+ *
+ * `quiet` is for writes the page makes on its own behalf (tidying a job that left the server): they must not put a
+ * sharing error where the explanation of what happened is. `polite` ones (the words, as they're typed) say a refusal
+ * only when nothing else is being explained.
+ */
+function change(make, opts = {}) {
+  const run = chain.then(() => changeNow(make, opts)).catch(err => {
+    if (!opts.quiet) problem(`Couldn't share that: ${err.message || err}. Try again.`, null, 'Try again', 'share');
+    return null;
+  });
+  chain = run;
+  return run;
+}
+async function changeNow(make, opts) {
+  const fresh = await readSession();
+  const known = fresh !== undefined;
+  if (known) {
+    serverRev = fresh ? fresh.rev || 0 : 0;
+    recheck(fresh);
+  }
+  const was = known ? fresh : session;
+  const raw = clone(was || blank());
+  const basis = clone(raw);
+  // A job this page saw end goes with whatever is written next, even when the change itself does nothing.
+  const next = scrub(make(basis) || basis);
+  if (!Object.keys(diff(raw, next).patch).length) {
+    // It does not apply any more (someone else did it, or started something else): keep theirs.
+    if (known && fresh) await adopt(fresh, true);
+    return known ? fresh : null;
+  }
+  return commit(raw, next, { ...opts, basisSid: was ? was.sid ?? 'old' : null });
+}
+
+/** Writes the session, then reads it back. Returns what is on the server afterwards; null when the write did not happen. */
+async function commit(basis, next, opts = {}) {
+  const token = uuid4().slice(0, 8);
+  const lineage = [token, ...(basis.lineage || [])].slice(0, LINEAGE);
+  const put = { ...next, v: 1, sid: next.sid ?? basis.sid, rev: (basis.rev || 0) + 1, by: deviceId, byName: deviceName, at: Date.now(), token, lineage };
+  if (put.prompt && put.prompt.length > MAX_PROMPT) put.prompt = put.prompt.slice(0, MAX_PROMPT);
+  const { patch, before } = diff(basis, put);
+  writing++;
+  try {
+    let r;
+    try {
+      r = await fetch(userdata(SESSION_FILE), { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify(put) });
+    } catch {
+      r = { ok: false, status: 'no answer' };
+    }
+    if (!r.ok) {
+      lastRefusal = r.status;
+      // A write made in the background (the words, as they're typed) never covers up another explanation.
+      const covers = opts.polite && problemKind && problemKind !== 'share';
+      if (!opts.quiet && !covers) {
+        problem(`Couldn't share this with your other devices (${r.status}). It's still here on this device; tap Share again.`, () => change(s => ({ ...s, ...patch })).then(s => s && adopt(s, true)), 'Share again', 'share');
+      }
+      return null;
+    }
+    lastRefusal = null;
+    // Shared now -- unless it is a photo of this page's that still isn't (the words went, say): that is still to do.
+    if (!pendingImage) problemGone('share');
+    unconfirmed.push({ token, sid: put.sid, basisSid: opts.basisSid ?? null, patch, before, until: Date.now() + RECHECK_MS, tries: opts.tries || 0 });
+    const back = await readSession();
+    // Not known: the next read checks it, as it checks every write of this page for a while.
+    if (back === undefined) {
+      await adopt(put, true);
+      return put;
+    }
+    if (!back) {
+      // Cleared on another device between the write and the read: that is the newer thing, not this.
+      recheck(null);
+      session = null;
+      serverRev = 0;
+      showShared();
+      refreshButtons();
+      status('Cleared on another device. Choose a photo to start a new edit.');
+      return null;
+    }
+    recheck(back);
+    await adopt(back, true);
+    return back;
+  } finally {
+    writing--;
+  }
+}
+
+/**
+ * Checks this page's recent writes against what the server holds. A write whose token isn't in the session's lineage
+ * any more was overwritten by a write that started before it: what it changed is put back, field by field, wherever
+ * the field still holds what it held before (a field someone else changed since stays theirs). That is only done in
+ * the session the write was made in -- or over the session it replaced, or a session another device started from
+ * nothing at the same moment; a newer session someone started on purpose is left alone. A Clear brought back by such
+ * a write is cleared again.
+ */
+function recheck(doc) {
+  const now = Date.now();
+  for (let i = unconfirmed.length - 1; i >= 0; i--) {
+    const w = unconfirmed[i];
+    if (now > w.until) { unconfirmed.splice(i, 1); continue; }
+    if (w.cleared) {
+      if (!doc) continue;
+      unconfirmed.splice(i, 1);
+      if (doc.sid === w.cleared && w.tries < 3) setTimeout(() => void clearAgain(w), 0);
+      continue;
+    }
+    if (!doc) { unconfirmed.splice(i, 1); continue; }
+    if ((doc.lineage || []).includes(w.token)) continue;
+    unconfirmed.splice(i, 1);
+    const ours = doc.sid === w.sid || doc.sid === w.basisSid || w.basisSid === null;
+    if (!ours || w.tries >= 3) continue;
+    setTimeout(() => void change(s => {
+      const n = { ...s };
+      for (const f of Object.keys(w.patch)) {
+        if (f === 'job' && w.patch.job && forgotten.has(w.patch.job.id)) continue;
+        if (same(s[f], w.before[f])) n[f] = w.patch[f];
+      }
+      return n;
+    }, { quiet: true, tries: w.tries + 1 }), 0);
+  }
+}
+async function clearAgain(w) {
+  const fresh = await readSession();
+  if (!fresh || fresh.sid !== w.cleared) return;
+  const r = await fetch(userdata(SESSION_FILE), { method: 'DELETE' }).catch(() => null);
+  if (r?.ok) unconfirmed.push({ ...w, tries: w.tries + 1, until: Date.now() + RECHECK_MS });
+}
+
+// ---- reading the session onto this page ----
+async function adopt(s, force = false) {
+  if (!force && writing) return;
+  s = scrub(s);
+  const was = session;
+  session = s;
+  serverRev = s.rev || 0;
+
+  // A photo chosen here that the server hasn't taken yet stays on screen over the photo it was chosen to replace, until
+  // it is shared -- or another device changes the edit (another photo, an edit started): theirs is newer.
+  if (pendingImage) {
+    const k = refKey(s.image);
+    if (k === refKey(pendingImage)) { pendingImage = pendingOver = null; problemGone('share'); }
+    else if (s.job || (s.image && k !== pendingOver)) dropPending();
+  }
+  const keepMine = !!pendingImage && shownImage === refKey(pendingImage);
+  // So does a finished edit this page shows but couldn't share, while its job is still the session's.
+  if (held && s.job?.id !== held.jobId) held = null;
+  const keepHeld = !!held && (shownImage === heldKey(held.jobId) || (!!held.ref && shownImage === refKey(held.ref)));
+  if (refKey(s.image) !== shownImage && !keepMine && !keepHeld) await showImage(s.image);
+  if (session !== s) return; // a newer copy came in while the picture loaded
+
+  // Words. Yours are never replaced while you are typing, nor before they reach the server; theirs are offered instead.
+  const text = s.prompt || '';
+  if (wordsMine !== null && (text === wordsMine || Date.now() > wordsMineUntil)) wordsMine = null;
+  const typing = document.activeElement === $('prompt') || wordsMine !== null;
+  if (!typing) {
+    if ($('prompt').value !== text) $('prompt').value = text;
+    theirWords = null;
+  } else if (text !== $('prompt').value && s.by !== deviceId) {
+    theirWords = { text, who: s.byName || 'another device' };
+  }
+  showWords();
+  if (detailMine !== null && (s.detail === detailMine || Date.now() > detailMineUntil)) detailMine = null;
+  if (detailMine === null && s.detail && +$('res').value !== s.detail) $('res').value = String(s.detail);
+
+  if (s.job && watch?.id !== s.job.id) watch = { id: s.job.id, since: Date.now(), missing: 0, doneAt: null, attempt: 1, heldSince: null, finishing: null };
+  if (!s.job && watch) {
+    const ended = watch.id;
+    watch = null;
+    pulse(false);
+    progress(0);
+    // Put in (or stopped, or cleared) on another device: what this page said about sharing it no longer applies.
+    problemGone('finish');
+    if (s.stopped?.jobId === ended) status(`Stopped${s.stopped.by && s.stopped.by !== deviceId ? ` on ${s.stopped.byName}` : ''}. The photo is as it was.`);
+  }
+  if (s.job?.mask) void showJobMask(s.job);
+  if (!s.job && s.result && was?.result?.jobId !== s.result.jobId) status(doneWords(s.result));
+  showShared();
+  refreshButtons();
+  showDetail();
+}
+
+/** What shownImage says while the base canvas holds a finished edit only this page has. */
+const heldKey = jobId => `held:${jobId}`;
+/** Another device changed the edit after this page's new photo couldn't be shared: theirs stands, and the page says so. */
+function dropPending() {
+  pendingImage = pendingOver = null;
+  if (problemKind === 'share' || problemKind === 'unshared') problem("Your new photo wasn't shared, and the edit was changed on another device since. Choose your photo again to use it.", null, 'Try again', 'share');
+}
+
+function doneWords(r) {
+  const time = r.seconds ? ` in ${took(r.seconds * 1000)}` : '';
+  if (!r.image && (r.plain || r.why)) {
+    return `Done${time}, but not blended in. ${r.why || ''} Your photo is unchanged; tap See what the model made.`.replace(/\s+/g, ' ');
+  }
+  const where = r.finishedBy && r.finishedBy !== deviceId ? ` · put in on ${r.finishedByName || 'another device'}` : '';
+  const area = r.whole === false && r.crop ? ` · edited area ${r.crop.w}×${r.crop.h}` : '';
+  return `Done${time}${r.seed ? ` · seed ${r.seed}` : ''}${where}${area}`;
+}
+
+function showWords() {
+  $('words').classList.toggle('show', !!theirWords);
+  if (theirWords) {
+    setText($('wordsWho'), theirWords.who);
+    setText($('wordsText'), theirWords.text || '(nothing)');
+  }
+}
+$('useWords').onclick = () => {
+  if (!theirWords) return;
+  $('prompt').value = theirWords.text;
+  theirWords = null;
+  showWords();
+  void change(s => ({ ...s, prompt: $('prompt').value }));
+};
+
+function showShared() {
+  const el = $('shared');
+  if (!session) { setText(el, 'One shared edit. Nothing in it yet — choose a photo to start.'); return; }
+  const who = session.by === deviceId ? 'you' : `<b>${escapeText(session.byName || 'another device')}</b>`;
+  const finishing = !!session.job && watch?.id === session.job.id && !!watch.doneAt;
+  const what = session.job ? (session.job.stopping ? 'an edit is stopping' : finishing ? 'an edit is finishing' : 'an edit is running') : session.result ? 'a result is waiting' : session.image ? 'a photo is loaded' : 'empty';
+  const html = `One shared edit · ${what} · last changed by ${who} ${ago(session.at)}`;
+  if (el.innerHTML !== html) el.innerHTML = html;
+}
+const escapeText = t => String(t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+/** Puts the session's picture on the canvas, or says it has gone from the server. */
+async function showImage(ref) {
+  const seq = ++imageSeq;
+  if (!ref) {
+    shownImage = null;
+    for (const c of [base, mask, cmp]) { c.width = 0; c.height = 0; }
+    paintedFor = maskTried = null;
+    maskVersion++;
+    $('empty').style.display = '';
+    layout();
+    showDetail();
+    return;
+  }
+  try {
+    const img = await loadImage(viewUrl(ref));
+    if (seq !== imageSeq) return;
+    for (const c of [base, mask, cmp]) { c.width = img.naturalWidth; c.height = img.naturalHeight; }
+    bctx.drawImage(img, 0, 0);
+    shownImage = refKey(ref);
+    paintedFor = maskTried = null;
+    maskVersion++;
+    $('empty').style.display = 'none';
+    beforeImage = null;
+    layout();
+    showDetail();
+    problemGone('missing');
+  } catch {
+    if (seq !== imageSeq) return;
+    shownImage = null;
+    problem('The photo this edit was working on is not on the server any more. Clear and start a new edit, or choose the photo again.', () => $('newedit').click(), 'Clear & start new edit', 'missing');
+  }
+}
+/** Puts a picture this page made on the canvas as the session's photo, without loading it back. */
+function showCanvas(c, ref) {
+  ++imageSeq;
+  for (const k of [base, mask, cmp]) { k.width = c.width; k.height = c.height; }
+  bctx.drawImage(c, 0, 0);
+  shownImage = refKey(ref);
+  paintedFor = maskTried = null;
+  maskVersion++;
+  $('empty').style.display = 'none';
+  beforeImage = null;
+  layout();
+  showDetail();
+}
+
+function loadImage(url) {
+  return new Promise((res, rej) => {
+    const i = new Image();
+    i.onload = () => res(i);
+    i.onerror = () => rej(new Error('Could not load the picture'));
+    i.src = url;
+  });
+}
+/** A picture from the server; null only when the server says it isn't there (404). Anything else throws, to try again. */
+async function picture(ref) {
+  try {
+    return await loadImage(viewUrl(ref));
+  } catch {
+    const status = await fetch(viewUrl(ref), { method: 'HEAD', cache: 'no-store' }).then(r => r.status, () => 0);
+    if (status === 404) return null;
+    throw new Error("the server didn't send the pictures; it may be busy");
+  }
+}
+async function exists(ref) {
+  try {
+    const r = await fetch(viewUrl(ref), { method: 'HEAD', cache: 'no-store' });
+    return r.ok;
+  } catch {
+    return false;
+  }
+}
+
+/** While an edit runs, every page shows the area it is changing: the painted area uploaded with it. */
+async function showJobMask(job) {
+  if (maskTried === job.id) return;
+  maskTried = job.id;
+  if (paintedFor === job.id || !base.width) return;
+  // Paint of this page's own is never replaced under your hands.
+  if (maskBox()) return;
+  try {
+    const img = await loadImage(viewUrl(job.mask));
+    if (session?.job?.id !== job.id || maskBox()) return;
+    mctx.globalCompositeOperation = 'source-over';
+    mctx.clearRect(0, 0, mask.width, mask.height);
+    mctx.drawImage(img, 0, 0, mask.width, mask.height);
+    paintedFor = job.id;
+    maskVersion++;
+    showDetail();
+  } catch {
+    // Only the overlay is missing: finishing loads the painted area again, and says so if it can't.
+  }
+}
+
+// ---- reading the session over and over ----
+function schedulePoll(ms) {
+  clearTimeout(pollTimer);
+  pollTimer = setTimeout(poll, ms);
+}
+function nextPoll() {
+  if (watch?.deferUntil) return Math.max(50, watch.deferUntil - Date.now());
+  if (watch) return Date.now() - watch.since < 30_000 ? POLL_BUSY_MS : POLL_SLOW_MS;
+  return session?.job ? POLL_BUSY_MS : POLL_IDLE_MS;
+}
+async function poll() {
+  try {
+    if (!writing && !working) {
+      const s = await readSession();
+      if (s === undefined) setText($('server'), 'server not answering');
+      else if (serverLine) setText($('server'), serverLine);
+      // A job this page sent whose place in the session it couldn't check then: the session must still hold it.
+      if (s !== undefined && sentHere) {
+        const j = sentHere;
+        sentHere = null;
+        if (s?.job?.id !== j.id && s?.result?.jobId !== j.id) await withdraw(j, s);
+      }
+      if (s === undefined) {
+        // Looked at again next time.
+      } else if (!s) {
+        recheck(null);
+        if (session && (session.image || session.job || session.result)) {
+          await reset({ keepWords: document.activeElement === $('prompt') || wordsMine !== null });
+          status('Cleared on another device. Choose a photo to start a new edit.');
+        }
+        session = null;
+        serverRev = 0;
+        showShared();
+        refreshButtons();
+      } else {
+        recheck(s);
+        await adopt(s);
+      }
+    }
+    if (watch && !working) await checkJob();
+    else showShared();
+  } catch {
+    // Looked at again next time.
+  } finally {
+    schedulePoll(nextPoll());
+  }
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden) schedulePoll(0); });
+
+// ---- choosing a photo ----
+$('file').onchange = async e => {
+  const f = e.target.files[0];
+  e.target.value = '';
+  if (!f) return;
+  const go = await okToReplace('Start a new edit with this photo?', 'Stop it and start new');
+  if (!go) return;
+  working = true;
+  refreshButtons();
+  try {
+    if (go === 'stop' && session?.job && !(await stopJob(session.job, { forNew: true }))) return;
+    const bmp = await createImageBitmap(f);
+    const s = Math.min(1, SHARED_MAX_SIDE / Math.max(bmp.width, bmp.height));
+    const w = Math.round(bmp.width * s), h = Math.round(bmp.height * s);
+    const c = canvasOf(w, h);
+    c.getContext('2d').drawImage(bmp, 0, 0, w, h);
+    bmp.close?.();
+    // On screen straight away: sharing it is the next step, and a server that refuses must not hide the photo.
+    showCanvas(c, null);
+    beforeKey = null;
+    const scaled = s < 1 ? `Loaded at ${w}×${h} (scaled from ${Math.round(w / s)}×${Math.round(h / s)} so every device shows the same photo).` : `Loaded ${w}×${h}.`;
+    status(`${scaled} Sharing it…`);
+    const fresh = await readSession();
+    const was = fresh === undefined ? session : fresh;
+    const ref = await uploadSlot('base', await toBlob(c), was);
+    ref.w = w; ref.h = h;
+    shownImage = refKey(ref);
+    pendingImage = ref;
+    pendingOver = refKey(was?.image ?? null);
+    const after = await change(s => (s.job ? s : { ...blank(), prompt: $('prompt').value.trim(), detail: +$('res').value, image: ref }));
+    if (after?.job) problem(`An edit started on ${after.job.byName || 'another device'} in the meantime, so this photo wasn't shared. Choose it again once that edit is done.`);
+    else status(after ? scaled : '');
+  } catch (err) {
+    problem(`Couldn't load that photo: ${err.message || err}. Choose it again.`);
+  } finally {
+    working = false;
+    refreshButtons();
+    schedulePoll(0);
+  }
+};
+
+function layout() {
+  if (!base.width) { stage.style.width = stage.style.height = '0px'; return; }
+  const fx = (wrap.scrollLeft + wrap.clientWidth / 2) / (stage.offsetWidth || 1);
+  const fy = (wrap.scrollTop + wrap.clientHeight / 2) / (stage.offsetHeight || 1);
+  const w = wrap.clientWidth * zoom;
+  stage.style.width = `${w}px`;
+  stage.style.height = `${w * base.height / base.width}px`;
+  wrap.scrollLeft = fx * stage.offsetWidth - wrap.clientWidth / 2;
+  wrap.scrollTop = fy * stage.offsetHeight - wrap.clientHeight / 2;
+}
+window.addEventListener('resize', layout);
+$('zoom').oninput = e => { zoom = +e.target.value; layout(); };
+
+// ---- painting (this device only, until Edit sends it) ----
+function setTool(t) {
+  tool = t;
+  for (const [id, name] of [['tPaint', 'paint'], ['tErase', 'erase'], ['tMove', 'move']]) {
+    $(id).classList.toggle('on', t === name);
+    $(id).setAttribute('aria-pressed', String(t === name));
+  }
+  mask.style.pointerEvents = t === 'move' ? 'none' : 'auto';
+}
+$('tPaint').onclick = () => setTool('paint');
+$('tErase').onclick = () => setTool('erase');
+$('tMove').onclick = () => setTool('move');
+$('clearpaint').onclick = () => {
+  if (session?.job) return;
+  mctx.clearRect(0, 0, mask.width, mask.height);
+  paintedFor = null;
+  maskVersion++;
+  showDetail();
+};
+
+function point(e) {
+  const r = mask.getBoundingClientRect();
+  return { x: (e.clientX - r.left) * mask.width / r.width, y: (e.clientY - r.top) * mask.height / r.height, scale: mask.width / r.width };
+}
+function stroke(a, b) {
+  maskVersion++;
+  mctx.globalCompositeOperation = tool === 'erase' ? 'destination-out' : 'source-over';
+  mctx.strokeStyle = mctx.fillStyle = '#ff2d55';
+  mctx.lineCap = mctx.lineJoin = 'round';
+  mctx.lineWidth = +$('brush').value * b.scale;
+  mctx.beginPath(); mctx.moveTo(a.x, a.y); mctx.lineTo(b.x + 0.01, b.y); mctx.stroke();
+}
+mask.addEventListener('pointerdown', e => {
+  if (tool === 'move' || !base.width || session?.job) return;
+  painting = true; mask.setPointerCapture(e.pointerId);
+  // Painting again after an edit that didn't go through: the paint is this page's own now.
+  paintedFor = null;
+  lastPoint = point(e); stroke(lastPoint, lastPoint); e.preventDefault();
+  detailSoon();
+});
+mask.addEventListener('pointermove', e => { if (!painting) return; const p = point(e); stroke(lastPoint, p); lastPoint = p; detailSoon(); });
+for (const t of ['pointerup', 'pointercancel']) mask.addEventListener(t, () => { if (painting) { painting = false; showDetail(); } });
+
+// Bounding box of the painted area plus surrounding context, in image pixels; null when nothing is painted.
+let scan = null;
+function maskBox() {
+  const W = mask.width, H = mask.height;
+  if (!W || !H) return null;
+  const k = Math.max(1, Math.ceil(Math.max(W, H) / 1024));
+  const sw = Math.ceil(W / k), sh = Math.ceil(H / k);
+  if (!scan) scan = document.createElement('canvas');
+  scan.width = sw; scan.height = sh;
+  const sc = scan.getContext('2d', { willReadFrequently: true });
+  sc.clearRect(0, 0, sw, sh);
+  sc.drawImage(mask, 0, 0, sw, sh);
+  const d = sc.getImageData(0, 0, sw, sh).data;
+  let x0 = sw, y0 = sh, x1 = -1, y1 = -1;
+  for (let y = 0; y < sh; y++) for (let x = 0; x < sw; x++) {
+    if (d[(y * sw + x) * 4 + 3] > 8) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+  }
+  if (x1 < 0) return null;
+  x0 *= k; y0 *= k; x1 = (x1 + 1) * k; y1 = (y1 + 1) * k;
+  const pad = Math.max(48, Math.round(0.35 * Math.max(x1 - x0, y1 - y0)));
+  let x = x0 - pad, y = y0 - pad, w = x1 - x0 + 2 * pad, h = y1 - y0 + 2 * pad;
+  const min = Math.min(384, W, H);
+  if (w < min) { x -= (min - w) / 2; w = min; }
+  if (h < min) { y -= (min - h) / 2; h = min; }
+  x = Math.max(0, Math.round(Math.min(x, W - w))); y = Math.max(0, Math.round(Math.min(y, H - h)));
+  return { x, y, w: Math.min(W - x, Math.round(w)), h: Math.min(H - y, Math.round(h)) };
+}
+
+// ---- how much detail the model gets ----
+/** The size the model works at for an area of w×h: TextEncodeQwenImage21 resizes it to about resolution², at multiples of 32. */
+function modelSize(w, h, resolution) {
+  const ratio = w / h;
+  // Python's round(), which the node uses: a half goes to the even neighbour.
+  const round = x => { const r = Math.round(x); return Math.abs(x - Math.trunc(x)) === 0.5 && r % 2 ? r - 1 : r; };
+  return {
+    w: Math.max(32, round(Math.sqrt(resolution * resolution * ratio) / 32) * 32),
+    h: Math.max(32, round(Math.sqrt(resolution * resolution / ratio) / 32) * 32),
+  };
+}
+/**
+ * About to send an unpainted edit: words typed that aren't the ones of the result just shown, and nothing running.
+ * Only then is the whole-photo tip worth saying -- a photo is "whole" every time nothing is painted, which is also every
+ * time an edit has just come back.
+ */
+function aboutToSend() {
+  const words = $('prompt').value.trim();
+  if (!words || session?.job) return false;
+  return !session?.result || words !== (session.result.prompt || '').trim();
+}
+function showDetail() {
+  clearTimeout(detailTimer);
+  detailTimer = null;
+  const key = `${maskVersion}|${base.width}x${base.height}|${$('res').value}|${aboutToSend()}`;
+  if (key === detailKey) return;
+  detailKey = key;
+  $('detail').hidden = !base.width;
+  if (!base.width) return;
+  const box = maskBox();
+  const area = box || { w: base.width, h: base.height };
+  const resolution = +$('res').value;
+  const m = modelSize(area.w, area.h, resolution);
+  const sent = Math.round(Math.sqrt(m.w * m.h));
+  setText($('detailText'), box ? `Editing a ${area.w}×${area.h} area → sent at about ${sent} px` : `Whole ${area.w}×${area.h} photo → sent at about ${sent} px`);
+  // The model gets fewer pixels than the area has: what it makes is enlarged to fit, and fine detail goes soft. A big
+  // painted area is a warning; the whole photo only advice, in the dim colour, once an unpainted edit is about to go.
+  const lost = sent < Math.sqrt(area.w * area.h) * 0.9;
+  const tip = !lost ? '' : box ? 'Big area: detail is lost. Paint tighter or zoom in.' : aboutToSend() ? 'Whole photo: fine detail is lost. Paint just the part to keep it.' : '';
+  setText($('detailTip'), tip);
+  $('detailTip').classList.toggle('tip', !!box && lost);
+  $('detail').title = lost && resolution < 1328 ? 'High in Detail below gives the model more pixels too, and takes longer.' : '';
+}
+function detailSoon() { if (!detailTimer) detailTimer = setTimeout(showDetail, 250); }
+
+// ---- the workflow ----
+function workflow(image, prompt, resolution, seed, jobId) {
+  return {
+    '1': { class_type: 'UnetLoaderGGUF', inputs: { unet_name: MODELS.unet } },
+    '2': { class_type: 'CLIPLoaderGGUF', inputs: { clip_name: MODELS.clip, type: 'qwen_image' } },
+    '3': { class_type: 'VAELoader', inputs: { vae_name: MODELS.vae } },
+    '4': { class_type: 'LoadImage', inputs: { image } },
+    '5': { class_type: 'TextEncodeQwenImage21', inputs: { clip: ['2', 0], prompt, negative_prompt: '', vae: ['3', 0], resolution, 'images.image_1': ['4', 0] } },
+    '6': { class_type: 'KSampler', inputs: { model: ['1', 0], positive: ['5', 0], negative: ['5', 1], latent_image: ['5', 2], seed, steps: 8, cfg: 1.0, sampler_name: 'euler', scheduler: 'simple', denoise: 1.0 } },
+    '7': { class_type: 'VAEDecode', inputs: { samples: ['6', 0], vae: ['3', 0] } },
+    // A prefix only this job has: SaveImage then names its picture <job id>_00001_.png (folder_paths.get_save_image_path).
+    '8': { class_type: 'SaveImage', inputs: { images: ['7', 0], filename_prefix: `${OUTPUTS}/${jobId}` } },
+  };
+}
+/** Where a job's picture is once it's saved, whether or not ComfyUI still remembers the job. */
+const outputOf = jobId => ({ filename: `${jobId}_00001_.png`, subfolder: OUTPUTS, type: 'output' });
+
+// ---- the pictures this page uploads ----
+/** Every picture in input/ the session (photo, undo history, running job, last result) points at. */
+function referenced(s) {
+  const keys = new Set();
+  const add = r => { if (r && (r.type || 'input') === 'input') keys.add(`${r.subfolder || ''}/${r.filename}`); };
+  if (s) {
+    add(s.image);
+    (s.undo || []).forEach(add);
+    if (s.job) { add(s.job.base); add(s.job.input); add(s.job.mask); }
+    if (s.result) { add(s.result.image); add(s.result.mask); }
+  }
+  add(pendingImage);
+  add(session?.image);
+  return keys;
+}
+/**
+ * Uploads a picture under one of this device's names for its kind, going round them, and never under a name the
+ * session `s` (read just before) or this page still points at. Every name in use: a name of its own, so nothing is
+ * ever written over. That keeps input/ to a few pictures per device instead of one more per step.
+ */
+async function uploadSlot(kind, blob, s) {
+  const taken = referenced(s);
+  const key = `crosstalk.editor.slot.${kind}`;
+  const last = Number(local.get(key));
+  const from = Number.isFinite(last) ? last : -1;
+  for (let i = 1; i <= RING[kind]; i++) {
+    const slot = (((from + i) % RING[kind]) + RING[kind]) % RING[kind];
+    const name = `${deviceId}-${kind}-${slot}.png`;
+    if (taken.has(`${UPLOADS}/${name}`)) continue;
+    local.set(key, String(slot));
+    return upload(blob, name);
+  }
+  return upload(blob, `${deviceId}-${kind}-${Date.now()}.png`);
+}
+async function upload(blob, name) {
+  for (let attempt = 1; ; attempt++) {
+    const fd = new FormData();
+    fd.append('image', blob, name);
+    fd.append('subfolder', UPLOADS);
+    fd.append('overwrite', 'true');
+    let r;
+    try {
+      r = await fetch('/upload/image', { method: 'POST', body: fd });
+    } catch {
+      throw new Error("the server didn't answer");
+    }
+    if (!r.ok) throw Object.assign(new Error(`the server wouldn't take the picture (${r.status})`), { status: r.status });
+    const j = await r.json();
+    // `v` makes each upload's address its own, so a reused name never shows an older picture from the cache.
+    const ref = { filename: j.name, subfolder: j.subfolder ?? UPLOADS, type: j.type || 'input', v: uuid4().slice(0, 8) };
+    // WebKit has been seen to send the form with the picture left out (busy, in the tests: the server kept an empty
+    // file, and every device then said the photo was gone). What the server kept is checked against what was sent --
+    // ComfyUI's own size for it, or /view's Content-Length -- so an empty or cut-short picture is sent again, never shared.
+    const kept = typeof j.asset?.size === 'number' ? j.asset.size : await storedSize(ref);
+    if (kept === null || kept === blob.size) return ref;
+    if (attempt >= 3) throw new Error("the picture didn't reach the server whole");
+  }
+}
+/** How many bytes the server holds for a picture (HEAD /view), or null when it doesn't say. */
+async function storedSize(ref) {
+  try {
+    const r = await fetch(viewUrl(ref), { method: 'HEAD', cache: 'no-store' });
+    const n = r.ok ? r.headers.get('content-length') : null;
+    return n === null ? null : Number(n);
+  } catch {
+    return null;
+  }
+}
+
+// ---- claims: one edit at a time, one page finishing it ----
+/**
+ * Takes a claim file only if nobody holds it: the body is written under a name of this page's own, then moved onto
+ * the claim with ?overwrite=false. ComfyUI's move handler (app/user_manager.py) checks and moves with nothing
+ * awaited in between, so exactly one page wins however close together they ask. Returns 'ours', 'held' or { error }.
+ */
+async function takeFile(name, body) {
+  const json = JSON.stringify(body);
+  const own = `crosstalk-editor-tmp.${uuid4().slice(0, 13)}.json`;
+  try {
+    const w = await fetch(userdata(own), { method: 'POST', headers: JSON_HEADERS, body: json });
+    if (!w.ok) return { error: `the server wouldn't save it (${w.status})`, status: w.status };
+    const m = await fetch(`${userdata(own)}/move/${encodeURIComponent(name)}?overwrite=false`, { method: 'POST' });
+    if (m.ok) return 'ours';
+    void fetch(userdata(own), { method: 'DELETE' }).catch(() => {});
+    if (m.status === 409) return 'held';
+    if (m.status === 404 || m.status === 405) {
+      // A ComfyUI without the move route: write with ?overwrite=false and read it back, so at most one sees its own.
+      const r = await fetch(`${userdata(name)}?overwrite=false`, { method: 'POST', headers: JSON_HEADERS, body: json });
+      if (r.status === 409) return 'held';
+      if (!r.ok) return { error: `the server wouldn't save it (${r.status})`, status: r.status };
+      const back = await readJson(name);
+      return back && back.token === body.token ? 'ours' : 'held';
+    }
+    return { error: `the server wouldn't save it (${m.status})`, status: m.status };
+  } catch {
+    return { error: "the server didn't answer" };
+  }
+}
+
+async function takeClaim(jobId) {
+  const body = { jobId, token: uuid4().slice(0, 8), by: deviceId, byName: deviceName, client: clientId, at: Date.now() };
+  let got = await takeFile(CLAIM_FILE, body);
+  if (got === 'held') {
+    const held = await readJson(CLAIM_FILE);
+    // Stale: claimed, never recorded as a job (that page went away before queueing), and old.
+    const stale = held && Date.now() - (held.at || 0) > CLAIM_STALE_MS && !session?.job;
+    if (held && !stale) return { ok: false, who: held.byName || 'another device' };
+    if (held) {
+      // Set aside under a name that only this stale claim has: of two pages doing it at once, one can.
+      const aside = `crosstalk-editor-claim.old.${String(held.token || held.jobId || 'x').replace(/[^\w-]/g, '')}.json`;
+      const m = await fetch(`${userdata(CLAIM_FILE)}/move/${encodeURIComponent(aside)}?overwrite=false`, { method: 'POST' }).catch(() => null);
+      if (m && (m.status === 404 || m.status === 405) && !(await readJson(aside))) await fetch(userdata(CLAIM_FILE), { method: 'DELETE' }).catch(() => {});
+    }
+    got = await takeFile(CLAIM_FILE, body);
+  }
+  if (got === 'held') {
+    const now = await readJson(CLAIM_FILE);
+    return { ok: false, who: now?.byName || 'another device' };
+  }
+  if (got !== 'ours') return { ok: false, why: got.error, status: got.status };
+  return { ok: true };
+}
+/** Lets go of the "one edit at a time" claim, if it is this job's (a newer edit's claim is left alone). */
+async function releaseClaimFor(jobId) {
+  const held = await readJson(CLAIM_FILE);
+  if (held && held.jobId === jobId) await fetch(userdata(CLAIM_FILE), { method: 'DELETE' }).catch(() => {});
+}
+async function releaseClaim() {
+  await fetch(userdata(CLAIM_FILE), { method: 'DELETE' }).catch(() => {});
+}
+async function dropFinishClaims(jobId, upTo) {
+  for (let a = 1; a <= (upTo || 1); a++) await fetch(userdata(finishFile(jobId, a)), { method: 'DELETE' }).catch(() => {});
+}
+
+// ---- starting an edit ----
+/**
+ * What a job that ended without a result leaves in the session: no job -- and for Edit again, the result it was going
+ * to replace, put back with its photo, as long as the session still shows the photo the edit started from.
+ */
+function withoutJob(s, job) {
+  if (s.job?.id !== job.id) return s;
+  const n = { ...s, job: null };
+  const prev = job.prev;
+  if (prev && !s.result && refKey(s.image) === refKey(job.base)) {
+    if (prev.image) {
+      const undo = [...(s.undo || []), job.base];
+      while (undo.length > MAX_UNDO) undo.shift();
+      n.image = prev.image;
+      n.undo = undo;
+    }
+    n.result = prev.result;
+  }
+  return n;
+}
+/** Try again for a job that made no result: Edit again for an Edit again, so it is the same area of the same photo. */
+const againFor = job => (job?.prev ? () => $('retry').click() : startEdit);
+
+/**
+ * Starts an edit of the shared photo: the painted area (or the whole photo), with these words and this Detail.
+ *
+ * `again` is Edit again: { r: the result, from: the photo r was made from, img: that photo when it isn't the one on
+ * screen }. It edits r's area of `from`, and `from` becomes the shared photo only in the write that records the job --
+ * so an Edit again that doesn't start leaves the result where it was, and one that ends without a result puts it back.
+ */
+async function startEdit(again = null) {
+  const prompt = $('prompt').value.trim().slice(0, MAX_PROMPT);
+  if (!base.width) return problem('Choose a photo first.');
+  if (!prompt) return problem('Describe the edit first.');
+  clearTimeout(promptTimer);
+  promptTimer = null;
+  working = true;
+  refreshButtons();
+  problem('');
+  const retry = again ? () => $('retry').click() : startEdit;
+  let jobId = null, claimed = false, recorded = false;
+  try {
+    // What is on the server now, not what this page last saw.
+    const fresh = await readSession();
+    if (fresh === undefined) return problem("The server didn't answer. Try again in a moment.", retry);
+    recheck(fresh);
+    if (fresh) await adopt(fresh, true);
+    if (!fresh || !session?.image || (pendingImage && shownImage === refKey(pendingImage))) {
+      // The photo on screen isn't the shared one: never shared, the server wouldn't take it, or cleared on another
+      // device. Nothing on this page is emptied.
+      session = fresh ? session : null;
+      if (!fresh) serverRev = 0;
+      showShared();
+      return problem("This photo isn't shared, so the result couldn't come back to you on another device. Share it, then edit.", shareAndEdit, 'Share and edit', 'unshared');
+    }
+    if (session.job) {
+      return problem(`An edit is already running${session.job.by === deviceId ? '' : ` (started on ${session.job.byName})`}. Wait for it, or stop it.`);
+    }
+    if (again && session.result?.jobId !== again.r.jobId) return problem('The edit was changed on another device meanwhile. Look at it, then try again.');
+    if (!again && shownImage !== refKey(session.image)) return problem('The photo is still loading. Try again in a moment.', startEdit);
+
+    // The shared photo the edit is made over (the session must still show it when the job is recorded), the photo it
+    // edits (Edit again: the one from before the last edit), and the area.
+    const over = session.image;
+    const from = again ? again.from : over;
+    const src = again?.img || base;
+    const W = again?.img ? again.img.naturalWidth : base.width, H = again?.img ? again.img.naturalHeight : base.height;
+    const box = again ? (again.r.whole ? null : again.r.crop) : maskBox();
+    const crop = box || { x: 0, y: 0, w: W, h: H };
+    const back = again && refKey(from) !== refKey(over);
+
+    jobId = uuid4();
+    const claim = await takeClaim(jobId);
+    if (!claim.ok) {
+      if (claim.who) return problem(`${claim.who} is starting an edit. Give it a moment, then try again.`, retry);
+      if (claim.status) return problem(refusedWords(claim.status), retry);
+      return problem(`Couldn't start: ${claim.why}. Try again in a moment.`, retry);
+    }
+    claimed = true;
+
+    const resolution = +$('res').value;
+    progress(0);
+    status('Uploading…');
+    // Only what the model will use: the crop, scaled to about 1.5× the model resolution.
+    const scale = Math.min(1, resolution * 1.5 / Math.sqrt(crop.w * crop.h));
+    const c = canvasOf(Math.round(crop.w * scale), Math.round(crop.h * scale));
+    c.getContext('2d').drawImage(src, crop.x, crop.y, crop.w, crop.h, 0, 0, c.width, c.height);
+    const input = await uploadSlot('crop', await toBlob(c), session);
+    // The painted area goes up too: whoever finishes the edit blends the result in through it, on any device. Edit
+    // again's is on the server already (the result points at it).
+    let maskRef = null, maskLost = null;
+    if (again) maskRef = box ? again.r.mask : null;
+    else if (box) {
+      const m = canvasOf(mask.width, mask.height);
+      m.getContext('2d').drawImage(mask, 0, 0);
+      const blob = await toBlob(m);
+      for (let i = 0; i < 2 && !maskRef; i++) {
+        try { maskRef = await uploadSlot('mask', blob, session); } catch (err) { maskLost = err.message || String(err); }
+      }
+      if (maskRef) maskLost = null;
+      else {
+        status('');
+        const go = await ask('Edit without blending?', `The painted area couldn't be saved on the server (${maskLost}). The edit can still run, but its result can't be blended into your photo: you'd get the edited part on its own.`, 'Edit anyway', 'Not now');
+        if (!go) return problem('Nothing was started. Try again once the server takes pictures again.', retry);
+      }
+    }
+    const seed = Math.floor(Math.random() * 2 ** 31);
+    const job = {
+      id: jobId, by: deviceId, byName: deviceName, client: clientId, at: Date.now(), queued: false, prompt, seed, resolution, crop,
+      whole: !box, base: from, input, mask: maskRef, ...(maskLost ? { maskLost } : {}),
+      ...(again ? { prev: { image: back ? over : null, result: again.r } } : {}),
+    };
+    if (box && !again) paintedFor = jobId;
+    // Recorded before it is sent, so a page that goes away after sending can never leave an edit nobody follows. Edit
+    // again puts the photo from before the last edit back in this same write, never before it.
+    lastRefusal = null;
+    const after = await change(s => {
+      if (s.job || refKey(s.image) !== refKey(over)) return s;
+      if (again && s.result?.jobId !== again.r.jobId) return s;
+      const n = { ...s, prompt, detail: resolution, result: null, stopped: null, job };
+      if (back) {
+        const undo = [...(s.undo || [])];
+        if (refKey(undo.at(-1)) !== refKey(from)) return s;
+        undo.pop();
+        n.image = from;
+        n.undo = undo;
+      }
+      return n;
+    }, { quiet: true });
+    if (!after || after.job?.id !== jobId) {
+      // Never to come back by a write of this page's that another one landed over (recheck): it wasn't started.
+      forgotten.add(jobId);
+      return problem(await notStarted(after, jobId), retry);
+    }
+    recorded = true;
+    let r = null, j = {};
+    try {
+      r = await fetch('/prompt', {
+        method: 'POST',
+        headers: JSON_HEADERS,
+        body: JSON.stringify({ prompt: workflow(input.subfolder ? `${input.subfolder}/${input.filename}` : input.filename, prompt, resolution, seed, jobId), client_id: clientId, prompt_id: jobId }),
+      });
+      j = await r.json().catch(() => ({}));
+    } catch {
+      // No answer: whether ComfyUI got it is for ComfyUI to say.
+      const where = await jobState(jobId);
+      if (where.at === 'unknown') {
+        // It can't say either. The job stays recorded as not sent: every page follows it, and says it never got there
+        // if it doesn't turn up.
+        watch = { id: jobId, since: Date.now(), missing: 0, doneAt: null, attempt: 1, heldSince: null, finishing: null };
+        status("ComfyUI isn't answering. Waiting to see whether the edit got there…");
+        pulse(true);
+        return;
+      }
+      if (where.at !== 'gone') r = { ok: true };
+    }
+    if (!r?.ok) {
+      forgotten.add(jobId);
+      watch = null;
+      // It didn't get there; should it still turn up, it is stopped rather than run with nobody following it.
+      if (!r) void cancelJob(jobId);
+      await change(s => withoutJob(s, job), { quiet: true });
+      session = scrub(session);
+      const nodeErr = j.node_errors && Object.values(j.node_errors).flatMap(n => (n.errors || []).map(e => `${e.message}: ${e.details}`)).join('\n');
+      return problem(r ? `${j.error?.message || `The server refused the edit (${r.status})`}${nodeErr ? '\n' + nodeErr : ''}` : "ComfyUI didn't take the edit. Try again in a moment.", retry);
+    }
+    watch = { id: jobId, since: Date.now(), missing: 0, doneAt: null, attempt: 1, heldSince: null, finishing: null };
+    status('Queued… (the first edit after a restart loads about 10 GB of models)');
+    pulse(true);
+    await confirmSent(job);
+  } catch (err) {
+    problem(`${err.message || err}`, retry);
+  } finally {
+    // An edit that never made it into the session or the queue lets go of the claim; one that did keeps it until it ends.
+    if (claimed && jobId && (!recorded || forgotten.has(jobId))) await releaseClaimFor(jobId);
+    working = false;
+    refreshButtons();
+    showDetail();
+    schedulePoll(0);
+  }
+}
+
+/** Why an edit wasn't recorded in the session, so nothing was started. */
+async function notStarted(after, jobId) {
+  if (!after && lastRefusal != null) return refusedWords(lastRefusal);
+  const now = after ?? (await readSession());
+  if (now === undefined) return refusedWords('no answer');
+  if (!now) return 'The edit was cleared on another device meanwhile, so nothing was started.';
+  if (now.job) return `An edit is already running (started on ${now.job.byName || 'another device'}). Wait for it, or stop it.`;
+  if (now.stopped?.jobId === jobId) return `Stopped${now.stopped.by && now.stopped.by !== deviceId ? ` on ${now.stopped.byName}` : ''} before it started. Nothing is running now.`;
+  return 'The edit was changed on another device meanwhile, so nothing was started. Look at it, then try again.';
+}
+
+/**
+ * After sending: notes in the session that the job reached ComfyUI, and makes sure the session still holds it. Another
+ * device may have given up on it while this page was slow or away -- stopped it, cleared the edit, or found it missing
+ * for longer than QUEUE_GRACE_MS. Then it is stopped here, so ComfyUI never runs an edit nobody follows.
+ */
+async function confirmSent(job) {
+  const kept = await change(s => (s.job?.id === job.id && s.job.queued === false ? { ...s, job: { ...s.job, queued: Date.now() } } : s), { quiet: true });
+  const now = kept ?? (await readSession());
+  // Can't tell now: the next read of the session checks.
+  if (now === undefined) { sentHere = job; return; }
+  if (now?.job?.id === job.id || now?.result?.jobId === job.id) return;
+  await withdraw(job, now);
+}
+/** A job this page sent that the session no longer holds: stopped in ComfyUI, and why said on screen. */
+async function withdraw(job, now) {
+  forgotten.add(job.id);
+  if (watch?.id === job.id) watch = null;
+  pulse(false);
+  progress(0);
+  await cancelJob(job.id);
+  await releaseClaimFor(job.id);
+  session = scrub(session);
+  showShared();
+  refreshButtons();
+  if (!now) status('Cleared on another device. Choose a photo to start a new edit.');
+  else if (now.stopped?.jobId === job.id) status(`Stopped${now.stopped.by && now.stopped.by !== deviceId ? ` on ${now.stopped.byName}` : ''}. The photo is as it was.`);
+  else if (now.job) problem(`An edit started on ${now.job.byName || 'another device'} meanwhile, so this one was stopped.`);
+  else problem('This edit reached ComfyUI too late: another device had already given up on it, so it was stopped. Nothing is running now.', againFor(job));
+}
+const refusedWords = why => `ComfyUI wouldn't save the edit (${why}), so nothing was started. Try again in a moment; if it keeps happening, check the computer running ComfyUI has free disk space.`;
+$('go').onclick = () => void startEdit();
+$('fix').onclick = () => { const f = fixAction; problem(''); if (f) void f(); };
+
+/** The photo on this page, put into the shared session (again), then the edit started. */
+async function shareAndEdit() {
+  working = true;
+  refreshButtons();
+  let shared = false;
+  try {
+    const fresh = await readSession();
+    let ref = pendingImage;
+    if (!ref) {
+      ref = await uploadSlot('base', await toBlob(base), fresh || null);
+      ref.w = base.width; ref.h = base.height;
+      pendingImage = ref;
+      pendingOver = refKey(fresh?.image ?? null);
+    }
+    shownImage = refKey(ref);
+    const after = await change(s => (s.job ? s : { ...blank(), prompt: $('prompt').value.trim(), detail: +$('res').value, image: ref }));
+    if (after?.job) problem(`An edit is already running (started on ${after.job.byName || 'another device'}). Wait for it, or stop it.`);
+    shared = !after?.job && !!after?.image && refKey(after.image) === refKey(ref);
+  } catch (err) {
+    problem(`Couldn't share the photo: ${err.message || err}. Try again.`, shareAndEdit, 'Try again', 'share');
+  } finally {
+    working = false;
+    refreshButtons();
+  }
+  if (shared) await startEdit();
+}
+
+// ---- following an edit, whoever started it ----
+async function getJson(url) {
+  try {
+    const r = await fetch(url, { cache: 'no-store' });
+    return r.ok ? await r.json() : null;
+  } catch {
+    return null;
+  }
+}
+/** Whether one of ComfyUI's /queue lists has this job in it. */
+const inList = (list, id) => Array.isArray(list) && list.some(item => Array.isArray(item) && item[1] === id);
+/** Where a job is: "pending", "running", "done" (with the picture), "failed" (with why), "stopped", "gone" or "unknown". */
+async function jobState(id) {
+  const h = await getJson(`/history/${encodeURIComponent(id)}?t=${Date.now()}`);
+  if (!h) return { at: 'unknown' };
+  const entry = h[id];
+  if (entry) {
+    const messages = entry.status?.messages || [];
+    const said = name => (messages.find(m => m[0] === name) || [])[1];
+    if (entry.status?.status_str === 'error') {
+      if (said('execution_interrupted')) return { at: 'stopped' };
+      return { at: 'failed', why: said('execution_error')?.exception_message || 'The edit failed' };
+    }
+    const img = entry.outputs?.['8']?.images?.[0];
+    if (img) {
+      const t0 = said('execution_start')?.timestamp, t1 = said('execution_success')?.timestamp;
+      return { at: 'done', image: { filename: img.filename, subfolder: img.subfolder || '', type: img.type || 'output' }, ran: t0 && t1 ? Math.round((t1 - t0) / 1000) : null };
+    }
+    if (entry.status?.completed || entry.status?.status_str === 'success') return { at: 'failed', why: 'The edit finished without a picture' };
+    return { at: 'running' };
+  }
+  const q = await getJson(`/queue?t=${Date.now()}`);
+  if (!q) return { at: 'unknown' };
+  if (inList(q.queue_running, id)) return { at: 'running' };
+  if (inList(q.queue_pending, id)) {
+    // ComfyUI's pending list is a heap, not in order: what runs first is the lowest number.
+    const number = q.queue_pending.find(item => Array.isArray(item) && item[1] === id)[0];
+    return {
+      at: 'pending',
+      ahead: (q.queue_running || []).length + q.queue_pending.filter(item => Array.isArray(item) && item[0] < number).length,
+      // The one running is an edit this page saw stopped: ComfyUI is still finishing the step it was on.
+      afterStop: (q.queue_running || []).some(item => Array.isArray(item) && forgotten.has(item[1])),
+    };
+  }
+  // In neither: finished before ComfyUI restarted (its picture is under a name only this job has), or gone.
+  const out = outputOf(id);
+  if (await exists(out)) return { at: 'done', image: out, ran: null };
+  return { at: 'gone' };
+}
+
+async function checkJob() {
+  const job = session?.job;
+  if (!job || !watch || watch.id !== job.id) return;
+  const where = await jobState(job.id);
+  if (session?.job?.id !== job.id || watch?.id !== job.id) return;
+  if (where.at === 'unknown') return;
+  if (where.at !== 'gone') watch.missing = 0;
+  const startedOn = job.by === deviceId ? '' : ` · started on ${job.byName || 'another device'}`;
+
+  if (where.at === 'pending' || where.at === 'running') {
+    pulse(true);
+    if (job.stopping) status(`Stopping${job.stopping.by === deviceId ? '' : ` on ${job.stopping.byName || 'another device'}`}… ${STOPPING_WORDS}`);
+    else if (where.at === 'pending' && where.afterStop) status(`Waiting for the stopped edit to end${startedOn}. ${STOPPING_WORDS}`);
+    else if (where.at === 'pending') status(`Waiting in the queue${where.ahead > 0 ? ` behind ${where.ahead} other edit${where.ahead > 1 ? 's' : ''}` : ''}${startedOn}`);
+    else if (job.client !== clientId) status(`Editing${job.by === deviceId ? '' : ` on ${job.byName || 'another device'}`}… ${took(Date.now() - (job.at || Date.now()))} so far`);
+    showShared();
+    return;
+  }
+  if (where.at === 'failed') return endJob(job, 'failed', where.why);
+  if (where.at === 'stopped') return endJob(job, 'stopped');
+  if (where.at === 'gone') {
+    // Its stop took it out of the queue before it started.
+    if (job.stopping) return endJob(job, 'stopped');
+    if (job.queued === false && Date.now() - (job.at || 0) < QUEUE_GRACE_MS) {
+      // Recorded, not sent yet: the page that started it is still on its way to ComfyUI.
+      watch.missing = 0;
+      pulse(true);
+      status(`Starting${job.client === clientId ? '' : ` on ${job.byName || 'another device'}`}…`);
+      showShared();
+      return;
+    }
+    watch.missing++;
+    if (watch.missing < GONE_AFTER) return;
+    return endJob(job, 'gone');
+  }
+  await tryFinish(job, where);
+}
+
+/** Why a job is in neither ComfyUI's queue nor its history, and nothing it made is there either. */
+function goneWords(job) {
+  if (job.queued !== false) return 'That edit is gone — ComfyUI restarted, or its queue was cleared. Nothing is running now.';
+  if (job.client === clientId) return "That edit never reached ComfyUI: it didn't answer when the edit was sent. Nothing is running now.";
+  const where = job.by === deviceId ? 'this device' : job.byName || 'the other device';
+  return `That edit never reached ComfyUI: the page on ${where} closed or lost its connection before sending it. Nothing is running now.`;
+}
+
+/** A job that ended without a result: off this page at once, whether or not the server takes the tidy-up. */
+async function endJob(job, kind, why) {
+  forgotten.add(job.id);
+  if (watch?.id === job.id) watch = null;
+  pulse(false);
+  progress(0);
+  session = scrub(session);
+  refreshButtons();
+  await releaseClaimFor(job.id);
+  await change(s => {
+    if (s.job?.id !== job.id) return s;
+    const stopped = kind === 'stopped' ? (s.stopped?.jobId === job.id ? s.stopped : { jobId: job.id, by: job.stopping?.by || null, byName: job.stopping?.byName || null, at: Date.now() }) : s.stopped;
+    return { ...withoutJob(s, job), stopped };
+  }, { quiet: true });
+  session = scrub(session);
+  showShared();
+  refreshButtons();
+  if (kind === 'failed') problem(`${why}. Try again, or change the words.`, againFor(job));
+  else if (kind === 'stopped') {
+    const who = job.stopping?.by && job.stopping.by !== deviceId ? ` on ${job.stopping.byName}` : '';
+    status(`Stopped${who}. The photo is as it was.`);
+  } else problem(goneWords(job), againFor(job));
+}
+
+/** The edit is done: one page puts the result in. This one, if it takes that job's finish claim. */
+async function tryFinish(job, where) {
+  watch.doneAt ??= Date.now();
+  watch.deferUntil = null;
+  if (job.client !== clientId && Date.now() - watch.doneAt < FINISH_DEFER_MS) {
+    pulse(true);
+    status('Finishing…');
+    watch.deferUntil = watch.doneAt + FINISH_DEFER_MS;
+    return;
+  }
+  // A finish this page couldn't share is tried again on its own only now and then; Try again does it at once.
+  if (watch.backoffUntil && Date.now() < watch.backoffUntil) return;
+  if (!watch.finishing) {
+    const got = await takeFile(finishFile(job.id, watch.attempt), { jobId: job.id, token: uuid4().slice(0, 8), by: deviceId, byName: deviceName, client: clientId, at: Date.now() });
+    if (got === 'held') {
+      // Held by this page too, sometimes: two reads of the session can overlap, and the other one is finishing it.
+      const holder = await readJson(finishFile(job.id, watch.attempt));
+      watch.heldSince ??= Date.now();
+      const old = holder?.at && Date.now() - holder.at > FINISH_OLD_MS;
+      if (Date.now() - watch.heldSince > FINISH_STALE_MS || old) {
+        // That page took it and went away (a phone locked mid-way, say): the next try is anyone's.
+        watch.attempt++;
+        watch.heldSince = null;
+        schedulePoll(0);
+      }
+      pulse(true);
+      status(`Finishing${holder?.client === clientId ? '' : holder?.byName ? ` on ${holder.byName}` : ''}…`);
+      return;
+    }
+    if (got !== 'ours') {
+      // The server answered but won't save (a full disk, a read-only folder): the result is shown here all the same,
+      // from the server's own pictures, so it can be seen and saved. Sharing it is what's tried again.
+      if (got.status) return finish(job, where, { cantSave: got.status });
+      status(`Finishing… (${got.error}; trying again)`);
+      return;
+    }
+    watch.finishing = watch.attempt;
+  }
+  await finish(job, where);
+}
+/** Try again for a finished edit that isn't shared yet: at once, through the finish claim as any try is. */
+function retryFinish(jobId) {
+  if (watch?.id === jobId) watch.backoffUntil = 0;
+  schedulePoll(0);
+}
+/** A finished edit shown on this page that the server won't take yet: what to do about it, and Try again. */
+function cantShare(job, why) {
+  if (watch?.id === job.id) watch.backoffUntil = Date.now() + 30_000;
+  const made = held?.jobId === job.id ? held.made : null;
+  status(made?.blended ? 'Done. On this device only for now: Save keeps a copy.' : `Done, but not blended in. ${made?.why || ''} Your photo is unchanged; tap See what the model made.`.replace(/\s+/g, ' '));
+  problem(
+    typeof why === 'number'
+      ? `ComfyUI can't save right now (${why}), so your other devices don't have this result yet. Free up disk space on the computer running ComfyUI, then tap Try again.`
+      : `${why === 'no answer' || /didn't answer/.test(why) ? "The server didn't answer" : `It couldn't be shared: ${why}`}, so your other devices don't have this result yet. Tap Try again in a moment.`,
+    () => retryFinish(job.id), 'Try again', 'finish',
+  );
+  refreshButtons();
+  showShared();
+}
+
+/** The finished edit blended into the photo it started from: { blended } or, not blended in, { why }. null: the model's picture is gone. */
+async function outcome(job, where, now) {
+  // A picture that isn't there (404) is a fact to work with; any other trouble throws, to be tried again shortly.
+  const outImg = await picture(where.image);
+  if (!outImg) return null;
+  const baseRef = job.base || now?.image;
+  const baseImg = baseRef ? await picture(baseRef) : null;
+  if (!baseImg) return { blended: null, why: "The photo this edit started from isn't on the server any more, so the result couldn't be put into it." };
+  if (job.whole) return { blended: blendWhole(baseImg, outImg) };
+  if (!job.mask) return { blended: null, why: "The painted area never reached the server, so the result couldn't be blended into your photo." };
+  const painted = await picture(job.mask);
+  if (!painted) return { blended: null, why: "The painted area isn't on the server any more, so the result couldn't be blended into your photo." };
+  return { blended: blend(baseImg, outImg, job.crop, painted) };
+}
+
+/**
+ * Blends the result into the photo the edit started from -- through the painted area uploaded with it, at its
+ * recorded crop -- shares the new photo, and ends the job. Nothing here reads this page's own canvas or paint.
+ * With `cantSave` (the server won't take writes) it is only shown here, ready to save, until a later try shares it.
+ *
+ * One at a time per job on this page. Looks at the session overlap -- ComfyUI's events at the end of an edit ask for
+ * one while another is still waiting on /history -- and a look that reaches the finished edit after this page took its
+ * finish claim comes here too. Without this it blended and uploaded the photo a second time beside the first.
+ */
+async function finish(job, where, opts = {}) {
+  if (puttingIn.has(job.id)) return;
+  working = true;
+  refreshButtons();
+  pulse(false);
+  progress(1);
+  status('Finishing…');
+  // The finish claim this page holds; 0 when it holds none and only shows the result.
+  const attempt = opts.cantSave ? 0 : watch?.finishing || 1;
+  try {
+    puttingIn.add(job.id);
+    const fresh = await readSession();
+    if (fresh !== undefined) recheck(fresh);
+    if (fresh !== undefined && (!fresh || fresh.job?.id !== job.id)) {
+      // Put in already, cleared, or something else started: nothing of this job's left to do.
+      if (fresh) await adopt(fresh, true);
+      if (watch?.id === job.id) watch = null;
+      if (attempt) await dropFinishClaims(job.id, attempt);
+      return;
+    }
+    const now = fresh || session;
+    // Shown here already on an earlier try: the same pictures, not loaded and blended again.
+    if (held?.jobId !== job.id) {
+      const made = await outcome(job, where, now);
+      if (!made) {
+        if (attempt) await dropFinishClaims(job.id, attempt);
+        await endJob(job, 'failed', "The edit finished, but its picture isn't on the server any more");
+        return;
+      }
+      // On screen at once, before anything is shared: Save works from here whatever the server does next.
+      held = { jobId: job.id, made, out: where.image, ref: null };
+      if (made.blended) {
+        showCanvas(made.blended, null);
+        shownImage = heldKey(job.id);
+      }
+    }
+    const made = held.made;
+    if (!attempt) return cantShare(job, opts.cantSave);
+    const result = { jobId: job.id, out: where.image, image: null, at: Date.now(), seconds: where.ran ?? null, seed: job.seed, prompt: job.prompt, by: job.by, byName: job.byName, finishedBy: deviceId, finishedByName: deviceName, crop: job.crop, whole: !!job.whole, mask: job.mask || null };
+    if (made.blended) {
+      if (!held.ref) {
+        let ref;
+        try {
+          ref = await uploadSlot('base', await toBlob(made.blended), now);
+        } catch (err) {
+          return cantShare(job, err.status ?? (err.message || 'no answer'));
+        }
+        ref.w = made.blended.width; ref.h = made.blended.height;
+        held.ref = ref;
+        if (shownImage === heldKey(job.id)) shownImage = refKey(ref);
+      }
+      result.image = held.ref;
+    } else {
+      result.plain = true;
+      result.why = made.why;
+    }
+    await releaseClaimFor(job.id);
+    const after = await change(s => {
+      if (s.result?.jobId === job.id || s.job?.id !== job.id) return s;
+      if (!result.image) return { ...s, job: null, result };
+      const undo = [...(s.undo || [])];
+      if (s.image) undo.push(s.image);
+      while (undo.length > MAX_UNDO) undo.shift();
+      return { ...s, image: result.image, undo, job: null, done: (s.done || 0) + 1, result };
+    }, { quiet: true });
+    if (after?.result?.jobId === job.id) {
+      if (watch?.id === job.id) watch = null;
+      held = null;
+      status(doneWords(after.result));
+      problemGone('finish');
+      await dropFinishClaims(job.id, attempt);
+    } else if (!after) {
+      cantShare(job, lastRefusal ?? 'no answer');
+    } else {
+      // The session moved on meanwhile (stopped, cleared, another edit): what's there now stands.
+      if (watch?.id === job.id) watch = null;
+      await dropFinishClaims(job.id, attempt);
+    }
+  } catch (err) {
+    if (watch?.id === job.id) watch.backoffUntil = Date.now() + 30_000;
+    problem(`The edit is done, but the picture couldn't be put in: ${err.message || err}. Try again.`, () => retryFinish(job.id), 'Try again', 'finish');
+  } finally {
+    puttingIn.delete(job.id);
+    working = false;
+    refreshButtons();
+    schedulePoll(0);
+  }
+}
+
+/** The result, at the crop it was made from, blended in only where the painted area says, with a soft edge. */
+function blend(baseImg, outImg, crop, painted) {
+  const W = baseImg.naturalWidth, H = baseImg.naturalHeight;
+  const c = canvasOf(W, H);
+  const ctx = c.getContext('2d');
+  ctx.drawImage(baseImg, 0, 0);
+  // The painted area at the photo's own size: it was painted on this same photo.
+  const full = canvasOf(W, H);
+  full.getContext('2d').drawImage(painted, 0, 0, W, H);
+  const r = canvasOf(crop.w, crop.h);
+  const rc = r.getContext('2d');
+  rc.drawImage(outImg, 0, 0, crop.w, crop.h);
+  const m = canvasOf(crop.w, crop.h);
+  const mc = m.getContext('2d');
+  mc.filter = `blur(${Math.max(2, Math.round(Math.max(crop.w, crop.h) * 0.012))}px)`;
+  mc.drawImage(full, crop.x, crop.y, crop.w, crop.h, 0, 0, crop.w, crop.h);
+  rc.globalCompositeOperation = 'destination-in';
+  rc.drawImage(m, 0, 0);
+  ctx.drawImage(r, crop.x, crop.y);
+  return c;
+}
+function blendWhole(baseImg, outImg) {
+  const c = canvasOf(baseImg.naturalWidth, baseImg.naturalHeight);
+  c.getContext('2d').drawImage(outImg, 0, 0, c.width, c.height);
+  return c;
+}
+
+// ---- stopping an edit ----
+/** ComfyUI's own cancel: a running job is interrupted (at the end of the step it is on), a waiting one taken out of the queue. */
+async function cancelJob(id) {
+  try {
+    const r = await fetch(`/api/jobs/${encodeURIComponent(id)}/cancel`, { method: 'POST' });
+    if (r.ok) return { cancelled: !!(await r.json().catch(() => ({}))).cancelled };
+    if (r.status !== 404 && r.status !== 405) return { error: `the server refused (${r.status})` };
+    // A ComfyUI older than its jobs routes. Out of the queue while it waits; interrupted only while it is the one
+    // running -- an older ComfyUI ignores the prompt_id and interrupts whatever runs, someone else's edit included.
+    const where = async () => {
+      const q = await getJson(`/queue?t=${Date.now()}`);
+      if (!q) throw new Error('no answer');
+      return { running: inList(q.queue_running, id), pending: inList(q.queue_pending, id) };
+    };
+    let at = await where();
+    let cancelled = false;
+    if (at.pending) {
+      const a = await fetch('/queue', { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify({ delete: [id] }) });
+      if (!a.ok) return { error: `the server refused (${a.status})` };
+      cancelled = true;
+      // It may have started in the meantime.
+      at = await where();
+    }
+    if (at.running) {
+      const b = await fetch('/interrupt', { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify({ prompt_id: id }) });
+      if (!b.ok) return { error: `the server refused (${b.status})` };
+      cancelled = true;
+    }
+    return { cancelled };
+  } catch {
+    return { error: "the server didn't answer" };
+  }
+}
+
+/**
+ * Stops a job. The cancel goes to ComfyUI first, and only what it did is written into the session -- so a page that
+ * goes away half-way never leaves every device showing a stop nobody sent. Returns true once nothing runs for it,
+ * 'stopping' while ComfyUI finishes the step it is on (every device follows it until it has), and false when it
+ * couldn't be stopped (said on screen). An edit that finished before the stop reached it keeps its result, unless the
+ * stop is for clearing or a new photo, which don't want it.
+ */
+async function stopJob(job, opts = {}) {
+  const forReplace = opts.forClear || opts.forNew;
+  status('Stopping…');
+  const sent = await cancelJob(job.id);
+  if (sent.error) {
+    status('');
+    problem(`Couldn't stop the edit: ${sent.error}. Try again.`, () => askStop(), 'Try again', 'stop');
+    return false;
+  }
+  const where = await jobState(job.id);
+  if (!forReplace) {
+    if (where.at === 'done') {
+      status('It had already finished, so its result is going in.');
+      return false;
+    }
+    const still = where.at === 'running' || where.at === 'pending';
+    if (!sent.cancelled && (still || where.at === 'unknown')) {
+      status('');
+      problem(still ? "Couldn't stop the edit: ComfyUI didn't take the stop. Try again." : "Couldn't tell whether the edit stopped: the server didn't answer. Try again.", () => askStop(), 'Try again', 'stop');
+      return false;
+    }
+    if (still || where.at === 'unknown') {
+      // ComfyUI ends a running edit once the step it is on is done: until then every device says it is stopping.
+      await change(s => (s.job?.id === job.id && !s.job.stopping ? { ...s, job: { ...s.job, stopping: { by: deviceId, byName: deviceName, at: Date.now() } } } : s), { quiet: true });
+      status(`Stopping… ${STOPPING_WORDS}`);
+      problemGone('stop');
+      return 'stopping';
+    }
+  }
+  // Out of the queue before it started, already stopped, or going with the rest of the edit (Clear, a new photo).
+  forgotten.add(job.id);
+  if (watch?.id === job.id) watch = null;
+  pulse(false);
+  progress(0);
+  await releaseClaimFor(job.id);
+  await change(s => (s.job?.id === job.id ? { ...withoutJob(s, job), stopped: { jobId: job.id, by: deviceId, byName: deviceName, at: Date.now() } } : s), { quiet: true });
+  session = scrub(session);
+  problemGone('stop');
+  return true;
+}
+async function askStop() {
+  const job = session?.job;
+  if (!job) return;
+  const where = job.by === deviceId ? '' : ` (started on ${job.byName || 'another device'})`;
+  if (!(await ask('Stop this edit?', `ComfyUI stops working on it${where}. Your photo stays as it was.`, 'Stop it', 'Keep editing'))) return;
+  working = true;
+  refreshButtons();
+  try {
+    const done = await stopJob(job);
+    if (done) problemGone('edit');
+    if (done === true) status('Stopped. The photo is as it was.');
+  } finally {
+    working = false;
+    refreshButtons();
+    showShared();
+    schedulePoll(0);
+  }
+}
+$('stop').onclick = () => void askStop();
+
+// ---- the words, shared as you type ----
+function shareWords() {
+  clearTimeout(promptTimer);
+  promptTimer = null;
+  const text = $('prompt').value.trim().slice(0, MAX_PROMPT);
+  if ((session?.prompt || '') === text) { wordsMine = null; return; }
+  wordsMine = text;
+  wordsMineUntil = Date.now() + 15_000;
+  // A photo chosen here that didn't reach the server yet goes with the words, rather than a session without it.
+  void change(s => ({ ...s, prompt: text, ...(!s.image && !s.job && pendingImage ? { image: pendingImage } : {}) }), { polite: true }).then(after => {
+    // Not shared (the server refused): the box keeps them, and the next look may show the server's again.
+    if (!after && wordsMine === text) wordsMine = null;
+  });
+}
+$('prompt').oninput = () => {
+  refreshButtons();
+  showDetail();
+  wordsMine = $('prompt').value.trim().slice(0, MAX_PROMPT);
+  wordsMineUntil = Date.now() + 15_000;
+  clearTimeout(promptTimer);
+  promptTimer = setTimeout(shareWords, 800);
+};
+// Leaving the box shares the words at once, so nothing read from the server in the meantime can put older ones back.
+$('prompt').onblur = () => {
+  theirWords = null;
+  showWords();
+  if (promptTimer) shareWords();
+};
+$('res').onchange = () => {
+  showDetail();
+  detailMine = +$('res').value;
+  detailMineUntil = Date.now() + 15_000;
+  if (session && session.detail !== detailMine) void change(s => ({ ...s, detail: +$('res').value }));
+};
+
+// ---- undo, again, before, save ----
+$('undo').onclick = async () => {
+  if (!session?.undo?.length) return;
+  working = true;
+  refreshButtons();
+  try {
+    const after = await change(s => {
+      const undo = [...(s.undo || [])];
+      const prev = undo.pop();
+      return prev ? { ...s, image: prev, undo, result: null } : s;
+    });
+    if (after) status('Undone. Every device shows the photo as it was.');
+  } finally {
+    working = false;
+    refreshButtons();
+  }
+};
+
+/**
+ * Edit again: the same edit of the same painted area, on the photo from before it. Nothing in the session changes until
+ * the new edit is recorded -- that same write puts the earlier photo back -- so an Edit again that doesn't start leaves
+ * the finished result where it was, and one that ends without a result puts it back (withoutJob).
+ */
+$('retry').onclick = async () => {
+  const r = session?.result;
+  if (!r) return;
+  working = true;
+  refreshButtons();
+  let again = null;
+  try {
+    // The painted area first: without it the same edit can't be made, and it says so rather than edit the whole photo.
+    if (!r.whole) {
+      let painted = null;
+      try {
+        painted = r.mask ? await picture(r.mask) : null;
+      } catch (err) {
+        problem(`Couldn't get the painted area from last time: ${err.message || err}. Try again.`, () => $('retry').click(), 'Try again', 'retry');
+        return;
+      }
+      if (!painted) {
+        problem(r.mask ? "The painted area from last time isn't on the server any more. Paint it again, then tap Edit photo." : 'Paint the area again (or leave it unpainted for the whole photo), then tap Edit photo.', null, 'Try again', 'retry');
+        return;
+      }
+    }
+    // The photo that edit was made from: the last undo step when its result is the photo now, the photo itself when
+    // the result wasn't blended in.
+    const blendedIn = !!r.image && refKey(session.image) === refKey(r.image) && !!session.undo?.length;
+    const from = blendedIn ? session.undo.at(-1) : session.image;
+    let img = null;
+    if (refKey(from) !== shownImage) {
+      try {
+        img = await picture(from);
+      } catch (err) {
+        problem(`Couldn't get the photo from before that edit: ${err.message || err}. Try again.`, () => $('retry').click(), 'Try again', 'retry');
+        return;
+      }
+      if (!img) {
+        problem("The photo from before that edit isn't on the server any more, so it can't be made again. Paint the area on this photo and tap Edit photo.", null, 'Try again', 'retry');
+        return;
+      }
+    }
+    again = { r, from, img };
+  } finally {
+    working = false;
+    refreshButtons();
+  }
+  if (again) await startEdit(again);
+};
+
+const showBefore = async on => {
+  const prev = session?.undo?.at(-1);
+  if (!prev || !base.width) return;
+  if (!on) { cmp.style.display = 'none'; return; }
+  if (beforeKey !== refKey(prev) || !beforeImage) {
+    beforeImage = await loadImage(viewUrl(prev)).catch(() => null);
+    beforeKey = refKey(prev);
+  }
+  if (!beforeImage) return problem("The photo as it was isn't on the server any more.");
+  cmp.getContext('2d').drawImage(beforeImage, 0, 0, cmp.width, cmp.height);
+  cmp.style.display = 'block';
+};
+$('compare').addEventListener('pointerdown', () => void showBefore(true));
+for (const t of ['pointerup', 'pointerleave', 'pointercancel']) $('compare').addEventListener(t, () => void showBefore(false));
+
+function openView(url) {
+  $('saveimg').src = url;
+  $('savelink').href = url;
+  $('saveview').style.display = 'flex';
+  $('closesave').focus();
+}
+$('save').onclick = async () => {
+  if (!base.width) return;
+  status('Preparing PNG…');
+  try {
+    openView(URL.createObjectURL(await toBlob(base)));
+    status('');
+  } catch (err) {
+    status('');
+    problem(`Couldn't make the PNG: ${err.message || err}. Try again.`, () => $('save').click(), 'Try again', 'save');
+  }
+};
+$('seeresult').onclick = () => {
+  const raw = heldNow()?.out || rawResult(session?.result);
+  if (raw) openView(viewUrl(raw));
+};
+$('closesave').onclick = () => {
+  $('saveview').style.display = 'none';
+  if ($('saveimg').src.startsWith('blob:')) URL.revokeObjectURL($('saveimg').src);
+  $('saveimg').removeAttribute('src');
+};
+
+// ---- clear and start a new edit ----
+/**
+ * Asks first when an edit is running or a result would be lost, on what the server says now (not this page's last
+ * look). Running: the question is whether to stop it, and 'stop' means yes.
+ */
+async function okToReplace(title, stopLabel) {
+  const fresh = await readSession();
+  if (fresh !== undefined) {
+    recheck(fresh);
+    if (fresh) await adopt(fresh, true);
+    else if (session) { session = null; serverRev = 0; showShared(); refreshButtons(); }
+  }
+  const s = session;
+  if (s?.job) {
+    const where = s.job.by === deviceId ? 'this device' : s.job.byName || 'another device';
+    return (await ask(title, `An edit is running (started on ${where}). This stops it, and the photo, the words and the result go, on every device.`, stopLabel)) ? 'stop' : false;
+  }
+  if (s?.result || s?.undo?.length) {
+    // The server keeps only a few photos per device (their names are reused, see uploadSlot), so this doesn't promise more.
+    return ask(title, 'The photo, the words and the last result go, on every device. Save any photo you want to keep first: the server keeps only the last few.', 'Start new');
+  }
+  return true;
+}
+
+async function reset(opts = {}) {
+  watch = null;
+  pulse(false);
+  progress(0);
+  theirWords = null;
+  showWords();
+  await showImage(null);
+  if (!opts.keepWords) {
+    $('prompt').value = '';
+    wordsMine = null;
+    clearTimeout(promptTimer);
+    promptTimer = null;
+  }
+  beforeImage = null; beforeKey = null;
+  // A photo that never reached the server goes with the rest, and so does what was said about it.
+  if (pendingImage) { problemGone('share'); problemGone('unshared'); }
+  pendingImage = pendingOver = null;
+  held = null;
+}
+
+$('newedit').onclick = async () => {
+  working = true;
+  refreshButtons();
+  try {
+    const go = await okToReplace('Clear and start a new edit?', 'Stop it and clear');
+    if (!go) return;
+    if (go === 'stop' && session?.job && !(await stopJob(session.job, { forClear: true }))) return;
+    await releaseClaim();
+    const cleared = session?.sid;
+    const r = await fetch(userdata(SESSION_FILE), { method: 'DELETE' }).catch(() => null);
+    if (!r || (!r.ok && r.status !== 404)) {
+      problem(`Couldn't clear the shared edit (${r ? r.status : 'no answer'}). Try again.`, () => $('newedit').click());
+      return;
+    }
+    // A write that started before the Clear and lands after it would bring the old session back: cleared again.
+    if (cleared) unconfirmed.push({ cleared, until: Date.now() + RECHECK_MS, tries: 0 });
+    session = null;
+    serverRev = 0;
+    await reset();
+    problem('');
+    status('Cleared. Choose a photo to start a new edit.');
+    showShared();
+  } finally {
+    working = false;
+    refreshButtons();
+    schedulePoll(0);
+  }
+};
+
+// ---- start ----
+(async () => {
+  const s = await readSession();
+  if (s === undefined) setText($('server'), 'server not answering');
+  else if (s) await adopt(s, true);
+  else { showShared(); status('Choose a photo to start.'); }
+  refreshButtons();
+  showDetail();
+  schedulePoll(watch ? 0 : POLL_IDLE_MS);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,189 @@
+/*
+ * The chat list's motion (views/ChatSidebar.tsx, ChatRow.tsx, GroupFold.tsx, NewChatMenu.tsx; the glides themselves are
+ * views/ChatListMotion.ts). Imported by motion.css, whose rules, tokens and Reduce Motion policy this follows: whatever
+ * moves is in the `no-preference` block, and under Reduce Motion it's a fade of --dur-fade or nothing.
+ *
+ * Never animated: the drawer's scroll position when it opens again, search results as you type, and a focus move
+ * (focus goes back on a pinned row's ⋯ at once, wherever the row is drawn for the moment).
+ */
+
+/* ------------------------------------------------------------ both ways: where things are, never movement */
+
+/*
+ * The list is the box its lines are placed in: a line leaving is copied where it was (motion.ts `leave`), and its copy
+ * scrolls and is clipped with the list. A row's place in it is read from there too, without any glide (ChatRow.tsx
+ * brings a row put back in focus into view).
+ */
+.csb-scroll {
+  position: relative;
+}
+/*
+ * The list's own colour under each of its lines, so a line gliding over another (a chat going up to Pinned, rows sliding
+ * down to make room for a row's options) covers it rather than mixing two lines' words.
+ */
+.chat-sidebar {
+  --csb-bg: var(--bg);
+}
+.chat-sidebar.drawer {
+  --csb-bg: #0a0a0b;
+}
+.csb-scroll :is(.csb-item:not(.open), .csb-group-head, .csb-empty, .csb-more, .csb-fold-said) {
+  background-color: var(--csb-bg);
+}
+/* A whole group leaving (the last pinned chat unpinned): its copy fades, without the rows that only moved elsewhere. */
+[data-ghost] [data-staying] {
+  visibility: hidden;
+}
+/* A group's fold control: one chevron, pointing at the rows when they show (GroupFold.tsx). */
+.csb-fold[aria-expanded="true"] svg {
+  transform: rotate(90deg);
+}
+/* A step of the New chat menu coming in from the side is clipped by the menu rather than widening it. */
+.csb-new-menu {
+  overflow-x: hidden;
+}
+/* Closed, the menu's copy shrinks back into the button above it. */
+.csb-new-menu[data-ghost] {
+  transform-origin: 50% 0;
+}
+
+/* ------------------------------------------------------------ with motion */
+
+@media (prefers-reduced-motion: no-preference) {
+  /* ---- Press: rows and the list's own buttons shrink a touch while held (motion.css does .btn and .icon-btn). */
+  .csb-chat,
+  button.csb-agent,
+  .csb-link,
+  .csb-waiting,
+  .csb-storage,
+  .nc-item {
+    --press: var(--press-card);
+  }
+  .csb-brand,
+  .csb-more,
+  .csb-tray-btn {
+    --press: var(--press-button);
+  }
+  :is(.csb-chat, button.csb-agent, .csb-link, .csb-waiting, .csb-storage, .nc-item, .csb-brand, .csb-more, .csb-tray-btn) {
+    transition:
+      background-color var(--dur-paint) var(--ease-fade),
+      color var(--dur-paint) var(--ease-fade),
+      scale var(--dur-press-out) var(--ease-bouncy);
+  }
+  /* In the list (a scroller), a moment's wait first: a finger that starts a scroll on a row never shrinks it. */
+  :is(.csb-chat, button.csb-agent, .csb-link, .csb-waiting, .csb-storage, .nc-item, .csb-brand, .csb-more, .csb-tray-btn):active:not(:disabled):not([aria-disabled="true"]) {
+    scale: var(--press);
+    transition:
+      background-color var(--dur-paint) var(--ease-fade),
+      color var(--dur-paint) var(--ease-fade),
+      scale var(--dur-press-in) var(--ease-fade) 60ms;
+  }
+
+  /* ---- A row's options drop in under it (the rows below glide down to make room: ChatListMotion.ts). */
+  .csb-row-tray {
+    animation: m-drop-in var(--dur-enter) var(--ease-snappy);
+  }
+
+  /* ---- Folding: the chevron turns (the rows fade, and the groups below glide up: ChatListMotion.ts). */
+  .csb-fold svg {
+    transition: transform var(--dur-rotate) var(--ease-smooth);
+  }
+
+  /* ---- A dot or a count that comes on while the list (or the screen) is up pops: a reply, an agent starting work,
+     a question waiting. Never one drawn with the list. */
+  .chat-sidebar .m-pop,
+  .sidebar-btn .m-pop {
+    animation: m-pop-in var(--dur-badge) var(--ease-bouncy);
+  }
+  .chat-sidebar .csb-dot.busy.m-pop {
+    animation:
+      m-pop-in var(--dur-badge) var(--ease-bouncy),
+      csb-spin 1s linear infinite;
+  }
+
+  /*
+   * ---- The New chat menu comes down a touch out of its button as it fades in, at its full size (its rows are 44 px from
+   * the first frame), in place by 120 ms like the chat's menus; a step slides in from the side it's heading to and fades.
+   */
+  .csb-new-menu {
+    animation: csb-menu-in var(--dur-menu-in) var(--ease-snappy);
+  }
+  .nc-step.fwd {
+    animation: csb-step-fwd var(--dur-enter) var(--ease-snappy);
+  }
+  .nc-step.back {
+    animation: csb-step-back var(--dur-enter) var(--ease-snappy);
+  }
+}
+
+@keyframes csb-menu-in {
+  from {
+    opacity: 0;
+    translate: 0 -8px;
+  }
+}
+@keyframes csb-step-fwd {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+  to {
+    transform: translateX(0px);
+  }
+}
+@keyframes csb-step-back {
+  from {
+    opacity: 0;
+    transform: translateX(-16px);
+  }
+  to {
+    transform: translateX(0px);
+  }
+}
+
+/* ------------------------------------------------------------ Reduce Motion */
+
+@media (prefers-reduced-motion: reduce) {
+  /*
+   * What comes in fades in, 150 ms, under the name it moves by with motion (these keyframes are a fade here; m-drop-in's
+   * and m-pop-in's are in motion.css), so turning the setting on or off never plays it again. Nothing slides, pops or
+   * turns, and nothing that goes leaves a copy.
+   */
+  @keyframes csb-menu-in {
+    from {
+      opacity: 0;
+    }
+  }
+  @keyframes csb-step-fwd {
+    from {
+      opacity: 0;
+    }
+  }
+  @keyframes csb-step-back {
+    from {
+      opacity: 0;
+    }
+  }
+  .csb-row-tray {
+    animation: m-drop-in var(--dur-fade) var(--ease-fade);
+  }
+  /* A dot or a count simply shows (pops are off): the same animation, for no time at all, so it's never drawn. */
+  .chat-sidebar .m-pop,
+  .sidebar-btn .m-pop,
+  .chat-sidebar .csb-dot.busy.m-pop {
+    animation: m-pop-in 0s;
+  }
+  .csb-new-menu {
+    animation: csb-menu-in var(--dur-fade) var(--ease-fade);
+  }
+  .nc-step.fwd {
+    animation: csb-step-fwd var(--dur-fade) var(--ease-fade);
+  }
+  .nc-step.back {
+    animation: csb-step-back var(--dur-fade) var(--ease-fade);
+  }
+  /* Held down: dimmed, nothing moves. */
+  :is(.csb-chat, button.csb-agent, .csb-link, .csb-waiting, .csb-storage, .nc-item, .csb-brand, .csb-more, .csb-tray-btn):active:not(:disabled):not([aria-disabled="true"]) {
+    opacity: 0.7;
+  }
+}

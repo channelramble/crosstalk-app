@@ -1,0 +1,31 @@
+[package]
+name = "crosstalk"
+version = "0.1.0"
+description = "One group chat for all your coding agents"
+edition = "2021"
+
+[lib]
+name = "crosstalk_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-notification = "2"
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true
+
+# Xcode 27's strip corrupts proc-macro dylibs built with MACOSX_DEPLOYMENT_TARGET set (which Tauri always sets),
+# making rustc report "can't find crate for `*_macros`". Build-time tools don't need stripping.
+[profile.release.build-override]
+strip = false

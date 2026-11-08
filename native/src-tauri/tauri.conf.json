@@ -1,0 +1,58 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Crosstalk",
+  "version": "0.1.0",
+  "identifier": "com.channelramble.crosstalk",
+  "build": {
+    "frontendDist": "../../web/dist",
+    "devUrl": "http://127.0.0.1:5180",
+    "beforeBuildCommand": "cd ../web && bun run build"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Crosstalk",
+        "width": 1240,
+        "height": 820,
+        "minWidth": 380,
+        "minHeight": 560,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "category": "DeveloperTool",
+    "shortDescription": "One group chat for all your coding agents",
+    "longDescription": "Crosstalk puts Claude Code, Codex, Muse Code and other coding agents in one group chat on your own server, using your own subscriptions.",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "macOS": {
+      "minimumSystemVersion": "13.0",
+      "signingIdentity": "-"
+    },
+    "iOS": {
+      "minimumSystemVersion": "16.4"
+    },
+    "android": {
+      "minSdkVersion": 26
+    },
+    "windows": {
+      "nsis": {
+        "compression": "zlib",
+        "installMode": "currentUser"
+      }
+    }
+  }
+}

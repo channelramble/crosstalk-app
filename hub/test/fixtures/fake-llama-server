@@ -1,0 +1,171 @@
+#!/usr/bin/env bun
+// Stand-in for llama.cpp's llama-server (b11669) in the model pool's tests, packed into a fake release tarball.
+// `--list-devices` prints the real format (FAKE_LLAMA_DEVICES=none: "(none)"); with --rpc it connects to each helper
+// first and aborts like the real one when one isn't there, lists one RPC device per device each helper serves
+// (FAKE_LLAMA_RPC_DEVICES, {"<address>": count}, 1 by default), and never finishes for a helper in FAKE_LLAMA_RPC_HANG
+// (addresses, comma-separated): one another client holds doesn't answer. Otherwise it serves /health (503 while "loading", then
+// 200), and with the API key from LLAMA_API_KEY /props (n_ctx), /v1/models (the alias) and /metrics (the speeds in
+// FAKE_LLAMA_SPEED, "<prompt>,<generation>" tokens per second; 0 before any reply). A model file starting with "BROKEN"
+// fails to load. Every run is noted in FAKE_LLAMA_LOG (one JSON line). The FAKE_LLAMA_* settings can also be put in a
+// JSON file beside the program (<its path>.json): Settings → Local models starts servers with a short environment.
+// It ends by itself once whoever started it has gone.
+import { appendFileSync, readFileSync } from "node:fs";
+
+// Local models runs it in a process group of its own (the pool, in the hub's), and nothing ends it when a test run is
+// killed before its afterEach (hub/test/standins.ts): once whoever started it is gone, so is this.
+const starter = process.ppid;
+setInterval(() => {
+  if (process.ppid !== starter) process.exit(0);
+}, 500).unref();
+
+const beside: Record<string, string> = (() => {
+  try {
+    return JSON.parse(readFileSync(`${process.argv[1]}.json`, "utf8"));
+  } catch {
+    return {};
+  }
+})();
+const setting = (name: string): string | undefined => process.env[name] ?? beside[name];
+
+const args = process.argv.slice(2);
+const opt = (...names: string[]) => {
+  for (const n of names) {
+    const i = args.indexOf(n);
+    if (i >= 0) return args[i + 1];
+  }
+  return undefined;
+};
+const logFile = setting("FAKE_LLAMA_LOG");
+if (logFile) appendFileSync(logFile, JSON.stringify({ argv: args, cwd: process.cwd(), pid: process.pid, apiKey: process.env.LLAMA_API_KEY ?? null, cache: process.env.LLAMA_CACHE ?? null, crosstalkEnv: Object.keys(process.env).filter((k) => k.startsWith("CROSSTALK_")), env: Object.keys(process.env).sort() }) + "\n");
+
+const rpc = (opt("--rpc") ?? "").split(",").filter(Boolean);
+
+async function reachable(addr: string): Promise<boolean> {
+  const [host, port] = addr.split(":");
+  // Tests only run helpers on loopback. Any other address (a made-up 100.x one) counts as unreachable without trying:
+  // on a Mac running Tailscale, a real connection would go out into the tailnet.
+  if (host !== "127.0.0.1") return false;
+  try {
+    const socket = await Bun.connect({ hostname: host, port: Number(port), socket: { data() {}, error() {} } });
+    socket.end();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function connectHelpers() {
+  for (const addr of rpc) {
+    if (!(await reachable(addr))) {
+      console.error(`/Users/runner/work/llama.cpp/llama.cpp/ggml/src/ggml-rpc/ggml-rpc.cpp:650: Failed to connect to ${addr}`);
+      console.error("");
+      console.error("WARNING: Using native backtrace. Set GGML_BACKTRACE_LLDB for more info.");
+      console.error("0   libggml-base.0.27.0.dylib           0x00000001053013f0 ggml_print_backtrace + 276");
+      console.error("1   libggml-base.0.27.0.dylib           0x00000001053723f0 ggml_abort + 156");
+      process.exit(134);
+    }
+  }
+}
+
+if (args.includes("--list-devices")) {
+  const hang = (setting("FAKE_LLAMA_RPC_HANG") ?? "").split(",").filter(Boolean);
+  if (rpc.some((a) => hang.includes(a))) await new Promise(() => setInterval(() => {}, 60_000));
+  await connectHelpers();
+  let perHelper: Record<string, number> = {};
+  try {
+    perHelper = JSON.parse(setting("FAKE_LLAMA_RPC_DEVICES") ?? "{}");
+  } catch {
+    // one each
+  }
+  const lines = ["Available devices:"];
+  if (setting("FAKE_LLAMA_DEVICES") === "none" && !rpc.length) lines.push("  (none)");
+  else {
+    if (setting("FAKE_LLAMA_DEVICES") !== "none") lines.push("  MTL0: Apple M4 (12124 MiB, 12123 MiB free)", "  BLAS: Accelerate (0 MiB, 0 MiB free)");
+    let n = 0;
+    for (const addr of rpc) for (let j = 0; j < (perHelper[addr] ?? 1); j++) lines.push(`  RPC${n++}: ${addr} (16304 MiB, 15890 MiB free)`);
+  }
+  console.log(lines.join("\n"));
+  process.exit(0);
+}
+
+const model = opt("-m", "--model") ?? "";
+const ctx = Number(opt("-c", "--ctx-size") ?? 0) || 4096;
+const alias = opt("-a", "--alias") ?? "model";
+const host = opt("--host") ?? "127.0.0.1";
+const port = Number(opt("--port") ?? 9931);
+const key = process.env.LLAMA_API_KEY ?? null;
+const loadMs = Number(setting("FAKE_LLAMA_LOAD_MS") ?? 600);
+const t = () => `0.00.${String(Math.floor(performance.now())).padStart(3, "0")}.000`;
+
+console.error(`${t()} I srv  llama_server: initializing ...`);
+await connectHelpers();
+console.error(`${t()} I srv    load_model: loading model '${model}'`);
+let head = "";
+try {
+  head = readFileSync(model, "utf8").slice(0, 16);
+} catch {
+  console.error(`${t()} E gguf_init_from_file: failed to open GGUF file '${model}' (No such file or directory)`);
+  console.error(`${t()} E srv  llama_server: exiting due to model loading error`);
+  process.exit(1);
+}
+if (head.startsWith("BROKEN")) {
+  console.error(`${t()} E llama_model_load: error loading model: llama_model_loader: failed to load model from ${model}`);
+  console.error(`${t()} E srv    load_model: failed to load model, '${model}'`);
+  console.error(`${t()} I srv    operator(): operator(): cleaning up before exit...`);
+  console.error(`${t()} E srv  llama_server: exiting due to model loading error`);
+  process.exit(1);
+}
+
+const started = Date.now();
+const authorized = (req: Request) => !key || req.headers.get("authorization") === `Bearer ${key}`;
+const unauthorized = () => Response.json({ error: { message: "Invalid API Key", type: "authentication_error", code: 401 } }, { status: 401 });
+let server;
+try {
+  server = Bun.serve({
+    hostname: host,
+    port,
+    fetch(req) {
+      const path = new URL(req.url).pathname;
+      if (path === "/health") {
+        return Date.now() - started < loadMs ? Response.json({ error: { code: 503, message: "Loading model", type: "unavailable_error" } }, { status: 503 }) : Response.json({ status: "ok" });
+      }
+      if (!authorized(req)) return unauthorized();
+      if (path === "/props") return Response.json({ default_generation_settings: { n_ctx: Number(setting("FAKE_LLAMA_FIT_CTX") ?? ctx) }, total_slots: 1, model_alias: alias, model_path: model });
+      if (path === "/v1/models") return Response.json({ object: "list", data: [{ id: alias, object: "model", owned_by: "llamacpp" }] });
+      if (path === "/metrics") {
+        const [prompt = 0, generation = 0] = (setting("FAKE_LLAMA_SPEED") ?? "0,0").split(",").map(Number);
+        return new Response(
+          [
+            "# HELP llamacpp:prompt_tokens_total Number of prompt tokens processed.",
+            "# TYPE llamacpp:prompt_tokens_total counter",
+            "llamacpp:prompt_tokens_total 32",
+            "# HELP llamacpp:prompt_tokens_seconds Average prompt throughput in tokens/s.",
+            "# TYPE llamacpp:prompt_tokens_seconds gauge",
+            `llamacpp:prompt_tokens_seconds ${prompt}`,
+            "# HELP llamacpp:predicted_tokens_seconds Average generation throughput in tokens/s.",
+            "# TYPE llamacpp:predicted_tokens_seconds gauge",
+            `llamacpp:predicted_tokens_seconds ${generation}`,
+            "",
+          ].join("\n"),
+          { headers: { "content-type": "text/plain; version=0.0.4" } },
+        );
+      }
+      return Response.json({ error: { message: "File Not Found", code: 404 } }, { status: 404 });
+    },
+  });
+} catch {
+  console.error(`${t()} E srv         start: couldn't bind HTTP server socket, hostname: ${host}, port: ${port}`);
+  console.error(`${t()} E srv  llama_server: exiting due to HTTP server error`);
+  process.exit(1);
+}
+setTimeout(() => {
+  console.error(`${t()} I srv  llama_server: model loaded`);
+  console.error(`${t()} I srv  llama_server: listening on http://${host}:${port}`);
+}, loadMs);
+for (const signal of ["SIGTERM", "SIGINT"] as const) {
+  process.on(signal, () => {
+    console.error(`${t()} I srv    operator(): operator(): cleaning up before exit...`);
+    server.stop(true);
+    process.exit(0);
+  });
+}

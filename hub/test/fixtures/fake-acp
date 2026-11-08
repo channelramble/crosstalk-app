@@ -1,0 +1,76 @@
+#!/usr/bin/env bun
+// Minimal Agent Client Protocol agent (like `gemini --acp`) for driver tests.
+const out = (o: unknown) => process.stdout.write(JSON.stringify(o) + "\n");
+let nextId = 1000;
+const waiting = new Map<number, (r: any) => void>(); // eslint-disable-line @typescript-eslint/no-explicit-any
+let cancelled = false;
+let frozen = false;
+
+function request(method: string, params: unknown): Promise<any> { // eslint-disable-line @typescript-eslint/no-explicit-any
+  const id = nextId++;
+  out({ jsonrpc: "2.0", id, method, params });
+  return new Promise((res) => waiting.set(id, res));
+}
+const update = (sessionId: string, u: unknown) => out({ jsonrpc: "2.0", method: "session/update", params: { sessionId, update: u } });
+
+async function prompt(id: number, params: any) { // eslint-disable-line @typescript-eslint/no-explicit-any
+  const sid = params.sessionId;
+  const text = params.prompt.map((p: { text?: string }) => p.text ?? "").join("");
+  cancelled = false;
+  update(sid, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Checking the project." } });
+  update(sid, { sessionUpdate: "plan", entries: [{ content: "Read files", status: "completed" }, { content: "Edit config", status: "in_progress" }] });
+  update(sid, { sessionUpdate: "tool_call", toolCallId: "t1", title: "Edit config.json", kind: "edit", status: "pending", content: [{ type: "diff", path: "config.json", oldText: "a: 1", newText: "a: 2" }] });
+  const perm = await request("session/request_permission", {
+    sessionId: sid,
+    toolCall: { toolCallId: "t1", title: "Edit config.json", kind: "edit" },
+    options: [
+      { optionId: "yes", name: "Allow", kind: "allow_once" },
+      { optionId: "always", name: "Always", kind: "allow_always" },
+      { optionId: "no", name: "Reject", kind: "reject_once" },
+    ],
+  });
+  const chosen = perm.outcome?.optionId;
+  update(sid, { sessionUpdate: "tool_call_update", toolCallId: "t1", status: chosen === "no" ? "failed" : "completed", content: [{ type: "content", content: { type: "text", text: chosen === "no" ? "rejected" : "applied" } }] });
+  if (text.includes("WAIT")) await new Promise((r) => setTimeout(r, 2000));
+  if (cancelled) return out({ jsonrpc: "2.0", id, result: { stopReason: "cancelled" } });
+  update(sid, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: ` Edited with option ${chosen}.` } });
+  out({ jsonrpc: "2.0", id, result: { stopReason: "end_turn" } });
+}
+
+let buf = "";
+for await (const chunk of Bun.stdin.stream()) {
+  buf += new TextDecoder().decode(chunk);
+  let nl: number;
+  while ((nl = buf.indexOf("\n")) >= 0) {
+    const line = buf.slice(0, nl);
+    buf = buf.slice(nl + 1);
+    if (!line.trim() || frozen) continue;
+    const m = JSON.parse(line);
+    if (m.id !== undefined && waiting.has(m.id) && !m.method) {
+      waiting.get(m.id)!(m.result);
+      waiting.delete(m.id);
+      continue;
+    }
+    switch (m.method) {
+      case "initialize":
+        out({ jsonrpc: "2.0", id: m.id, result: { protocolVersion: 1, agentCapabilities: { loadSession: false }, authMethods: [] } });
+        break;
+      case "session/new":
+        out({ jsonrpc: "2.0", id: m.id, result: { sessionId: "sess-1" } });
+        break;
+      case "session/prompt":
+        // FAKE_ACP_FREEZE_MARK: the first prompt freezes like a stuck agent (ignores SIGTERM, answers nothing more).
+        if (process.env.FAKE_ACP_FREEZE_MARK && !require("node:fs").existsSync(process.env.FAKE_ACP_FREEZE_MARK)) {
+          require("node:fs").writeFileSync(process.env.FAKE_ACP_FREEZE_MARK, String(process.pid));
+          process.on("SIGTERM", () => {});
+          frozen = true;
+          break;
+        }
+        void prompt(m.id, m.params);
+        break;
+      case "session/cancel":
+        cancelled = true;
+        break;
+    }
+  }
+}

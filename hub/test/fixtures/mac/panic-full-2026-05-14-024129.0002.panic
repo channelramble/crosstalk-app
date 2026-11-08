@@ -1,0 +1,11 @@
+{"bug_type": "210", "timestamp": "2026-05-14 02:41:29.00 -0700", "os_version": "macOS 27.0.1 (26A434)", "roots_installed": 0, "incident_id": "00000000-0000-0000-0000-000000000000"}
+{
+  "product": "Mac14,3",
+  "panicString": "panic(cpu 0 caller 0xfffffe0031d27b58): \"dart-usb1 (0xfffffe1f8a3c4000): DART(DARTBLK) error: SID 1 read protect exception on read of DVA 0x10000a12000 (SEG 0 PTE 0x3b) ERROR_SID_SUMMARY 0x00003002 TIME 0x5d1e04a7b3c20 TTE 0x3a8c02f1e7d1 AXI_ID 0\" @AppleT8110DART.cpp:2386\nDebugger message: panic\nMemory ID: 0xff\nOS release type: User\nOS version: 26A434\nKernel version: Darwin Kernel Version 27.0.0: Tue May 12 21:02:57 PDT 2026; root:xnu-13432.1.9~1/RELEASE_ARM64_T8112\nFileset Kernelcache UUID: 0A1B2C3D4E5F60718293A4B5C6D7E8F9\nKernel UUID: 11111111-2222-3333-4444-555555555555\nBoot session UUID: AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE\niBoot Stage 1 version: mBoot-20457.1.29\niBoot version: mBoot-20457.1.29\nsecure boot?: YES\nroots installed: 0\nPaniclog version: 16\nDebug Header address: 0xfffffe0026c91000\nDebug Header entry count: 3\nTXM load address: 0xfffffe0036b90000\nTXM UUID: 22222222-3333-4444-5555-666666666666\nDebug Header kernelcache load address: 0xfffffe0046b90000\nDebug Header kernelcache UUID: 0A1B2C3D-4E5F-6071-8293-A4B5C6D7E8F9\nSPTM version: SPTM-820.0.22|2026-05-09:13:06:06.975686|\nSPTM load address: 0xfffffe0026b90000\nSPTM UUID: 33333333-4444-5555-6666-777777777777\nKernelCache slide: 0x000000003fb8c000\nKernelCache base:  0xfffffe0046b90000\nKernel slide:      0x000000003fb94000\nKernel text base:  0xfffffe0046b98000\nKernel text exec slide: 0x00000000447b4000\nKernel text exec base:  0xfffffe004b7b8000\nmach_absolute_time: 0x2bdc05943ea0\nEpoch Time:        sec       usec\n  Boot    : 0x69fe9ec3 0x00064ecf\n  Sleep   : 0x00000000 0x00000000\n  Wake    : 0x00000000 0x00000000\n  Calendar: 0x6a0598b3 0x0005cc60\n\n",
+  "date": "2026-05-14 02:41:29.42 -0700",
+  "bug_type": "210"
+}
+
+Model: Mac14,3, BootROM 20457.1.29, proc 8:4:4:0 processors, 24 GB, SMC 
+Graphics: Apple M2, Apple M2, Built-In
+Bluetooth: Version (null), 0 services, 0 devices, 0 incoming serial ports

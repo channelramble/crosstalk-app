@@ -1,0 +1,102 @@
+{
+  "SPUSBHostDataType" : [
+    {
+      "_items" : [
+        {
+          "_name" : "USB3 Gen2 Hub",
+          "USBDeviceKeyLinkSpeed" : "10 Gb/s",
+          "USBDeviceKeyProductID" : "0x800c",
+          "USBDeviceKeyVendorID" : "0x05ac",
+          "USBDeviceKeyVendorName" : "Apple",
+          "USBKeyHardwareType" : "Built-in",
+          "USBKeyLocationID" : "0x02200000"
+        },
+        {
+          "_name" : "USB2 Hub",
+          "USBDeviceKeyLinkSpeed" : "480 Mb/s",
+          "USBDeviceKeyProductID" : "0x800b",
+          "USBDeviceKeyVendorID" : "0x05ac",
+          "USBDeviceKeyVendorName" : "Apple",
+          "USBKeyHardwareType" : "Built-in",
+          "USBKeyLocationID" : "0x02100000"
+        }
+      ],
+      "_name" : "USB 3.1 Bus",
+      "Driver" : "AppleT8112USBXHCI",
+      "USBKeyHardwareType" : "Built-in",
+      "USBKeyLocationID" : "0x02000000"
+    },
+    {
+      "_name" : "USB 3.1 Bus",
+      "Driver" : "AppleT8112USBXHCI",
+      "USBKeyHardwareType" : "Built-in",
+      "USBKeyLocationID" : "0x00000000"
+    },
+    {
+      "_items" : [
+        {
+          "_name" : "Portable SSD",
+          "USBDeviceKeyLinkSpeed" : "10 Gb/s",
+          "USBDeviceKeyPowerAllocation" : "4.5 W (896 mA)",
+          "USBDeviceKeyProductID" : "0x9210",
+          "USBDeviceKeyVendorID" : "0x0bda",
+          "USBDeviceKeyVendorName" : "Sabrent",
+          "USBKeyHardwareType" : "Removable",
+          "USBKeyLocationID" : "0x01100000"
+        },
+        {
+          "_name" : "Card Reader",
+          "USBDeviceKeyLinkSpeed" : "480 Mb/s",
+          "USBDeviceKeyPowerAllocation" : "0.5 W (100 mA)",
+          "USBDeviceKeyProductID" : "0x0749",
+          "USBDeviceKeyVendorID" : "0x05e3",
+          "USBDeviceKeyVendorName" : "Generic",
+          "USBKeyHardwareType" : "Removable",
+          "USBKeyLocationID" : "0x01200000"
+        }
+      ],
+      "_name" : "USB 3.1 Bus",
+      "Driver" : "AppleT8112USBXHCI",
+      "USBKeyHardwareType" : "Built-in",
+      "USBKeyLocationID" : "0x01000000"
+    },
+    {
+      "_items" : [
+        {
+          "_items" : [
+            {
+              "_name" : "USB Billboard Device",
+              "USBDeviceKeyLinkSpeed" : "12 Mb/s",
+              "USBDeviceKeyPowerAllocation" : "0.5 W (100 mA)",
+              "USBDeviceKeyProductID" : "0x0102",
+              "USBDeviceKeyVendorID" : "0x2109",
+              "USBDeviceKeyVendorName" : "Not Provided",
+              "USBKeyHardwareType" : "Removable",
+              "USBKeyLocationID" : "0x03120000"
+            },
+            {
+              "_name" : "Flash Drive",
+              "USBDeviceKeyLinkSpeed" : "480 Mb/s",
+              "USBDeviceKeyPowerAllocation" : "1.5 W (300 mA)",
+              "USBDeviceKeyProductID" : "0x1666",
+              "USBDeviceKeyVendorID" : "0x0951",
+              "USBDeviceKeyVendorName" : "Kingston",
+              "USBKeyHardwareType" : "Removable",
+              "USBKeyLocationID" : "0x03140000"
+            }
+          ],
+          "_name" : "USB2.0 Hub",
+          "USBDeviceKeyLinkSpeed" : "480 Mb/s",
+          "USBDeviceKeyProductID" : "0x2817",
+          "USBDeviceKeyVendorID" : "0x2109",
+          "USBKeyHardwareType" : "Removable",
+          "USBKeyLocationID" : "0x03100000"
+        }
+      ],
+      "_name" : "USB 3.1 Bus",
+      "Driver" : "AppleT8112USBXHCI",
+      "USBKeyHardwareType" : "Built-in",
+      "USBKeyLocationID" : "0x03000000"
+    }
+  ]
+}

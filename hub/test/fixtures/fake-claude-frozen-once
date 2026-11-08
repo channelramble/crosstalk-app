@@ -1,0 +1,12 @@
+#!/bin/sh
+# The first run freezes like a stuck Claude Code: it ignores SIGINT and SIGTERM and never answers (only SIGKILL ends
+# it, or whoever started it going away: a test run killed before it could end this). Later runs behave like the normal
+# fake.
+if [ ! -e "$FAKE_FREEZE_MARK" ]; then
+  echo $$ > "$FAKE_FREEZE_MARK"
+  trap '' INT TERM
+  echo '{"type":"system","subtype":"init","session_id":"frozen-session"}'
+  while kill -0 "$PPID" 2>/dev/null; do sleep 1; done
+  exit 0
+fi
+exec "$(dirname "$0")/fake-claude" "$@"

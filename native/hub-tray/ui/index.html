@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="dark" />
+    <title>Crosstalk Hub</title>
+    <link rel="stylesheet" href="styles.css" />
+    <script src="app.js" defer></script>
+  </head>
+  <body>
+    <main id="app">
+      <header class="top">
+        <img class="logo" src="icon.png" alt="" width="28" height="28" />
+        <h1>Crosstalk Hub</h1>
+        <span id="trial" class="chip" hidden title="A stand-in service: nothing real is started, stopped or installed">Trial</span>
+      </header>
+
+      <div id="notice" class="notice" role="alert" hidden>
+        <p id="notice-text"></p>
+        <div id="notice-actions" class="row wrap"></div>
+      </div>
+
+      <!-- Home: how the hub is, and what can be done now. -->
+      <section class="view" data-view="home" aria-labelledby="status-title">
+        <div class="card" aria-live="polite">
+          <div class="status-head">
+            <span id="status-dot" class="dot" data-tone="off" aria-hidden="true"></span>
+            <h2 id="status-title" tabindex="-1">Checking…</h2>
+          </div>
+          <p id="status-detail" class="muted"></p>
+          <dl class="facts">
+            <div id="row-version"><dt>Version</dt><dd id="fact-version">–</dd></div>
+            <div id="row-address">
+              <dt>Address</dt>
+              <dd class="address"><span id="fact-address" class="mono"></span><button class="btn small" type="button" data-action="copy-address">Copy</button></dd>
+            </div>
+            <div id="row-restart" hidden><dt>Restart</dt><dd id="fact-restart"></dd></div>
+          </dl>
+        </div>
+
+        <div class="stack">
+          <button class="btn primary" type="button" data-action="open" data-needs="open">Open Crosstalk</button>
+          <button id="home-install" class="btn primary" type="button" data-action="go-install" data-needs="install">Install Crosstalk…</button>
+          <button class="btn" type="button" data-action="go-pair" data-needs="pair">Pair a phone</button>
+          <button class="btn" type="button" data-action="start" data-needs="start">Start</button>
+          <button class="btn" type="button" data-action="go-restart" data-needs="restart">Restart…</button>
+          <button class="btn" type="button" data-action="go-restart-now" data-needs="restartNow" data-unless="restart">Restart now…</button>
+          <button class="btn" type="button" data-action="cancel-restart" data-needs="cancelRestart">Cancel the waiting restart</button>
+          <button class="btn danger-outline" type="button" data-action="go-stop" data-needs="stop">Stop…</button>
+          <button class="btn" type="button" data-action="go-logs" data-needs="logs">Show logs</button>
+        </div>
+
+        <div class="card setting">
+          <label class="switch">
+            <input id="login-toggle" type="checkbox" role="switch" />
+            <span class="switch-text">
+              <span>Start this app at login</span>
+              <span id="login-note" class="tiny muted"></span>
+            </span>
+          </label>
+        </div>
+
+        <footer class="foot">
+          <button class="btn ghost" type="button" data-action="hide">Hide window</button>
+          <button class="btn ghost" type="button" data-action="quit">Quit (Crosstalk keeps running)</button>
+        </footer>
+      </section>
+
+      <!-- Pair a phone: a one-time code and its QR. -->
+      <section class="view" data-view="pair" aria-labelledby="pair-title" hidden>
+        <div class="bar"><button class="btn ghost back" type="button" data-action="home">‹ Back</button></div>
+        <h2 id="pair-title" tabindex="-1">Pair a phone</h2>
+        <p id="pair-busy" class="muted" role="status">Making a code…</p>
+        <div id="pair-result" class="center" hidden>
+          <p id="pair-how" class="small muted">Scan this with the phone's camera, or open the Crosstalk app and enter the address and code.</p>
+          <img id="pair-qr" class="qr" alt="Pairing QR code" width="220" height="220" hidden />
+          <div id="pair-code" class="code-big" aria-label="Pairing code"></div>
+          <div id="pair-base" class="small mono wrap-anywhere"></div>
+          <p id="pair-expires" class="tiny muted"></p>
+          <p id="pair-local" class="small notice-inline" hidden>
+            This hub isn't on your Tailscale network yet, so a phone can't reach it. Set up Tailscale on this computer and the phone, then make a new code.
+          </p>
+          <div class="row center wrap">
+            <button class="btn small" type="button" data-action="copy-link" id="pair-copy">Copy link</button>
+            <button class="btn small" type="button" data-action="pair-again">Make another</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- Stop: asks twice. -->
+      <section class="view" data-view="stop" aria-labelledby="stop-title" hidden>
+        <div class="bar"><button class="btn ghost back" type="button" data-action="home">‹ Back</button></div>
+        <h2 id="stop-title" tabindex="-1">Stop Crosstalk?</h2>
+        <div data-step="1">
+          <p>Your phone can't reach Crosstalk until you tap Start here, or <span class="next-start">until the next login</span>.</p>
+          <p class="muted">Replies that are running now stop.</p>
+          <div class="stack">
+            <button class="btn danger-outline" type="button" data-action="stop-1">Stop Crosstalk</button>
+            <button class="btn" type="button" data-action="home">Keep it running</button>
+          </div>
+        </div>
+        <div data-step="2" hidden>
+          <p class="strong">Are you sure? Agents replying now are cut off.</p>
+          <p class="small muted" data-if-waiting hidden>It also cancels the waiting restart.</p>
+          <div class="stack">
+            <button class="btn danger" type="button" data-action="stop-2">Yes, stop it</button>
+            <button class="btn" type="button" data-action="home">Keep it running</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- Restart: when it's quiet first; now asks twice. -->
+      <section class="view" data-view="restart" aria-labelledby="restart-title" hidden>
+        <div class="bar"><button class="btn ghost back" type="button" data-action="home">‹ Back</button></div>
+        <h2 id="restart-title" tabindex="-1">Restart Crosstalk</h2>
+        <div data-step="1">
+          <div id="restart-quiet-card" class="card">
+            <h3>When it's quiet</h3>
+            <p class="small muted">Waits until no replies have run and no helpers have written for five minutes, then restarts. Nothing is cut off. You can cancel it meanwhile.</p>
+            <button class="btn primary" type="button" data-action="restart-quiet">Restart when it's quiet</button>
+          </div>
+          <div class="card">
+            <h3>Now</h3>
+            <p class="small muted">Replies running now stop, and phones reconnect after a few seconds.</p>
+            <button class="btn danger-outline" type="button" data-action="restart-now-1">Restart now…</button>
+          </div>
+        </div>
+        <div data-step="2" hidden>
+          <p class="strong">Restart now? Agents replying now are cut off.</p>
+          <p class="small muted" data-if-waiting hidden>It also cancels the waiting restart.</p>
+          <div class="stack">
+            <button class="btn danger" type="button" data-action="restart-now-2">Yes, restart now</button>
+            <button class="btn" type="button" data-action="restart-quiet">Wait until it's quiet instead</button>
+            <button class="btn ghost" type="button" data-action="home">Cancel</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- Logs: the end of the hub's log. -->
+      <section class="view" data-view="logs" aria-labelledby="logs-title" hidden>
+        <div class="bar">
+          <button class="btn ghost back" type="button" data-action="home">‹ Back</button>
+          <button class="btn small" type="button" data-action="logs-refresh">Refresh</button>
+        </div>
+        <h2 id="logs-title" tabindex="-1">Logs</h2>
+        <p id="logs-source" class="tiny muted mono wrap-anywhere"></p>
+        <p id="logs-problem" class="small notice-inline" hidden></p>
+        <pre id="logs-text" class="log" tabindex="0" aria-label="The hub's log"></pre>
+        <div class="row wrap">
+          <button class="btn small" type="button" data-action="logs-open" id="logs-open">Open in Console</button>
+        </div>
+        <details id="logs-watcher" hidden>
+          <summary class="small">Restart helper's log</summary>
+          <pre id="logs-watcher-text" class="log short" tabindex="0"></pre>
+        </details>
+      </section>
+
+      <!-- Install: what changes, then the installer's own output. -->
+      <section class="view" data-view="install" aria-labelledby="install-title" hidden>
+        <div class="bar"><button class="btn ghost back" type="button" data-action="home">‹ Back</button></div>
+        <h2 id="install-title" tabindex="-1">Install Crosstalk</h2>
+        <div id="install-plan">
+          <p class="small muted">This sets up the hub on this computer, the same way the installer in the Crosstalk repo does. It changes:</p>
+          <ol id="install-steps" class="steps small"></ol>
+          <div id="install-choices"></div>
+          <p id="install-why-not" class="small notice-inline" hidden></p>
+          <div class="stack">
+            <button class="btn primary" type="button" data-action="install-run" id="install-run">Install</button>
+            <button class="btn ghost" type="button" data-action="home">Not now</button>
+          </div>
+        </div>
+        <div id="install-progress" hidden>
+          <p id="install-state" class="strong" role="status">Installing…</p>
+          <pre id="install-output" class="log" tabindex="0" aria-label="What the installer says"></pre>
+          <div id="install-after" class="stack" hidden></div>
+        </div>
+      </section>
+
+      <p id="toast" class="toast" role="status" aria-live="polite"></p>
+    </main>
+  </body>
+</html>

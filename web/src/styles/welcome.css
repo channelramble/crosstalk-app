@@ -1,0 +1,124 @@
+/* 0.5 welcome (track T9): this track's styles live here, not in styles.css. */
+
+/* The welcome card at the top of Home (views/WelcomeCard.tsx): three numbered steps, the next one with its button. */
+.welcome {
+  margin: 0 0 20px;
+}
+.welcome-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.page .welcome .welcome-title {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: 18px;
+}
+.welcome-lede {
+  margin: 2px 0 0;
+  color: var(--text-2);
+}
+.welcome-steps {
+  list-style: none;
+  margin: 16px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 16px;
+}
+.welcome-step {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  column-gap: 12px;
+}
+.welcome-mark {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 1px solid var(--sep-strong);
+  color: var(--text-2);
+  font-size: 13px;
+  font-weight: 650;
+}
+.welcome-step[data-done="true"] .welcome-mark {
+  border-color: transparent;
+  background: var(--green-2);
+  color: var(--green);
+}
+.welcome-body h3 {
+  margin: 4px 0 2px;
+  font-size: 15px;
+  line-height: 20px;
+}
+.welcome-step[data-done="true"] .welcome-body h3 {
+  color: var(--text-2);
+}
+.welcome-step[data-done="true"] .welcome-body p {
+  color: var(--text-3);
+}
+.welcome-body p {
+  margin: 0;
+  color: var(--text-2);
+  font-size: 14px;
+  line-height: 1.4;
+}
+.welcome-body .btn {
+  margin-top: 12px;
+}
+@media (max-width: 520px) {
+  .welcome-body .btn {
+    width: 100%;
+  }
+}
+/* Said to a screen reader only: a step's "done" is also its check mark. */
+.welcome-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* A "?" beside a heading or a label: its button stays on the line, and the sentence it opens takes a line of its own under it. */
+.tip-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 8px;
+}
+.tip-line .help-tip {
+  display: contents;
+}
+.tip-line .help-tip-text {
+  order: 9;
+  flex: 1 1 100%;
+  max-width: 60ch;
+  margin-top: 4px;
+  font-weight: 400;
+  letter-spacing: normal;
+  text-transform: none;
+}
+/* A button that belongs to the heading's section goes after the sentence the "?" opens, so the sentence stays right under the heading. */
+.tip-line > .tip-after {
+  order: 10;
+  margin-left: auto;
+}
+/* A Settings heading keeps its look (styles.css margins it, with !important); the line around it takes the space instead. */
+.tip-heading {
+  margin: 26px 0 10px;
+}
+.tip-heading > h2.settings-heading {
+  margin: 0 !important;
+}
+
+/* Step 1's buttons: each agent's Sign in, then another AI service, stacked on a phone. */
+.welcome-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}

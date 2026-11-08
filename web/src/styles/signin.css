@@ -1,0 +1,201 @@
+/* Signing an agent in again from the phone (views/SignIn.tsx). Nothing here moves: a card that comes into a chat drops in
+   by motion-chat.css (.m-drop), the sheet rises as every sheet does (motion.css), spinners turn by .spin. Every line
+   wraps, down to 320 px. */
+
+/* "Sign in to Claude Code on Mac mini", why, and its one button. */
+.signin-prompt {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 6px 10px;
+  padding: 12px;
+  border: 0.5px solid color-mix(in srgb, var(--orange) 45%, var(--sep));
+  border-radius: 14px;
+  background: var(--orange-2);
+  min-width: 0;
+}
+.signin-prompt-icon {
+  color: var(--orange);
+  margin-top: 1px;
+}
+.signin-prompt-text {
+  min-width: 0;
+}
+.signin-prompt-title {
+  font-weight: 650;
+  font-size: 14.5px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+.signin-prompt-line {
+  margin: 3px 0 0;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+.signin-prompt-btn {
+  grid-column: 2;
+  justify-self: start;
+  min-width: 96px;
+}
+/* In a failed reply, where its error would be. */
+.signin-prompt.reply {
+  margin: 2px 0 4px;
+  max-width: 520px;
+}
+/* In a chat that hasn't tried yet: under the replies, lined up with them. */
+.signin-prompt.card {
+  margin: 4px 0 8px 36px;
+  max-width: 520px;
+}
+/* On the agent's card in Settings → Agents. */
+.signin-prompt.callout {
+  margin: 8px 0 10px;
+}
+/* Under a setup checklist item. */
+.signin-prompt.row {
+  margin: 0 0 10px;
+  padding: 10px 12px;
+}
+.signin-prompt.row .signin-prompt-title {
+  font-size: 14px;
+}
+
+/* ---- The sheet */
+
+.signin-sheet {
+  min-width: 0;
+}
+/* What's happening now: one live region for the sheet's whole life. */
+.signin-words {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0 0 14px;
+  font-size: 14px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.signin-words > svg {
+  flex: none;
+  margin-top: 2px;
+}
+.signin-words.alert {
+  padding-left: 10px;
+  border-left: 3px solid var(--red);
+}
+.signin-words.alert > svg {
+  color: var(--red);
+}
+.signin-words.done {
+  font-weight: 600;
+}
+.signin-words.done > svg {
+  color: var(--green);
+}
+.signin-next {
+  margin: -6px 0 12px;
+  font-size: 13px;
+  color: var(--text-2);
+}
+.signin-steps {
+  margin: 0 0 6px;
+}
+.signin-steps > li {
+  padding-bottom: 14px;
+  min-width: 0;
+}
+/* The sign-in page: the biggest thing on the sheet (a button, not underlined text). */
+.signin-open {
+  white-space: normal;
+  text-align: center;
+  text-decoration: none;
+}
+.signin-under {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin-top: 8px;
+}
+.signin-under .help {
+  flex: 1 1 160px;
+  min-width: 0;
+}
+.signin-step-title {
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+/* A code to type on the page: large, and selectable whole. */
+.signin-code {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+.signin-code .code-big {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+/* The code the page gives back. */
+.signin-paste .field {
+  margin: 0 0 8px;
+}
+.signin-code-input {
+  letter-spacing: 0.02em;
+}
+.signin-note {
+  margin: 0 0 8px;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--orange);
+  overflow-wrap: anywhere;
+}
+.signin-paste-buttons {
+  gap: 8px;
+}
+.signin-paste-buttons > .btn {
+  flex: 1 1 0;
+  min-width: 0;
+}
+.signin-waiting {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-2);
+}
+.signin-waiting > svg {
+  flex: none;
+}
+.signin-foot {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  width: 100%;
+}
+
+/* ---- A reply whose agent the hub started again (its sign-in had gone stale): what happened, nothing to do. */
+
+.reply-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 2px 0 6px;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+.reply-note > svg {
+  flex: none;
+  margin-top: 2px;
+}
+.reply-note.failed > svg {
+  color: var(--orange);
+}
+.reply-note-detail {
+  color: var(--text-3);
+}

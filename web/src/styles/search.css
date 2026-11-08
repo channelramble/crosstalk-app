@@ -1,0 +1,148 @@
+/* 0.5 search (track T8): this track's styles live here, not in styles.css. */
+
+/* ---- The sidebar's "In messages" group (views/MessageHits.tsx): chats' hits, each chat's together under its name ---- */
+.search-hits {
+  margin-top: 14px;
+}
+/* The group's heading, drawn like an agent's (not the same class: nothing else may take it for one). */
+.search-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  color: var(--text-2);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.search-head-name {
+  flex: 1;
+}
+.search-status {
+  color: var(--text-3);
+  font-size: 12px;
+  font-weight: 400;
+}
+/* Words changed and the machines haven't answered yet: what's listed is for the old words. */
+.search-hits[aria-busy="true"] .search-chat {
+  opacity: 0.55;
+}
+.search-chat {
+  margin: 2px 0 8px;
+}
+.search-chat-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 4px 10px 2px 36px;
+  color: var(--text-2);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.search-chat-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.csb-hit {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  min-height: 40px;
+  padding: 6px 10px 6px 36px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--text-2);
+  font-size: 13.5px;
+  line-height: 1.35;
+  text-align: left;
+  cursor: pointer;
+}
+@media (hover: hover) {
+  .csb-hit:hover {
+    background: var(--surface);
+    color: var(--text);
+  }
+}
+.csb-hit-text {
+  flex: 1;
+  min-width: 0;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+.csb-hit-who {
+  color: var(--text-3);
+}
+/* The match, in bold (a <mark> without the highlighter). */
+.csb-hit mark {
+  background: none;
+  color: var(--text);
+  font-weight: 700;
+}
+.csb-hit .csb-time {
+  padding-top: 2px;
+}
+/* A machine that couldn't be searched: which one, why, and Try again. */
+.search-problem {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 0 4px;
+  padding: 7px 10px;
+  border-radius: 10px;
+  background: var(--red-2);
+  color: var(--text);
+  font-size: 13px;
+}
+.search-problem svg {
+  flex: none;
+}
+.search-problem-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.search-problem .link-btn {
+  flex: none;
+  margin: 0;
+  font-size: 13px;
+}
+@media (max-width: 760px), (pointer: coarse) {
+  .search-head {
+    padding: 8px;
+    font-size: 13.5px;
+  }
+  .csb-hit {
+    min-height: 44px;
+    font-size: 15px;
+  }
+  .search-problem .link-btn {
+    min-height: 44px;
+  }
+}
+
+/* ---- A message a search found: it flashes once when the chat opens at it (views/useFindMessage.ts) ---- */
+@keyframes found-flash {
+  from {
+    background: color-mix(in srgb, var(--accent) 40%, transparent);
+  }
+  to {
+    background: transparent;
+  }
+}
+[data-found] {
+  border-radius: 12px;
+  animation: found-flash 2s ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  /* No fading: the message is simply marked for as long as the flash would last. */
+  [data-found] {
+    animation: none;
+    background: color-mix(in srgb, var(--accent) 24%, transparent);
+  }
+}

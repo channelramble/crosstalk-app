@@ -1,0 +1,39 @@
+#!/usr/bin/env bun
+// Stand-in for Gemini CLI 0.62's Google sign-in with NO_BROWSER=true (its authWithUserCode), for the sign-in tests: never
+// Gemini CLI's own. Its words as the bundle has them: the link, then "Enter the authorization code: " (its readline
+// shows what's typed, whatever the terminal's echo). A code it can't use: "Failed to authenticate with authorization
+// code:…", then, once, "Failed to authenticate with user code. Retrying..." and a new link (each try makes a new PKCE
+// verifier and state) and the prompt again; a second gets "Failed to authenticate with user code." and it exits. The
+// right one (FAKE_GEMINI_CODE) saves a sign-in, oauth_creds.json under GEMINI_CLI_HOME (only its time is ever looked
+// at), and goes on into its own screen, where it waits.
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+
+const expected = process.env.FAKE_GEMINI_CODE || "4/0AVG7fiQ-fake-google-code-1234567890";
+const link = (n: number) => `https://accounts.google.com/o/oauth2/v2/auth?redirect_uri=https%3A%2F%2Fcodeassist.google.com%2Fauthcode&access_type=offline&scope=openid&code_challenge_method=S256&code_challenge=fake${n}&state=state${n}&response_type=code&client_id=fake.apps.googleusercontent.com`;
+const ask = (n: number) => process.stdout.write(`Please visit the following URL to authorize the application:\n\n${link(n)}\n\nEnter the authorization code: `);
+let tries = 0;
+process.stdout.write("\x1b[2J\x1b[H");
+ask(1);
+for await (const line of console) {
+  process.stdout.write(`${line}\r\n`);
+  const code = line.trim();
+  if (code === expected) {
+    const home = process.env.GEMINI_CLI_HOME;
+    if (home) {
+      mkdirSync(join(home, ".gemini"), { recursive: true });
+      writeFileSync(join(home, ".gemini", "oauth_creds.json"), "{}\n");
+    }
+    process.stdout.write("\x1b[2J\x1b[H > Type your message or @path/to/file\n");
+    setInterval(() => {}, 60_000);
+    continue;
+  }
+  tries++;
+  process.stderr.write("Failed to authenticate with authorization code:invalid_grant\n");
+  if (tries >= 2) {
+    process.stderr.write("\nFailed to authenticate with user code.Failed to authenticate with user code.\n");
+    process.exit(1);
+  }
+  process.stderr.write("\nFailed to authenticate with user code. Retrying...\n");
+  ask(tries + 1);
+}

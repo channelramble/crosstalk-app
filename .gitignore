@@ -1,0 +1,32 @@
+node_modules/
+dist/
+*.log
+.DS_Store
+.crosstalk-dev/
+hub/out/
+native/src-tauri/target/
+native/hub-tray/target/
+native/hub-tray/src-tauri/gen/
+# Generated mobile projects are customized (build scripts, permissions), so keep them; ignore their build output.
+native/src-tauri/gen/schemas/
+native/src-tauri/gen/apple/build/
+native/src-tauri/gen/apple/Externals/
+native/src-tauri/gen/apple/Pods/
+native/src-tauri/gen/apple/crosstalk.xcodeproj/xcuserdata/
+native/src-tauri/gen/apple/crosstalk.xcodeproj/project.xcworkspace/xcuserdata/
+native/src-tauri/gen/android/.gradle/
+native/src-tauri/gen/android/app/build/
+native/src-tauri/gen/android/build/
+native/src-tauri/gen/android/buildSrc/build/
+native/src-tauri/gen/android/buildSrc/.gradle/
+native/src-tauri/gen/android/app/src/main/jniLibs/
+native/src-tauri/gen/android/local.properties
+native/src-tauri/gen/android/keystore.properties
+web/dev-dist/
+
+# Local test reports and credentials are never published.
+web/test-results/
+web/playwright-report/
+.crosstalk/
+.env
+.env.*

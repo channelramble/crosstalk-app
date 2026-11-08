@@ -1,0 +1,57 @@
+#!/usr/bin/env bun
+// Stand-in for the Tailscale CLI the macOS app ships (hub/src/tailscale.ts). Written for bun, not a shell: a shell sets
+// SHLVL itself, and what this fake is for is exactly what the real binary does with and without it. The test copies it
+// with its own bun as the shebang (tailscale.test.ts), so it needs none on PATH.
+//  - no SHLVL in its environment: the real one tries to open the GUI, printing its error to **stdout** and exiting
+//    **0** (reproduced 6 times out of 6); this does the same.
+//  - FAKE_TS_GUI=1: that error whatever the environment says, for the quirk outliving the shell hint.
+//  - `status --json`: the file FAKE_TS_STATUS, or a stopped tailscaled's error on stderr and exit 1.
+//  - `serve status --json`: the file FAKE_TS_SERVE, or nothing at all (what a Tailscale with nothing served prints).
+//  - `ip -4`: FAKE_TS_IP4, or a stopped Tailscale's error.
+// Every run is noted in FAKE_TS_LOG when it's set: "<arguments> shlvl=<yes|no>".
+import { readFileSync, appendFileSync } from "node:fs";
+
+const args = process.argv.slice(2);
+const env = process.env;
+const shlvl = env.SHLVL !== undefined && env.SHLVL !== "";
+if (env.FAKE_TS_LOG) appendFileSync(env.FAKE_TS_LOG, `${args.join(" ")} shlvl=${shlvl ? "yes" : "no"}\n`);
+
+const gui = () => {
+  // On stdout, and a clean exit: the whole point of this fake.
+  process.stdout.write("The Tailscale GUI failed to start: The operation couldn’t be completed. (Tailscale.CLIError error 3.)\n");
+  process.exit(0);
+};
+if (!shlvl || env.FAKE_TS_GUI === "1") gui();
+
+const file = (path: string | undefined): string | null => {
+  try {
+    return path ? readFileSync(path, "utf8") : null;
+  } catch {
+    return null;
+  }
+};
+
+if (args[0] === "status" && args[1] === "--json") {
+  const text = file(env.FAKE_TS_STATUS);
+  if (text === null) {
+    process.stderr.write("failed to connect to local tailscaled; it doesn't appear to be running\n");
+    process.exit(1);
+  }
+  process.stdout.write(text);
+  process.exit(0);
+}
+if (args[0] === "serve" && args[1] === "status") {
+  // Nothing served prints nothing at all, and still exits 0.
+  process.stdout.write(file(env.FAKE_TS_SERVE) ?? "");
+  process.exit(0);
+}
+if (args[0] === "ip" && args[1] === "-4") {
+  if (!env.FAKE_TS_IP4) {
+    process.stderr.write("Tailscale is stopped.\n");
+    process.exit(1);
+  }
+  process.stdout.write(`${env.FAKE_TS_IP4}\n`);
+  process.exit(0);
+}
+process.stderr.write(`fake-tailscale-app: unsupported: ${args.join(" ")}\n`);
+process.exit(2);

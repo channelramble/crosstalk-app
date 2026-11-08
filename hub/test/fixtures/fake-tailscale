@@ -1,0 +1,44 @@
+#!/bin/sh
+# Stand-in for the Tailscale CLI in the model pool's tests:
+# - `tailscale ip -4` prints FAKE_TAILSCALE_IP, or fails the way a stopped Tailscale does when it isn't set.
+# - `tailscale ping --c 1 --timeout 3s <ip>` prints the line FAKE_TAILSCALE_PINGS (a file of "<ip> <output>" lines)
+#   has for that address, and exits 1 for a relayed one ("direct connection not established"), as the real one does
+#   with a single ping; an address it doesn't list times out.
+# - `tailscale status --json` prints the file FAKE_TAILSCALE_STATUS, or fails like a stopped Tailscale.
+# Every run is noted in FAKE_TAILSCALE_LOG (one line of arguments) when it's set.
+if [ -n "$FAKE_TAILSCALE_LOG" ]; then echo "$*" >> "$FAKE_TAILSCALE_LOG"; fi
+if [ "$1" = "ip" ] && [ "$2" = "-4" ]; then
+  if [ -n "$FAKE_TAILSCALE_IP" ]; then
+    echo "$FAKE_TAILSCALE_IP"
+    exit 0
+  fi
+  echo "Tailscale is stopped." >&2
+  exit 1
+fi
+if [ "$1" = "ping" ]; then
+  for ip in "$@"; do :; done
+  line=""
+  if [ -n "$FAKE_TAILSCALE_PINGS" ] && [ -f "$FAKE_TAILSCALE_PINGS" ]; then
+    line="$(grep "^$ip " "$FAKE_TAILSCALE_PINGS" | head -n 1 | cut -d' ' -f2-)"
+  fi
+  if [ -z "$line" ]; then
+    echo "ping \"$ip\" timed out"
+    echo "no reply" >&2
+    exit 1
+  fi
+  echo "$line"
+  case "$line" in
+    *"via DERP("*) echo "direct connection not established" >&2; exit 1 ;;
+  esac
+  exit 0
+fi
+if [ "$1" = "status" ] && [ "$2" = "--json" ]; then
+  if [ -n "$FAKE_TAILSCALE_STATUS" ] && [ -f "$FAKE_TAILSCALE_STATUS" ]; then
+    cat "$FAKE_TAILSCALE_STATUS"
+    exit 0
+  fi
+  echo "failed to connect to local tailscaled; it doesn't appear to be running" >&2
+  exit 1
+fi
+echo "fake-tailscale: unsupported: $*" >&2
+exit 2

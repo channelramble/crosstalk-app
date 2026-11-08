@@ -1,0 +1,367 @@
+/* 0.5 localmodels (track T10): Settings → Local models. This track's styles live here, not in styles.css.
+   Every line may wrap: a long model name or sentence never widens the page. */
+
+.local-bar {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 0 0 10px;
+}
+.local-bar p {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+}
+.local-bar .btn {
+  flex: none;
+}
+.local-empty {
+  margin: 0;
+}
+
+.local-server + .local-server {
+  margin-top: 12px;
+}
+.local-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 10px;
+}
+.local-head-text {
+  flex: 1 1 150px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.local-head .btn,
+.local-head .pill {
+  flex: none;
+}
+
+/* "Memory in use ? 6.1 GB": the sentence a "?" opens takes a line of its own under it. */
+.local-memory {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  margin-top: 12px;
+  font-size: 14px;
+}
+.local-memory .help-tip {
+  display: contents;
+}
+.local-memory .help-tip-text {
+  flex: 1 1 100%;
+  order: 9;
+  max-width: none;
+}
+.local-memory-value {
+  margin-left: auto;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.local-models {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+}
+.local-model {
+  padding: 10px 0;
+  border-top: 1px solid var(--sep);
+}
+.local-model-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.local-model-text {
+  flex: 1;
+  min-width: 0;
+}
+.local-model-name {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.local-model-state {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
+}
+.local-model-state svg {
+  flex: none;
+}
+.local-problem {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+.local-problem p {
+  margin: 0 0 10px;
+  overflow-wrap: anywhere;
+}
+.local-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.local-why {
+  margin: 6px 0 0;
+}
+
+/* The image editor and the model pool: a line each that jumps to its section. */
+.local-also {
+  margin-top: 22px;
+}
+.local-links {
+  margin-top: 6px;
+  padding-top: 4px;
+  padding-bottom: 4px;
+}
+.local-link {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  min-height: 48px;
+  padding: 8px 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.local-link + .local-link {
+  border-top: 1px solid var(--sep);
+}
+.local-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.local-link-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.local-link svg {
+  flex: none;
+  color: var(--text-2);
+}
+
+/* Starting servers and the models on this machine (LocalModelsLibrary.tsx), and Get a model (LocalModelsGet.tsx). */
+.local-start,
+.local-library {
+  margin-top: 12px;
+}
+.local-card-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+}
+.local-card-title .help-tip-text {
+  flex: 1 1 100%;
+  max-width: none;
+}
+.local-rows {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+}
+.local-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  padding: 10px 0;
+  border-top: 1px solid var(--sep);
+}
+.local-row-text {
+  flex: 1 1 180px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.local-row-text .local-actions,
+.local-file .local-actions,
+.local-started .local-actions {
+  margin-top: 8px;
+}
+.local-row .btn,
+.local-head .btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.local-file-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+}
+.local-file-title {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.local-fit-line {
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+}
+.local-fit-line .pill {
+  margin-right: 4px;
+}
+.local-warn {
+  margin: 6px 0 0;
+  color: var(--orange);
+  overflow-wrap: anywhere;
+}
+.local-download-bar {
+  margin-top: 6px;
+}
+.local-folder {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin-top: 10px;
+}
+.local-folder-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1 1 180px;
+  min-width: 0;
+}
+.local-folder-path {
+  overflow-wrap: anywhere;
+}
+.local-folder .btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+}
+.local-started {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--surface-2);
+  overflow-wrap: anywhere;
+}
+.local-started-model,
+.local-log {
+  margin: 2px 0 0;
+  overflow-wrap: anywhere;
+}
+.local-started-line {
+  margin: 4px 0 0;
+}
+.local-started.failed .local-started-line {
+  color: var(--orange);
+}
+.local-stop {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--sep);
+}
+.local-stop > .help {
+  flex: 1 1 140px;
+  margin: 0;
+}
+.local-stop .local-warn {
+  flex: 1 1 100%;
+}
+
+/* Get a model: the machine, where from, the context, then the files. */
+.local-get-machine {
+  margin-top: 0;
+  overflow-wrap: anywhere;
+}
+.local-get-machine .help-tip-text {
+  display: block;
+  margin-top: 6px;
+  max-width: none;
+}
+.local-get-context {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  margin: 12px 0;
+}
+.local-get-context .svc-label {
+  margin: 0;
+}
+.local-get {
+  margin-top: 4px;
+}
+.local-get .pool-link-form {
+  margin-bottom: 12px;
+}
+.local-hits {
+  margin-top: 8px;
+}
+/* A search result: a list item holding its button, which fills it. */
+.local-hit {
+  display: flex;
+  min-width: 0;
+}
+.local-hit > .choice-card {
+  flex: 1;
+}
+/* Said to a screen reader only: a download that stopped, failed or finished. */
+.local-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+.local-files {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+}
+.local-file {
+  padding: 12px 0;
+  border-top: 1px solid var(--sep);
+  overflow-wrap: anywhere;
+}
+.local-file .local-problem {
+  margin-top: 8px;
+}
+.local-token {
+  margin: 10px 0;
+}
+.local-get-empty {
+  margin-top: 12px;
+}
+.local-start-field {
+  margin-top: 12px;
+}
+.local-download-line {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  overflow-wrap: anywhere;
+}
+.local-download-line svg {
+  flex: none;
+}
+.local-download-note {
+  margin: 4px 0 0;
+}

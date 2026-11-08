@@ -1,0 +1,15 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Crosstalk Hub App",
+  "bundle": {
+    "resources": {
+      "../../../deploy/install.sh": "deploy/install.sh",
+      "../../../deploy/restart-when-idle.sh": "deploy/restart-when-idle.sh"
+    },
+    "linux": {
+      "deb": {
+        "section": "devel"
+      }
+    }
+  }
+}

@@ -1,0 +1,578 @@
+/* 0.4 asks (docs/SPEC-0.4.md, track T2): this track's styles live here, not in styles.css. */
+
+/* ---- Badges and short lines the sheet, the cards and the @ popup share ---- */
+.ask-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  color: var(--text-2);
+  font-size: 11.5px;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+.ask-badge.paid {
+  background: var(--orange-2);
+  color: var(--orange);
+}
+.ask-badge.plan {
+  background: var(--accent-2);
+  color: var(--accent);
+}
+.ask-badge.free {
+  background: var(--green-2);
+  color: var(--green);
+}
+.ask-why {
+  color: var(--orange);
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+
+/* ---- Ask others: the sheet ---- */
+.ask-intro {
+  margin: 0 0 8px;
+}
+/* The "?" opens its sentence on a line of its own, the width of the sheet. */
+.ask-list-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 8px 0 2px;
+  font-size: 13.5px;
+  font-weight: 650;
+}
+.ask-list-head .help-tip {
+  display: contents;
+}
+.ask-list-head .help-tip-text {
+  flex: 1 1 100%;
+  max-width: none;
+  margin-top: 0;
+  font-weight: 400;
+}
+.ask-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.ask-rows li + li {
+  border-top: 1px solid var(--sep);
+}
+/* The whole row is the checkbox (it's laid over the row, invisible), so a tap anywhere on it counts. */
+.ask-row {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-height: 44px;
+  padding: 10px 2px;
+  cursor: pointer;
+}
+.ask-row.off {
+  cursor: default;
+}
+.ask-row input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: inherit;
+}
+.ask-box {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  margin-top: 1px;
+  border: 1.5px solid var(--text-3);
+  border-radius: 7px;
+  color: transparent;
+}
+.ask-row.on .ask-box {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-text);
+}
+.ask-row.off .ask-box {
+  opacity: 0.35;
+}
+.ask-row input:focus-visible + .ask-box {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.ask-row-main {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.ask-row-name {
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+.ask-row-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.ask-row-sub {
+  color: var(--text-2);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.ask-row.off .ask-row-name,
+.ask-row.off .ask-row-sub {
+  color: var(--text-3);
+}
+.ask-row-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+/* Newer than 0.6.1: under a picked row, which of its models answers (the model picker every screen uses), lined up with the row's
+   name rather than its checkbox, so it reads as that row's. */
+.ask-model {
+  margin: -2px 2px 10px 38px;
+  min-width: 0;
+}
+.ask-model .field {
+  margin-bottom: 10px;
+}
+.ask-model .field:last-of-type {
+  margin-bottom: 4px;
+}
+.ask-model .select {
+  max-width: 100%;
+}
+.ask-model .help,
+.ask-model .no-tools {
+  overflow-wrap: anywhere;
+}
+.ask-model-cost {
+  margin: 0;
+}
+.ask-model-note {
+  margin: -2px 2px 10px 38px;
+  overflow-wrap: anywhere;
+}
+.ask-question {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 12px;
+  font-size: 13.5px;
+  font-weight: 650;
+}
+.ask-question .input {
+  font-size: var(--field-text);
+  font-weight: 400;
+}
+.ask-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 14px 0;
+  color: var(--text-2);
+}
+.ask-error {
+  margin: 10px 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--red-2);
+}
+.ask-error[role="status"] {
+  background: var(--surface-2);
+}
+.ask-error p {
+  margin: 0 0 8px;
+  overflow-wrap: anywhere;
+}
+.ask-foot {
+  display: flex;
+  flex: 1 1 100%;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.ask-foot .help {
+  margin: 0;
+}
+.ask-foot .ask-error {
+  margin: 0;
+}
+.ask-hint {
+  margin: 0;
+  color: var(--orange);
+  font-weight: 650;
+}
+.ask-foot-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* ---- The cards under a message ---- */
+.ask-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+  margin: 6px 0 4px;
+}
+/* Compare: two or more answers to one message, side by side. A row you swipe on a phone; each card snaps into place. */
+.ask-cards.compare {
+  flex-direction: row;
+  align-items: stretch;
+  overflow-x: auto;
+  padding-bottom: 6px;
+  overscroll-behavior-x: contain;
+  scroll-snap-type: x mandatory;
+  -webkit-overflow-scrolling: touch;
+}
+.ask-cards.compare .ask-card {
+  flex: 0 0 min(86%, 340px);
+  scroll-snap-align: start;
+}
+/* A keyboard can scroll the row once it's focused. */
+.ask-cards.compare:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 14px;
+}
+.ask-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: 10px 12px 2px;
+  border: 1px solid var(--sep-strong);
+  border-radius: 14px;
+  background: var(--surface);
+  text-align: left;
+}
+.ask-card.error {
+  border-color: color-mix(in srgb, var(--red) 55%, transparent);
+}
+.ask-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+.ask-card-title {
+  min-width: 0;
+  margin: 0;
+  font-size: 13.5px;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+/* How hard it was asked to think, beside the model in the card's name: quieter than the name. */
+.ask-card-effort {
+  color: var(--text-2);
+  font-weight: 500;
+}
+.ask-card-status {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-2);
+  font-size: 12.5px;
+}
+.ask-note,
+.ask-problem {
+  margin: 0;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.ask-note {
+  color: var(--text-2);
+  font-style: italic;
+}
+.ask-problem {
+  color: var(--red);
+}
+/* About six lines, then a fade; Show more opens the rest. */
+.ask-answer {
+  position: relative;
+  min-width: 0;
+  font-size: 14px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.ask-answer.clamped {
+  max-height: calc(1.45em * 6);
+  overflow: hidden;
+}
+.ask-answer.cut::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 1.8em;
+  background: linear-gradient(to bottom, transparent, var(--surface));
+  pointer-events: none;
+}
+.ask-card-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0 8px;
+}
+.ask-cost {
+  color: var(--text-2);
+  font-size: 12px;
+}
+.ask-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  margin-left: -8px;
+}
+/* Every button on a card is a finger's size. */
+.ask-card .link-action,
+.ask-more {
+  min-width: 44px;
+  min-height: 44px;
+  justify-content: center;
+}
+.ask-more {
+  align-self: flex-start;
+  margin-left: -8px;
+}
+.ask-remove {
+  color: var(--red);
+}
+/* The question that replaces Remove lines up with the card's text, not with the buttons' padding. */
+.ask-actions .confirm-inline {
+  margin-left: 8px;
+}
+@media (min-width: 761px) {
+  .ask-cards.compare {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    overflow: visible;
+  }
+}
+
+/* The action rows of a message (Edit, Unsend, Copy, Ask others) wrap on a narrow phone instead of running off it. */
+.your-msg .msg-actions {
+  flex-wrap: wrap;
+}
+
+/* ---- In the message box: chips and the @ popup ---- */
+.ask-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-width: 880px;
+  margin: 0 auto 6px;
+}
+.ask-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 44px;
+  padding-left: 14px;
+  border-radius: 22px;
+  background: var(--accent-2);
+  font-size: 13.5px;
+}
+.ask-chip.off {
+  background: var(--red-2);
+}
+.ask-chip-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.ask-chip-x {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: var(--text-2);
+  cursor: pointer;
+}
+@media (hover: hover) {
+  .ask-chip-x:hover {
+    color: var(--text);
+  }
+}
+/* In the chip row, on a line of its own under the chips: where the chat goes. */
+.ask-chips-note {
+  flex: 1 0 100%;
+  min-width: 0;
+  margin: 0;
+  padding: 0 6px;
+  font-size: 12px;
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+/* Above the box when who can be asked couldn't be looked up: why, and Try again. */
+.ask-check {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  max-width: 880px;
+  margin: 0 auto 6px;
+  padding: 4px 4px 4px 12px;
+  border-radius: 12px;
+  background: var(--red-2);
+  font-size: 13px;
+}
+.ask-check span {
+  flex: 1 1 200px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.ask-check .btn {
+  min-height: 44px;
+}
+.mention-pop.ask-pop {
+  right: auto;
+  width: min(420px, calc(100% - 16px));
+  min-width: 0;
+  max-height: 50vh;
+  overflow-y: auto;
+}
+.ask-pop button,
+.ask-pop-off {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  min-height: 44px;
+}
+.ask-pop-off {
+  padding: 6px 8px;
+}
+.ask-pop-name {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 6px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.ask-pop-name .ask-why {
+  flex: 1 1 100%;
+}
+
+/* ---- Naming others means only they answer ---- */
+/* In the chip row: who answers, and that the chat's own agent won't see the draft (the line under it says where the chat goes). */
+.ask-chips-only {
+  flex: 1 0 100%;
+  min-width: 0;
+  margin: 0;
+  padding: 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+/* A notice above the box: the text, then its buttons under it (a way out of each). It flashes when it's shown again. */
+.ask-check-actions {
+  display: flex;
+  flex: 1 0 100%;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+.ask-check {
+  animation: ask-flash 0.5s ease-out;
+}
+@keyframes ask-flash {
+  from {
+    box-shadow: 0 0 0 3px var(--red);
+  }
+  to {
+    box-shadow: 0 0 0 3px transparent;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ask-check {
+    animation: none;
+  }
+}
+/*
+ * The send button while the draft names someone: "Ask Codex", in words instead of the arrow. A long name (an account the
+ * person named at length) can't squeeze the message box: the button takes at most 45% of the row, gives way when the
+ * box would get under 80px, and cuts the name with … (its aria-label and title have it whole; the chip row names who answers).
+ */
+.composer .send.ask,
+.composer .send.ask:not(:disabled) {
+  flex: 0 1 auto;
+  width: auto;
+  max-width: 45%;
+  padding: 0 16px;
+  border-radius: 22px;
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.composer .send.ask .ask-label {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.composer.asking textarea {
+  min-width: 80px;
+}
+/* It stays white under a pointer that was just on it (it stays on screen when asking is refused). A finger leaves no
+   hover behind (styles.css keeps hover colours to pointers that hover). */
+@media (hover: hover) {
+  .composer .send.ask:hover:not(:disabled) {
+    background: var(--text);
+    color: #000;
+    opacity: 0.88;
+  }
+}
+
+/* ---- 0.5 (T11): the sheet groups rows by machine ---- */
+.ask-group + .ask-group {
+  margin-top: 10px;
+}
+.ask-group-head {
+  margin: 10px 0 2px;
+  color: var(--text-2);
+  font-size: 13px;
+  font-weight: 650;
+}
+.ask-machine-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 4px 0;
+  padding: 8px 12px;
+  border-radius: 12px;
+  background: var(--surface-2);
+  color: var(--text-2);
+}
+.ask-machine-note p {
+  flex: 1 1 160px;
+  margin: 0;
+  overflow-wrap: anywhere;
+}

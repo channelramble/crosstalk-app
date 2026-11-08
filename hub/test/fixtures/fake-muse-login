@@ -1,0 +1,31 @@
+#!/usr/bin/env bun
+// Stand-in for Muse Code 1.4.14's `muse login` (a device code): its words as the binary has them. FAKE_MUSE_APPROVE_MS:
+// the code is approved after this long (it exits 0, signed in); FAKE_MUSE_DENY=1: it's turned down instead.
+// FAKE_MUSE_KEYS_OUT: where anything typed into it is noted (Crosstalk must never press Enter: that opens the Mac's
+// browser).
+import { appendFileSync } from "node:fs";
+
+const arg = process.argv[2];
+if (arg === "--version") {
+  process.stdout.write("1.4.14\n");
+  process.exit(0);
+}
+if (arg === "--help") {
+  process.stdout.write("Muse Code\n\nUsage: muse [OPTIONS] [PROMPT]\n\nCommands:\n  login   Sign in with your Meta account\n  logout  Remove the stored Meta credential\n  serve   Run the session protocol on stdio\n");
+  process.exit(0);
+}
+if (arg !== "login") process.exit(2);
+process.stdout.write("Open this page to sign in:\n  https://auth.meta.com/device?user_code=WXYZ-1234\nand enter this code: WXYZ-1234\n");
+process.stdout.write("Press Enter to open it in your browser: ");
+process.stdout.write("\nWaiting for approval… · Esc cancel");
+void (async () => {
+  for await (const chunk of Bun.stdin.stream()) if (process.env.FAKE_MUSE_KEYS_OUT) appendFileSync(process.env.FAKE_MUSE_KEYS_OUT, JSON.stringify(new TextDecoder().decode(chunk)) + "\n");
+})();
+setTimeout(() => {
+  if (process.env.FAKE_MUSE_DENY === "1") {
+    process.stdout.write("\nThe login request was denied.\n");
+    process.exit(1);
+  }
+  process.stdout.write("\nSigned in.\n");
+  process.exit(0);
+}, Number(process.env.FAKE_MUSE_APPROVE_MS) || 600_000);

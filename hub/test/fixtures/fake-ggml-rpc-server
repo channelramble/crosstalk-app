@@ -1,0 +1,54 @@
+#!/usr/bin/env bun
+// Stand-in for llama.cpp's ggml-rpc-server (b11669) in the model pool's tests, packed into a fake release tarball.
+// Prints the real banner and listens on -H/-p; a taken port prints "Failed to create server socket" and exits 0, as
+// the real one does. Every run is noted in FAKE_RPC_LOG (one JSON line); with FAKE_RPC_EXIT=1 it stops right after
+// (for tests of the helper command, which must never listen on a real Tailscale address). It ends by itself once
+// whoever started it has gone.
+import { appendFileSync, mkdirSync } from "node:fs";
+import { join } from "node:path";
+
+// Nothing ends it when a test run is killed before its afterEach (hub/test/standins.ts): once whoever started it is
+// gone, so is this.
+const starter = process.ppid;
+setInterval(() => {
+  if (process.ppid !== starter) process.exit(0);
+}, 500).unref();
+
+const args = process.argv.slice(2);
+const opt = (name: string) => {
+  const i = args.indexOf(name);
+  return i >= 0 ? args[i + 1] : undefined;
+};
+const host = opt("-H") ?? opt("--host") ?? "127.0.0.1";
+const port = Number(opt("-p") ?? opt("--port") ?? 50052);
+const cache = args.includes("-c") || args.includes("--cache") ? join(process.env.LLAMA_CACHE ?? "/nonexistent", "rpc") : null;
+const logFile = process.env.FAKE_RPC_LOG;
+if (logFile) appendFileSync(logFile, JSON.stringify({ argv: args, cwd: process.cwd(), pid: process.pid, cache: process.env.LLAMA_CACHE ?? null }) + "\n");
+if (cache) mkdirSync(cache, { recursive: true });
+if (process.env.FAKE_RPC_EXIT === "1") process.exit(0);
+
+console.log("Starting RPC server v8.0.0");
+console.log(`  endpoint       : ${host}:${port}`);
+console.log(`  local cache    : ${cache ?? "n/a"}`);
+console.log("Devices:");
+console.log("  MTL0: Apple M4 (12124 MiB, 12123 MiB free)");
+console.log("  transport      : TCP (RDMA auto-negotiate enabled)");
+try {
+  Bun.listen({
+    hostname: host,
+    port,
+    socket: {
+      open() {
+        console.log("Accepted client connection");
+      },
+      data() {},
+      close() {
+        console.log("Client connection closed");
+      },
+    },
+  });
+} catch {
+  console.log("Failed to create server socket");
+  process.exit(0);
+}
+for (const signal of ["SIGTERM", "SIGINT"] as const) process.on(signal, () => process.exit(0));
