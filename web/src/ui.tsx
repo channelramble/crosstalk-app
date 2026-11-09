@@ -1,3 +1,4 @@
+import { AgentMark } from "./agentMarks";
 import { createContext, memo, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import ReactMarkdown, { defaultUrlTransform, type Components } from "react-markdown";
@@ -35,7 +36,7 @@ export function ProviderAvatar({ provider, size, state, label }: { provider: Pro
   const info = PROVIDER_INFO[provider];
   return (
     <div className={`avatar ${size ?? ""}`} style={{ ["--c" as string]: info.color }} title={label ?? info.name} aria-label={label ?? info.name}>
-      {info.initials}
+      <AgentMark provider={provider} size={size === "lg" ? 25 : size === "sm" ? 13 : 18} />
       {state && <span className={`state ${state}`} />}
     </div>
   );

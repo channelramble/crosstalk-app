@@ -1,6 +1,7 @@
 import { MessagesSquare } from "lucide-react";
 import { PROVIDER_INFO } from "@crosstalk/shared";
 import { useStore } from "../store";
+import { AgentMark } from "../agentMarks";
 import { contributionSize, roomContributors } from "../roomActivity";
 
 /** A room's contributors, including historical agents no longer in its team. */
@@ -19,7 +20,7 @@ export function RoomAvatar({ roomId, compact = false }: { roomId: string; compac
       const size = contributionSize(a.turns, contributors[0].turns, compact);
       const x = i === 0 ? 0 : step * (1 + Math.floor((i - 1) / 2));
       const y = i === 0 || contributors.length === 2 ? (height - size) / 2 : ((i - 1) % 2) * step + (max - size) / 2;
-      return <span key={a.provider} className="room-agent-icon" data-provider={a.provider} data-turns={a.turns} aria-hidden="true" style={{ width: size, height: size, left: x, top: y, fontSize: Math.max(7, size * 0.38), background: PROVIDER_INFO[a.provider].color }}>{PROVIDER_INFO[a.provider].initials}</span>;
+      return <span key={a.provider} className="room-agent-icon" data-provider={a.provider} data-turns={a.turns} aria-hidden="true" style={{ width: size, height: size, left: x, top: y, fontSize: Math.max(7, size * 0.38), background: PROVIDER_INFO[a.provider].color }}><AgentMark provider={a.provider} size={Math.round(size * 0.58)} /></span>;
     })}
   </span>;
 }

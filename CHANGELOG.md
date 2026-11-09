@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.9
+
+- Each agent shows its own logo (Claude Code, Codex, Muse Code, Antigravity, Gemini CLI, OpenCode) instead of two letters.
+
 ## 0.6.8
 
 First public release.
