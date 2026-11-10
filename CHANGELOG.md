@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.10
+
+- Unsend that Claude Code can't do (it has summarized the conversation since that message) says why, and its notice offers **Start fresh and unsend** in one tap. After starting fresh, unsending works.
+
 ## 0.6.9
 
 - Each agent shows its own logo (Claude Code, Codex, Muse Code, Antigravity, Gemini CLI, OpenCode) instead of two letters.

@@ -25,11 +25,15 @@ class Agent implements AgentDriver {
   static rewound: string[] = [];
   static inApp = false;
   static prompts: string[] = [];
+  /** Its conversation was summarized since: it can't go back past that (Claude Code answers rewound: false). */
+  static summarized = false;
   private seen: string[] = [];
   constructor(private ctx: DriverContext) {}
   async runTurn(input: TurnInput, sink: TurnSink): Promise<TurnResult> {
     if (Agent.inApp) return { ok: false, error: "This conversation is open in the Claude app right now. Close it there, then tap Try again." };
     Agent.prompts.push(input.prompt);
+    // A conversation is kept, as Claude Code's is (a fresh session starts without one).
+    sink.saveSession({ sessionId: "fake-session" });
     sink.taken?.();
     this.seen.push(...(input.messageIds ?? []));
     if (input.prompt.includes("REFUSE")) return { ok: false, error: "API Error: the safety filter flagged this message." };
@@ -39,6 +43,7 @@ class Agent implements AgentDriver {
     return { ok: true };
   }
   async rewind(messageId: string): Promise<string[]> {
+    if (Agent.summarized) throw new Error("Claude Code can't go back to before that message, usually because it has summarized the conversation since.");
     if (!this.seen.includes(messageId)) throw new Error("This message can't be rewound to.");
     Agent.rewound.push(messageId);
     this.seen = this.seen.slice(0, this.seen.indexOf(messageId));
@@ -64,6 +69,7 @@ class Session implements AgentDriver {
     const uuid = crypto.randomUUID();
     Session.inputs.push({ uuid, prompt: input.prompt });
     for (const id of input.messageIds ?? []) Session.refs.set(id, uuid);
+    sink.saveSession({ sessionId: "fake-session" });
     sink.taken?.();
     if (Session.fail > 0) {
       Session.fail--;
@@ -92,6 +98,7 @@ function setup() {
   Agent.rewound = [];
   Agent.inApp = false;
   Agent.prompts = [];
+  Agent.summarized = false;
   const room = app.chats.create({ provider: "claude", name: "Side project", cwd: dir });
   const events: ServerEvent[] = [];
   app.bus.on((e: ServerEvent) => events.push(e));
@@ -329,6 +336,33 @@ test("rewinding to a reply over messages the agent never got takes back all of t
     expect(r.removed).toHaveLength(4);
     expect(t.messages()).toEqual(["human:done:Find the bug in the device che", "agent:done:Answer to: Find the bug in the"]);
     expect(t.app.store.listTurns(t.room.id).filter((x) => x.status === "error")).toEqual([]);
+  } finally {
+    await t.done();
+  }
+});
+
+test("an agent that can't go back (its conversation was summarized since) says how to unsend: start fresh, then it goes", async () => {
+  const t = setup();
+  try {
+    await t.say("hello");
+    const bad = await t.say("REFUSE this");
+    Agent.summarized = true;
+    const refused = await t.app.reviseMessage(bad.id, null, "Phone").then(() => null, (e) => e);
+    expect(refused).toMatchObject({ status: 409, code: "rewind_failed" });
+    expect(refused.message).toContain("summarized the conversation since");
+    expect(refused.message).toContain("Start fresh to unsend it");
+    // Nothing went: the message and its failed reply are still there.
+    expect(t.messages()).toHaveLength(4);
+
+    // Started fresh, it has nothing to forget: the message goes, with its failed reply, and the chat carries on.
+    await t.app.engine.resetSession(t.app.store.listMembers(t.room.id)[0]!);
+    const r = await t.app.reviseMessage(bad.id, null, "Phone");
+    // The message, its failed reply, and the note after them that the agent starts fresh.
+    expect(r.removed).toHaveLength(3);
+    expect(t.messages()).toEqual(["human:done:hello", "agent:done:Answer to: hello"]);
+    Agent.summarized = false;
+    await t.say("carry on");
+    expect(t.messages().slice(-1)[0]).toStartWith("agent:done:Answer to:");
   } finally {
     await t.done();
   }

@@ -3,7 +3,7 @@ import { useShallow } from "zustand/react/shallow";
 import { ArrowLeftRight, Clock, Copy, FastForward, History, Pencil, RotateCcw, SlidersHorizontal, Square, Trash2, Undo2, X } from "lucide-react";
 import { EFFORT_LABELS, PROVIDER_INFO, helperAtWork, isNoReadNowAgent, isNoRewindAgent, isServiceKeyRefusal, isServiceOnlyAgent, turnOrder, type AlwaysAllowed, type Approval, type ChatProvider, type Member, type Message, type Room, type SignInNeed, type Turn } from "@crosstalk/shared";
 import { olderThan } from "../version";
-import { api } from "../api";
+import { ApiError, api } from "../api";
 import { memberAccount } from "../accounts";
 import { chatIdentity, identityWhere } from "../chatIdentity";
 import { nameEdit } from "../chatName";
@@ -1047,6 +1047,31 @@ const OWN_TAP = "a, button, input, textarea, select, summary, img, video, [role=
  * `failed`: replies that failed on it, which unsending it removes too. `canGoBack`: false for an agent that can't go back to
  * an earlier message, so one it has read stays as it is.
  */
+/**
+ * Unsend refused because the agent couldn't go back (its conversation was summarized since, say): in a chat with one
+ * agent, its notice offers the way out in one tap, a fresh session (it then has nothing to forget) and the unsend again.
+ */
+export function unsendRefused(e: unknown, room: Room, messageId: string) {
+  const { toast, members } = useStore.getState();
+  const text = e instanceof Error ? e.message : String(e);
+  const agents = Object.values(members).filter((x) => x.roomId === room.id);
+  if (!(e instanceof ApiError && e.code === "rewind_failed") || room.chat?.group || agents.length !== 1) return toast("error", text);
+  toast("error", text, {
+    action: {
+      label: "Start fresh and unsend",
+      run: () =>
+        void (async () => {
+          try {
+            await api("POST", `/api/members/${agents[0]!.id}/reset`);
+            await api("DELETE", `/api/messages/${messageId}`);
+          } catch (x) {
+            toast("error", x instanceof Error ? x.message : String(x));
+          }
+        })(),
+    },
+  });
+}
+
 export function YourMessage({ message: m, prev, handles, room, agentName, group = false, canGoBack = true, busy, later = 0, unread = false, failed = 0, arrive = false, note }: { message: Message; prev?: Message; handles: string[]; room: Room; agentName: string; group?: boolean; canGoBack?: boolean; busy?: boolean; later?: number; unread?: boolean; failed?: number; arrive?: boolean; note?: ReactNode }) {
   const toast = useStore((s) => s.toast);
   const [rewinding, setRewinding] = useState(false);
@@ -1123,7 +1148,7 @@ export function YourMessage({ message: m, prev, handles, room, agentName, group 
               // A lone last message the agent isn't answering (or hasn't read yet) is asked once.
               if (!confirm(`Unsend this message?\n\n${unread ? (group ? "No agent here has read it yet." : `${agentName} hasn't read it yet.`) : rewindNote}`)) return;
               // Not read when asked: if the agent reads it meanwhile, the hub refuses, and it's asked about again.
-              void act(() => api("DELETE", `/api/messages/${m.id}`, unread ? { ifUnread: true } : undefined));
+              void act(() => api("DELETE", `/api/messages/${m.id}`, unread ? { ifUnread: true } : undefined).catch((e) => (unsendRefused(e, room, m.id), undefined)));
             }}
           >
             <Undo2 size={12} /> Unsend
@@ -1149,7 +1174,7 @@ export function YourMessage({ message: m, prev, handles, room, agentName, group 
           group={group}
           busy={busy}
           roomId={room.id}
-          onConfirm={() => api("DELETE", `/api/messages/${m.id}`)}
+          onConfirm={() => api("DELETE", `/api/messages/${m.id}`).catch((e) => unsendRefused(e, room, m.id))}
           onClose={() => setRewinding(false)}
         />
       )}

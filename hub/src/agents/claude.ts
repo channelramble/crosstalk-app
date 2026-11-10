@@ -1447,7 +1447,8 @@ export class ClaudeDriver implements AgentDriver {
       this.spawn();
     }
     const r = await this.control({ subtype: "rewind_conversation", target_message_uuid: target });
-    if (r?.rewound === false) throw new Error("Claude Code couldn't rewind to that message.");
+    // Most often its conversation was summarized since (it does that when one gets long): it can't go back past that.
+    if (r?.rewound === false) throw new Error("Claude Code can't go back to before that message, usually because it has summarized the conversation since.");
     return [...this.refs].filter(([, uuid]) => uuid === target).map(([id]) => id);
   }
 

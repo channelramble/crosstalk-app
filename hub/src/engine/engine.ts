@@ -1338,11 +1338,15 @@ export class Engine {
     }
 
     if (running) throw new HttpError(409, "The agent is working. Stop it first, then edit or unsend this message.");
-    let forgotten: string[];
+    let forgotten: string[] = [];
     try {
       forgotten = await this.getDriver(room, member).rewind!(messageId);
     } catch (e) {
-      throw new HttpError(409, e instanceof Error ? e.message : String(e));
+      // One started fresh since (no conversation) has nothing to go back in, and nothing to forget: the message just goes.
+      // Otherwise the way out is a fresh session, which the app offers.
+      if (Object.keys(this.store.getMemberSession(member.id)).length > 0) {
+        throw new HttpError(409, `${e instanceof Error ? e.message : String(e)} Start fresh to unsend it: the agent starts a new conversation, and the messages here stay.`, "rewind_failed");
+      }
     }
     // The turn that brought a duplicated chat's agent the copied conversation was taken back: the next one brings it.
     const s = this.store.getMemberSession(member.id);
@@ -1425,7 +1429,8 @@ export class Engine {
         forgotten = await this.getDriver(room, x).rewind!(m.id);
       } catch (e) {
         // Agents that went back already did: the chat goes back with them, and says which one couldn't.
-        if (!rewound.size) throw new HttpError(409, `@${x.handle} couldn't go back: ${e instanceof Error ? e.message : String(e)}`);
+        // The way out is a fresh session: then it has nothing to forget, and the message can go (the app offers it).
+        if (!rewound.size) throw new HttpError(409, `@${x.handle} couldn't go back: ${e instanceof Error ? e.message : String(e)} Start fresh to unsend it: the agent starts a new conversation, and the messages here stay.`, "rewind_failed");
         this.systemMessage(room.id, `@${x.handle} couldn't go back to before your message, so it still remembers it.`);
         continue;
       }
