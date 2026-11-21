@@ -10,7 +10,7 @@ import { AntigravityDriver, agyPermissionArgs } from "../src/agents/antigravity"
 import { parseAgyModels } from "../src/providers/antigravity";
 import { AcpDriver } from "../src/agents/acp";
 import { CodexDriver, codexUsage } from "../src/agents/codex";
-import { claudeModelOptions, parseClaudeUsage, parseResetTime } from "../src/providers/claude";
+import { claudeModelOptions, parseClaudeUsage, parseResetTime, versionedName } from "../src/providers/claude";
 import { codexModelOptions } from "../src/providers/codex";
 
 const FIX = join(import.meta.dir, "fixtures");
@@ -766,4 +766,20 @@ describe("Antigravity CLI driver (against a fake headless CLI)", () => {
     expect(models.map((m) => [m.id, m.label, m.efforts.length])).toEqual([["gemini-3.8-flash-high", "Gemini 3.8 Flash (High)", 0], ["gemini-3.1-pro-low", "Gemini 3.1 Pro (Low)", 0], ["claude-sonnet-4-6", "Claude Sonnet 4.6 (Thinking)", 0]]);
     expect(models.map((m) => m.defaultEffort)).toEqual(["high", "low", null]); // shown as "included in this model"
   });
+});
+
+test("Claude Code's family-only names get their version from the description (\"Opus\" → \"Opus 5.5\")", () => {
+  const opts = claudeModelOptions([
+    { value: "default", resolvedModel: "claude-opus-5-5", displayName: "Default (recommended)", description: "Opus 5.5 · Best for everyday, complex tasks · 1M context" },
+    { value: "opus", resolvedModel: "claude-opus-5-5", displayName: "Opus", description: "Opus 5.5 · Best for everyday, complex tasks · 1M context" },
+    { value: "fable", resolvedModel: "claude-fable-5-1", displayName: "Fable", description: "Fable 5.1 · Most capable for your hardest and longest-running tasks · $10/$50 per Mtok · Requires usage credits · 1M context" },
+    { value: "haiku", resolvedModel: "claude-haiku-5-5", displayName: "Haiku", description: "Fastest for quick answers" },
+  ]);
+  expect(opts.map((o) => o.label)).toEqual(["Opus 5.5", "Fable 5.1", "Haiku"]);
+  expect(opts[0]).toMatchObject({ id: "opus", isDefault: true, description: "Best for everyday, complex tasks · 1M context" });
+  expect(opts[1]!.description).toBe("Most capable for your hardest and longest-running tasks · $10/$50 per Mtok · Requires usage credits · 1M context");
+  expect(opts[2]!.description).toBe("Fastest for quick answers");
+  // Already versioned, or a description that names something else: left as it is.
+  expect(versionedName("Opus 5.5", "For complex work")).toEqual({ label: "Opus 5.5", description: "For complex work" });
+  expect(versionedName("Sonnet", "Opus 5.5 · Not this one")).toEqual({ label: "Sonnet", description: "Opus 5.5 · Not this one" });
 });

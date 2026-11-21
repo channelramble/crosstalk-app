@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.11
+
+- Claude models always show their version ("Opus 5.5", not "Opus"), even when Claude Code names one by its family only.
+
 ## 0.6.10
 
 - Unsend that Claude Code can't do (it has summarized the conversation since that message) says why, and its notice offers **Start fresh and unsend** in one tap. After starting fresh, unsending works.

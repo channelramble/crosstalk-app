@@ -211,6 +211,18 @@ export function parseResetTime(s: string, now = new Date()): number | null {
  */
 const CLAUDE_FAST = { label: "Fast mode", description: "Faster output from the same model, at a higher price (from your plan's extra usage, or the API key)." };
 
+/**
+ * Claude Code names some models by family only ("Opus") and puts the version first in the description ("Opus 5.5 · Best
+ * for everyday…"): the label then says the version ("Opus 5.5"), and the description goes on from the rest.
+ */
+export function versionedName(name: string, description: string | null): { label: string; description: string | null } {
+  if (!description) return { label: name, description };
+  const [first, ...rest] = description.split(" · ");
+  const lead = first.trim();
+  if (lead.length <= 40 && /\d/.test(lead) && lead.toLowerCase().startsWith(`${name.trim().toLowerCase()} `)) return { label: lead, description: rest.join(" · ").trim() || null };
+  return { label: name, description };
+}
+
 export function claudeModelOptions(models: Json): ModelOption[] {
   const list: Json[] = Array.isArray(models) ? models.filter((m) => m?.value) : [];
   const def = list.find((m) => m.value === "default");
@@ -223,8 +235,7 @@ export function claudeModelOptions(models: Json): ModelOption[] {
       return {
         id: String(m.value),
         ...(m.resolvedModel ? { resolvedModel: String(m.resolvedModel) } : {}),
-        label: String(m.displayName ?? m.value),
-        description: m.description ? String(m.description) : null,
+        ...versionedName(String(m.displayName ?? m.value), m.description ? String(m.description) : null),
         efforts: m.supportsEffort && Array.isArray(m.supportedEffortLevels) ? m.supportedEffortLevels.map(String) : [],
         defaultEffort: null,
         fast: m.supportsFastMode ? CLAUDE_FAST : null,
