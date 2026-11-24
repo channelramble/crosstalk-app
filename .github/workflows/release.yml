@@ -54,7 +54,8 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.2
-      - name: Build the app (without a copy of Crosstalk inside: the installer has put that in place already)
+      # Without a copy of Crosstalk inside: the installer has put that in place already.
+      - name: Build the app
         run: |
           cd native && bun install
           cd hub-tray && ../node_modules/.bin/tauri build --bundles app
