@@ -40,7 +40,8 @@ jobs:
         run: |
           # The restart scripts' tests run them for real, and those read the database with sqlite3 (skipped without it).
           command -v sqlite3 >/dev/null || sudo apt-get install -y sqlite3
-          cd hub && bun test
+          # A failure has to happen twice to count (hub/scripts/test-ci.ts): the files that failed run once more, alone.
+          bun hub/scripts/test-ci.ts
       - name: App tests
         run: cd web && bun test src
       - name: Build for Linux
