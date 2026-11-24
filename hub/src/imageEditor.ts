@@ -538,7 +538,13 @@ export class ImageEditor {
         let pid = this.started && alive(this.started) ? this.started : ((await this.listener()) ?? (await this.folderServer()));
         if (signal.aborted) return;
         if (!pid && launchIt) pid = this.launch();
-        if (!pid) return this.fail(this.stoppedText("It stopped while starting", false));
+        if (!pid) {
+          // The one this hub noted has gone already (it died between being picked up and this look): its note goes
+          // with it, as it does when it dies a moment later.
+          const noted = !!this.started;
+          if (noted) this.forget();
+          return this.fail(this.stoppedText("It stopped while starting", noted));
+        }
         const ours = pid === this.started;
         const until = Date.now() + this.t.startMs;
         while (!(await this.answering(signal))) {

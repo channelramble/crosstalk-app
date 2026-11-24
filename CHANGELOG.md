@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.1
+
+- Fixed: when the image editor's server died in the instant after a restarted Crosstalk found it, Crosstalk said so
+  but kept its note of that server.
+- The release builds again when a version is tagged (a typo in the build recipe had stopped 0.9.0's first try).
+
 ## 0.9.0
 
 **Getting started**
