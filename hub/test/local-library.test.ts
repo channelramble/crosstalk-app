@@ -2,18 +2,18 @@ import { afterEach, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, sep } from "node:path";
-import type { LocalLibrary as LibraryView, PoolModel } from "@crosstalk/shared";
+import type { HfModel, LocalLibrary as LibraryView } from "@crosstalk/shared";
 import { App } from "../src/app";
-import { writeSecret } from "../src/config";
+import { readSecrets, writeSecret } from "../src/config";
+import { HttpError } from "../src/engine/engine";
 import { checkFolder, driveOf, folderLater, folderProblem, localLibraryOf, machineFrom, probeFolder, probeProblem } from "../src/localLibrary";
 import { localRunnersOf } from "../src/localRunners";
-import { download as poolDownload, DOWNLOADERS, modelPath, modelsDir } from "../src/pool/models";
-import { HF_SECRET } from "../src/pool/pool";
+import { download as downloadFiles, HF_SECRET, modelPath, modelsDir } from "../src/local/models";
 import { startServer } from "../src/server";
 import { fakeOllamaLive } from "./fixtures/fake-local-models";
 import { fakeLmStudio } from "./fixtures/fake-services";
 import { qwenLike } from "./fixtures/gguf";
-import { fakeHuggingFace, installScript } from "./fixtures/pool-fakes";
+import { fakeHuggingFace, installScript } from "./fixtures/local-fakes";
 
 // Settings → Local models, getting models (localLibrary.ts): a fake Hugging Face and a fake Ollama on 127.0.0.1 port 0, folders in
 // the temp folder, and a pretend machine. Nothing here downloads a real model, reaches the internet or writes the person's own files.
@@ -39,7 +39,6 @@ function setup() {
   const dir = mkdtempSync(join(tmpdir(), "ct-library-"));
   const app = new App({ dbPath: ":memory:", config: { port: 0, host: "127.0.0.1", publicUrl: null, workspaceRoot: dir, maxHopsDefault: 6 } });
   app.services.timeoutMs = 1500;
-  app.poolNode.gpus = async () => [];
   const lib = localLibraryOf(app);
   lib.trashOptions = { home: join(dir, "home"), platform: process.platform, gio: false };
   lib.ramBytes = () => 16 * GiB;
@@ -84,7 +83,7 @@ function hugging(opts: { big?: number } = {}) {
   cleanups.push(() => hf.stop());
   return { hf, repos };
 }
-const q4 = (repos: ReturnType<typeof hugging>["repos"]): PoolModel => ({ repo: "unsloth/Qwen3-8B-GGUF", files: ["Qwen3-8B-Q4_K_M.gguf"], quant: "Q4_K_M", sizeBytes: repos["unsloth/Qwen3-8B-GGUF"].files["Qwen3-8B-Q4_K_M.gguf"].length, gated: false });
+const q4 = (repos: ReturnType<typeof hugging>["repos"]): HfModel => ({ repo: "unsloth/Qwen3-8B-GGUF", files: ["Qwen3-8B-Q4_K_M.gguf"], quant: "Q4_K_M", sizeBytes: repos["unsloth/Qwen3-8B-GGUF"].files["Qwen3-8B-Q4_K_M.gguf"].length, gated: false });
 const download = (v: LibraryView, id: string) => v.downloads.find((d) => d.id === id);
 
 test("the machine's memory for models: Metal's working set as llama.cpp says it, else a share of the memory; a PC's free GPU memory; none on the processor", async () => {
@@ -98,12 +97,12 @@ test("the machine's memory for models: Metal's working set as llama.cpp says it,
   expect(machineFrom(32 * GiB, false, pc)).toMatchObject({ unified: false, gpuBytes: (15890 + 7900) * MiB, gpuFrom: "llama.cpp", gpus: [{ name: "RX 7600 XT" }, { name: "RTX 3060" }] });
   expect(machineFrom(32 * GiB, false, [])).toEqual({ ramBytes: 32 * GiB, unified: false, gpuBytes: null, gpuFrom: null, gpus: [] });
 
-  // The hub asks the model pool's llama.cpp first, then a llama-server it found here (the fake lists an Apple M4's GPU).
+  // The hub asks the llama-server it found here (the fake lists an Apple M4's GPU).
   const { app, lib, dir } = setup();
   const bin = installScript("fake-llama-server", join(dir, "llama-server"));
   localRunnersOf(app).find = () => [{ kind: "llamacpp", path: bin, from: "Homebrew" }];
   expect(await lib.machine()).toMatchObject({ ramBytes: 16 * GiB, unified: true, gpuBytes: 12124 * MiB, gpuFrom: "llama.cpp" });
-  app.poolNode.gpus = async () => [{ name: "MTL0", description: "Apple M4", totalMiB: 10000, freeMiB: 10000 }];
+  lib.devices = async () => [{ name: "MTL0", description: "Apple M4", totalMiB: 10000, freeMiB: 10000 }];
   // Looked at a moment ago: kept (the page asks every second while a download runs) unless asked afresh.
   expect((await lib.machine()).gpuBytes).toBe(12124 * MiB);
   expect((await lib.machine(true)).gpuBytes).toBe(10000 * MiB);
@@ -339,7 +338,6 @@ test("a stopped download carries on in its own folder; new ones go to the folder
     app2.store.close();
     rmSync(dir2, { recursive: true, force: true });
   });
-  app2.poolNode.gpus = async () => [];
   localRunnersOf(app2).find = () => [];
   localRunnersOf(app2).portFree = () => true;
   app2.store.kvSet("localModels.downloads", kept);
@@ -372,7 +370,6 @@ function restarted(kept: { downloads: string; folder: string }) {
     app.store.close();
     rmSync(dir, { recursive: true, force: true });
   });
-  app.poolNode.gpus = async () => [];
   localRunnersOf(app).find = () => [];
   localRunnersOf(app).portFree = () => true;
   app.store.kvSet("localModels.downloads", kept.downloads);
@@ -383,7 +380,7 @@ function restarted(kept: { downloads: string; folder: string }) {
 test("downloads running when the hub stopped carry on when it starts again (after a crash too); one the person stopped waits for Resume", async () => {
   const { app, lib, folder } = setup();
   const { hf, repos } = hugging({ big: 1_200_000 });
-  const q8: PoolModel = { ...q4(repos), files: ["Qwen3-8B-Q8_0.gguf"], quant: "Q8_0", sizeBytes: repos["unsloth/Qwen3-8B-GGUF"].files["Qwen3-8B-Q8_0.gguf"].length };
+  const q8: HfModel = { ...q4(repos), files: ["Qwen3-8B-Q8_0.gguf"], quant: "Q8_0", sizeBytes: repos["unsloth/Qwen3-8B-GGUF"].files["Qwen3-8B-Q8_0.gguf"].length };
   hf.slow.add("unsloth/Qwen3-8B-GGUF/Qwen3-8B-Q4_K_M.gguf");
   hf.slow.add("unsloth/Qwen3-8B-GGUF/Qwen3-8B-Q8_0.gguf");
   await lib.setFolder({ path: folder() });
@@ -426,7 +423,7 @@ test("a gated model: plain words on what to do, then it downloads with the saved
   const { lib, folder } = setup();
   const { hf, repos } = hugging();
   await lib.setFolder({ path: folder() });
-  const gated: PoolModel = { repo: "orcarouter/Gated-GGUF", files: ["Gated-Q4_K_M.gguf"], quant: "Q4_K_M", sizeBytes: repos["orcarouter/Gated-GGUF"].files["Gated-Q4_K_M.gguf"].length, gated: true };
+  const gated: HfModel = { repo: "orcarouter/Gated-GGUF", files: ["Gated-Q4_K_M.gguf"], quant: "Q4_K_M", sizeBytes: repos["orcarouter/Gated-GGUF"].files["Gated-Q4_K_M.gguf"].length, gated: true };
   const id = "hf:orcarouter/Gated-GGUF/Gated-Q4_K_M.gguf";
   await lib.startDownload({ source: "huggingface", model: gated });
   await lib.idle();
@@ -535,35 +532,41 @@ test("remove on another drive: into that drive's own Trash, never copied onto th
   expect(files(join(drive, "models"))).not.toContain(join("unsloth", "Qwen3-8B-GGUF", "Qwen3-8B-Q4_K_M.gguf"));
 });
 
-test("the model pool and Local models never download one file at once into Crosstalk's folder; one the pool finished is only forgotten", async () => {
-  const { app, lib } = setup();
+test("a stopped download whose files turn out to be all there is only forgotten: the model stays", async () => {
+  const { lib } = setup();
   const { hf, repos } = hugging({ big: 1_200_000 });
   const m = q4(repos);
   const id = "hf:unsloth/Qwen3-8B-GGUF/Qwen3-8B-Q4_K_M.gguf";
-  // Crosstalk's own folder (the test run's home) is the pool's too.
+  // Crosstalk's own folder (the test run's home).
   cleanups.push(() => rmSync(join(modelsDir(), "unsloth"), { recursive: true, force: true }));
   expect(lib.folder()).toBe(modelsDir());
   hf.slow.add("unsloth/Qwen3-8B-GGUF/Qwen3-8B-Q4_K_M.gguf");
   await lib.startDownload({ source: "huggingface", model: m });
   await until(async () => (download(await lib.view(), id)?.doneBytes ?? 0) > 0);
-  // While Local models writes it, the pool is told so (its own route and the download itself).
-  await expect(app.poolNode.downloadModel(m)).rejects.toMatchObject({ status: 409, code: "busy", message: DOWNLOADERS.local });
-  await expect(poolDownload(m, null, () => {})).rejects.toMatchObject({ status: 409, code: "busy", message: DOWNLOADERS.local });
   await lib.stopDownload({ id });
-
-  // The other way round: while the pool downloads it, Local models says so at once, and its Remove leaves the pool's part alone.
-  const pooled = poolDownload(m, null, () => {});
-  await expect(lib.startDownload({ source: "huggingface", model: m })).rejects.toMatchObject({ status: 409, code: "busy", message: DOWNLOADERS.pool });
-  await expect(lib.removeDownload({ id })).rejects.toMatchObject({ status: 409, code: "busy", message: DOWNLOADERS.pool });
+  // Its files are finished behind the list's back (its part picked up where it stopped).
   hf.slow.clear();
-  await pooled;
-  // One file, as Hugging Face has it.
+  await downloadFiles(m, null, () => {});
   expect(readFileSync(modelPath(m)).equals(Buffer.from(repos["unsloth/Qwen3-8B-GGUF"].files["Qwen3-8B-Q4_K_M.gguf"]))).toBe(true);
-  // The pool finished it: Remove only forgets the download, and the model stays (it may be in use).
+  // Remove only forgets the download, and the model stays (it may be in use).
   const after = await lib.removeDownload({ id });
   expect(after.downloads).toEqual([]);
   expect(existsSync(modelPath(m))).toBe(true);
   expect(after.files.map((f) => f.id)).toEqual(["unsloth/Qwen3-8B-GGUF/Qwen3-8B-Q4_K_M.gguf"]);
+});
+
+test("the Hugging Face token is saved in the hub's secrets, never shown again, and removed with null", async () => {
+  const { lib } = setup();
+  cleanups.push(() => writeSecret(HF_SECRET, null));
+  expect((await lib.view()).hasHfToken).toBe(false);
+  expect(lib.setHfToken({ token: `  ${TOKEN}\n` })).toEqual({ hasHfToken: true });
+  expect(readSecrets()[HF_SECRET]).toBe(TOKEN);
+  expect(JSON.stringify(await lib.view())).not.toContain(TOKEN);
+  expect((await lib.view()).hasHfToken).toBe(true);
+  for (const bad of [{ token: "short" }, { token: "has a space in it" }, { token: 7 }, {}, null, "hf_x"]) expect(() => lib.setHfToken(bad)).toThrow(HttpError);
+  expect(readSecrets()[HF_SECRET]).toBe(TOKEN);
+  expect(lib.setHfToken({ token: null })).toEqual({ hasHfToken: false });
+  expect(readSecrets()[HF_SECRET]).toBeUndefined();
 });
 
 test("the room check counts downloads still running on the same disk", async () => {
@@ -573,7 +576,7 @@ test("the room check counts downloads still running on the same disk", async () 
   // Sizes as big as the disk: one fits by itself, not two at once (the files themselves are small).
   const { free } = (await import("../src/storage")).diskSpace(folder());
   const big = Math.floor(free * 0.6);
-  const q8: PoolModel = { ...q4(repos), files: ["Qwen3-8B-Q8_0.gguf"], quant: "Q8_0", sizeBytes: big };
+  const q8: HfModel = { ...q4(repos), files: ["Qwen3-8B-Q8_0.gguf"], quant: "Q8_0", sizeBytes: big };
   hf.slow.add("unsloth/Qwen3-8B-GGUF/Qwen3-8B-Q8_0.gguf");
   await lib.startDownload({ source: "huggingface", model: q8 });
   const err = await lib.startDownload({ source: "huggingface", model: { ...q4(repos), sizeBytes: big } }).catch((e) => e);
@@ -732,6 +735,10 @@ test("the routes: the library, the folder, search, downloads and their refusals;
   expect(view.body).toMatchObject({ machine: { ramBytes: 16 * GiB, unified: true, gpuFrom: "estimate" }, folder: { isDefault: true }, downloads: [], programs: [], started: [], hasHfToken: true, reserveBytes: 2 * GiB, ports: { ollama: 11434, llamacpp: 8080 } });
   expect((await call("PUT", "/api/local-models/folder", { path: folder() })).body).toMatchObject({ path: folder(), isDefault: false });
   expect((await call("PUT", "/api/local-models/folder", { path: "relative" })).status).toBe(400);
+  // The token: saved or removed, and only ever said to be there.
+  expect((await call("PUT", "/api/local-models/hf-token", { token: null })).body).toEqual({ hasHfToken: false });
+  expect((await call("PUT", "/api/local-models/hf-token", { token: "nope" })).status).toBe(400);
+  expect((await call("PUT", "/api/local-models/hf-token", { token: TOKEN })).body).toEqual({ hasHfToken: true });
   expect((await call("GET", "/api/local-models/search?q=qwen3")).body.map((h: { repo: string }) => h.repo)).toEqual(["unsloth/Qwen3-8B-GGUF", "bartowski/Qwen3-8B-GGUF"]);
   expect((await call("GET", "/api/local-models/search?q=")).status).toBe(400);
   expect((await call("GET", "/api/local-models/files?repo=unsloth/Qwen3-8B-GGUF")).body).toMatchObject({ repo: "unsloth/Qwen3-8B-GGUF", kvBytesPerToken: 147456 });

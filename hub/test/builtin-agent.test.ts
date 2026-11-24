@@ -313,7 +313,7 @@ test("the conversation is kept between replies and restarts, and a rewind cuts i
   expect(await again.rewind("m2")).toEqual(["m2"]);
   await again.runTurn(turn("instead", ["m3"]), sinkFor().sink);
   expect(fake.state.chats[2].messages.slice(1).map((m: { content: string }) => m.content)).toEqual(["first", "First answer.", "instead"]);
-  await expect(again.rewind("nope")).rejects.toThrow("isn't in this conversation");
+  await expect(again.rewind("nope")).rejects.toThrow("isn't in what the agent remembers");
 });
 
 test("/compact summarises what came before and the chat goes on from the summary", async () => {
@@ -325,11 +325,11 @@ test("/compact summarises what came before and the chat goes on from the summary
   await d.runTurn(turn("Run five echoes", ["m1"]), sinkFor().sink);
   const { sink, out } = sinkFor();
   expect(await d.runTurn(turn("/compact"), sink)).toEqual({ ok: true });
-  expect(out.text).toBe("Done: the conversation so far is summarised, and the chat goes on from the summary.");
+  expect(out.text).toBe("Done: the chat so far is summarised, and it goes on from the summary.");
   const summaryRequest = fake.state.chats.at(-1)!;
   expect(summaryRequest.stream).toBe(false);
   expect(summaryRequest.tool_choice).toBe("none");
-  expect(out.activities).toEqual([{ kind: "notice", title: "Summarising the conversation so far", detail: "3 messages summarised.", status: "done" }]);
+  expect(out.activities).toEqual([{ kind: "notice", title: "Summarising the chat so far", detail: "3 messages summarised.", status: "done" }]);
   await d.runTurn(turn("And now?", ["m2"]), sinkFor().sink);
   const next = fake.state.chats.at(-1)!.messages;
   expect(next[1].content).toBe("[A summary of the conversation before this point]\n\nSUMMARY: ran five echo commands.");
@@ -342,7 +342,7 @@ test("the service's refusals in plain words: the key, money, and a rate limit th
   const cwd = folder();
   const refused = await driver(ctxFor(nano([]), cwd, { key: "sk-nano-wrong" })).runTurn(turn("hi"), sinkFor().sink);
   // The key, never a sign-in (this agent has none: hub/test/builtin-signin.test.ts).
-  expect(refused).toEqual({ ok: false, error: "NanoGPT refused the key — check it in Settings → AI services, then tap Try again." });
+  expect(refused).toEqual({ ok: false, error: "NanoGPT refused the key — check it in Settings → Accounts, then tap Try again." });
   const broke = await driver(ctxFor(nano([{ status: 402, error: "Insufficient balance" }]), cwd, { memberId: "mb-2" })).runTurn(turn("hi"), sinkFor().sink);
   expect(broke.ok).toBe(false);
   expect(broke.error).toContain("isn't enough money in the account");
@@ -379,7 +379,7 @@ test("through the hub: NanoGPT's check offers Crosstalk's agent first, and a cha
   const account = app.providers.setEndpointAccount("builtin", { label: "NanoGPT", baseUrl: fake.base, apiKey: KEY, models: [PICK], contextWindow: 1_048_576, protocol: "chat" });
   // Its accounts are the services it runs on: no sign-in account of its own is listed.
   expect(app.providers.accounts().filter((a) => a.provider === "builtin").map((a) => a.id)).toEqual([account.id]);
-  expect(() => app.chats.create({ provider: "builtin", cwd: dir } as never)).toThrow("runs on an AI service");
+  expect(() => app.chats.create({ provider: "builtin", cwd: dir } as never)).toThrow("needs an account to run on");
 
   const room = app.chats.create({ provider: "builtin", account: account.id, model: PICK, permissionMode: "full", cwd: dir } as never);
   app.engine.postHumanMessage(room.id, "Echo via the hub", "Phone");
@@ -1118,19 +1118,19 @@ test("context: other refusals aren't mistaken for that, and what can't be summar
   // Nothing to summarise yet: one message that doesn't fit.
   const fits = rl([TOO_LONG]);
   const r = await driver(rlCtx(fits, folder())).runTurn(turn("A very long paste"), sinkFor().sink);
-  expect(r).toEqual({ ok: false, error: `This conversation is too long for ${RL_PICK}, and it couldn't be summarised to make room. To go on, edit your last message to make it shorter, start a new chat and say where the work stands, or pick a model that holds more in this chat's settings. (The service said: ${TOO_LONG.error})` });
+  expect(r).toEqual({ ok: false, error: `This chat is too long for ${RL_PICK}, and it couldn't be summarised to make room. To go on, edit your last message to make it shorter, start a new chat and say where the work stands, or pick a model that holds more in this chat's settings. (The service said: ${TOO_LONG.error})` });
   expect(fits.state.chats).toHaveLength(1);
 
   // Summarised, and still too long.
   const still = rl([...echoes(5), TOO_LONG, { text: "SUMMARY" }, TOO_LONG, { text: "Never asked for." }]);
   const r2 = await driver(rlCtx(still, folder(), "mb-2")).runTurn(turn("Work"), sinkFor().sink);
-  expect(r2).toEqual({ ok: false, error: `This conversation is too long for ${RL_PICK}, even summarised. To go on, edit your last message to make it shorter, start a new chat and say where the work stands, or pick a model that holds more in this chat's settings. (The service said: ${TOO_LONG.error})` });
+  expect(r2).toEqual({ ok: false, error: `This chat is too long for ${RL_PICK}, even summarised. To go on, edit your last message to make it shorter, start a new chat and say where the work stands, or pick a model that holds more in this chat's settings. (The service said: ${TOO_LONG.error})` });
   expect(still.state.chats).toHaveLength(8);
 
   // Any other 400 is said as it was, with no summary and no second try.
   const other = rl([{ status: 400, code: "bad_request", error: "reasoning_effort must be one of off, low, high, max." }]);
   const r3 = await driver(rlCtx(other, folder(), "mb-3")).runTurn(turn("Go"), sinkFor().sink);
-  expect(r3).toEqual({ ok: false, error: "Refuseless turned the request down (error 400: reasoning_effort must be one of off, low, high, max.). Check the model and its settings in Settings → AI services, then tap Try again." });
+  expect(r3).toEqual({ ok: false, error: "Refuseless turned the request down (error 400: reasoning_effort must be one of off, low, high, max.). Check the model and its settings in Settings → Accounts, then tap Try again." });
   expect(other.state.chats).toHaveLength(1);
 });
 
@@ -1153,14 +1153,14 @@ test("context: a summary's own request that's too long goes again with less, dow
   const never = rl([...work, ...Array.from({ length: 9 }, () => TOO_LONG)]);
   const second = sinkFor();
   const r = await driver(rlCtx(never, folder(), "mb-2")).runTurn(turn("Work"), second.sink);
-  expect(r).toEqual({ ok: false, error: `This conversation is too long for ${RL_PICK}, and it couldn't be summarised to make room. To go on, edit your last message to make it shorter, start a new chat and say where the work stands, or pick a model that holds more in this chat's settings. (The service said: ${TOO_LONG.error})` });
+  expect(r).toEqual({ ok: false, error: `This chat is too long for ${RL_PICK}, and it couldn't be summarised to make room. To go on, edit your last message to make it shorter, start a new chat and say where the work stands, or pick a model that holds more in this chat's settings. (The service said: ${TOO_LONG.error})` });
   const sizes = summaries(never).map((i) => JSON.stringify(never.state.chats[i].messages).length);
   expect(sizes).toHaveLength(4);
   expect(sizes).toEqual([...sizes].sort((a, b) => b - a));
   expect(never.state.chats[summaries(never).at(-1)!].messages.filter((m: { role: string }) => m.role === "tool").length).toBeLessThan(4);
   // Never a tool's answer without the call it answers.
   for (const i of summaries(never)) expect(never.state.chats[i].messages[1].role).not.toBe("tool");
-  expect(second.out.activities.at(-1)).toMatchObject({ status: "error", detail: "Couldn't summarise: the conversation is too long for the model, even cut down." });
+  expect(second.out.activities.at(-1)).toMatchObject({ status: "error", detail: "Couldn't summarise: the chat is too long for the model, even cut down." });
 });
 
 test("context: a summary that fails any other way never fails the reply on its own, and isn't asked for at every step", async () => {
@@ -1227,7 +1227,7 @@ test("context: a limit on one field isn't the conversation's length: no summary,
   const cwd = folder();
   const fake = rl([...echoes(5), { status: 400, code: "invalid_request_error", error: field }, { text: "Never asked for." }]);
   const r = await driver(rlCtx(fake, cwd)).runTurn(turn("Work"), sinkFor().sink);
-  expect(r).toEqual({ ok: false, error: `Refuseless turned the request down (error 400: ${field}). Check the model and its settings in Settings → AI services, then tap Try again.` });
+  expect(r).toEqual({ ok: false, error: `Refuseless turned the request down (error 400: ${field}). Check the model and its settings in Settings → Accounts, then tap Try again.` });
   expect(summaries(fake)).toEqual([]);
   expect(JSON.parse(readFileSync(join(cwd, ".run/builtin/mb-rl.json"), "utf8")).messages[0]).toEqual({ role: "user", content: "Work" });
 });
@@ -1318,7 +1318,7 @@ test("a chat already saved with half an emoji and broken arguments carries on, a
   expect(fake.state.chats[0].messages[3].content).toBe("half \uFFFD");
   const { sink, out } = sinkFor();
   expect(await d.runTurn(turn("/compact"), sink)).toEqual({ ok: true });
-  expect(out.text).toBe("Done: the conversation so far is summarised, and the chat goes on from the summary.");
+  expect(out.text).toBe("Done: the chat so far is summarised, and it goes on from the summary.");
   expect(strict.refused).toEqual([]);
 });
 
@@ -1331,7 +1331,7 @@ test("/compact fails when a summary couldn't be made, in the service's words wit
   await d.runTurn(turn("Work"), sinkFor().sink);
   // A failed reply, as OpenCode's /compact is: it's what gets Try again, and for a refused key Open AI services.
   const refused = sinkFor();
-  expect(await d.runTurn(turn("/compact"), refused.sink)).toEqual({ ok: false, error: "Refuseless turned the request down (error 400: No.). Check the model and its settings in Settings → AI services, then tap Try again." });
+  expect(await d.runTurn(turn("/compact"), refused.sink)).toEqual({ ok: false, error: "Refuseless turned the request down (error 400: No.). Check the model and its settings in Settings → Accounts, then tap Try again." });
   expect(refused.out.text).toBe("");
   // A rate limit on the summary waits for its reset, as on any request.
   const limited = driver(rlCtx(rl([...echoes(5), { text: "Done." }, { status: 429, error: "Too many requests" }]), folder(), "mb-limit"), { pause: async () => {} });
@@ -1339,7 +1339,7 @@ test("/compact fails when a summary couldn't be made, in the service's words wit
   expect((await limited.runTurn(turn("/compact"), sinkFor().sink)).limit).toMatchObject({ kind: "rate" });
   // No summary came back: its card says why, and the reply how to go on.
   const blank = sinkFor();
-  expect(await d.runTurn(turn("/compact"), blank.sink)).toEqual({ ok: false, error: "The conversation couldn't be summarised, so the chat goes on as it is. Tap Try again, or start a new chat." });
+  expect(await d.runTurn(turn("/compact"), blank.sink)).toEqual({ ok: false, error: "The chat couldn't be summarised, so it goes on as it is. Tap Try again, or start a new chat." });
   expect(blank.out.activities.at(-1)).toMatchObject({ status: "error", detail: "Couldn't summarise: the model sent back no summary." });
 });
 

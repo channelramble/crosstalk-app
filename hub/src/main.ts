@@ -1,6 +1,8 @@
 #!/usr/bin/env bun
 import { App, selfCommand } from "./app";
-import { DB_PATH, HOME, HUB_VERSION, ensureDirs, loadConfig } from "./config";
+import { readFileSync } from "node:fs";
+import { CONFIG_PATH, DB_PATH, HOME, HUB_VERSION, ensureDirs, loadConfig } from "./config";
+import { pairLink, pairScreen } from "./pairLink";
 import { startServer } from "./server";
 import { runMcpStdio } from "./mcp/stdio";
 import { runSetupMcp } from "./mcp/setup";
@@ -10,6 +12,7 @@ import { runHook } from "./agents/model-lock";
 import { Store } from "./db";
 import { Auth } from "./auth";
 import { logger } from "./util/log";
+import { rotateLog } from "./setup/system";
 import "./providers/all";
 
 const log = logger("main");
@@ -20,6 +23,8 @@ async function serve() {
   process.on("unhandledRejection", (e) => log.error(`unhandled rejection: ${e instanceof Error ? e.stack ?? e.message : String(e)}`));
   process.on("uncaughtException", (e) => log.error(`uncaught exception: ${e.stack ?? e.message}`));
   const config = loadConfig();
+  // The Mac service's log starts over once it's big (the one before is kept beside it).
+  if (process.platform === "darwin" && rotateLog()) log.info("the log passed 5 MB: what was in it is in hub.log.1");
   const app = new App({ config, dbPath: DB_PATH });
   await app.start();
   const server = startServer(app);
@@ -42,10 +47,6 @@ async function serve() {
   const usageTimer = setInterval(() => void app.providers.refreshUsage(), 15 * 60_000);
   // Model lists in use are asked for again now and then, so new models and changed context sizes show up by themselves.
   const stopModelWatch = app.providers.watchModels();
-  // What the model pool ran on other hubs when this one last stopped without ending it (a crash, a power cut) is
-  // ended; then the pool starts again if it was running when the hub stopped and "Start when the hub starts" is on.
-  app.pool.recover();
-  app.pool.resume();
   const sweep = setInterval(() => app.pty.sweep(), 60_000);
 
   let closing = false;
@@ -64,15 +65,35 @@ async function serve() {
   log.info(`Crosstalk hub ${HUB_VERSION} · data in ${HOME}`);
 }
 
+/** The address in config.json, read as it is: nothing else of the config is looked at (see pair). */
+function savedAddress(): string | null {
+  try {
+    const v = JSON.parse(readFileSync(CONFIG_PATH, "utf8")).publicUrl;
+    return typeof v === "string" ? v : null;
+  } catch {
+    return null;
+  }
+}
+
 async function pair() {
   // Only the data folder, not loadConfig(): the Crosstalk Hub app runs `pair` too, and macOS counts what it opens as the
   // app's doing, so checking a workspace folder in Documents or on a drive would ask about it in the app's name.
   ensureDirs();
   const store = new Store(DB_PATH);
   const auth = new Auth(store);
-  const ttl = Number(rest[0] ?? 30) * 60_000;
+  // `pair 60 --url https://box.ts.net`: how long the code lasts (minutes), and the address to put in the link.
+  const at = rest.indexOf("--url");
+  const given = at >= 0 ? rest[at + 1] : undefined;
+  const minutes = rest.find((a, i) => /^\d+$/.test(a) && (at < 0 || i !== at + 1));
+  const ttl = Number(minutes ?? 30) * 60_000;
   const { code, expiresAt } = await auth.createPairingCode(ttl);
   console.log(`Pairing code: ${code}  (valid until ${new Date(expiresAt).toLocaleTimeString()})`);
+  // A person at the terminal (or an installer that says the address) also gets the code as a QR to scan. A program
+  // that reads the line above gets only that line, as ever.
+  if (given || process.stdout.isTTY) {
+    const link = pairLink(given ?? process.env.CROSSTALK_PUBLIC_URL ?? savedAddress(), code);
+    if (link) console.log(await pairScreen(link));
+  }
   store.close();
 }
 

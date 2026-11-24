@@ -3,8 +3,8 @@ import { createContext, memo, useContext, useEffect, useLayoutEffect, useMemo, u
 import { createPortal } from "react-dom";
 import ReactMarkdown, { defaultUrlTransform, type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Check, ChevronDown, ChevronUp, Copy, Globe, Network, Server, X } from "lucide-react";
-import { PROVIDER_INFO, limitWaitWords, type Member, type Provider } from "@crosstalk/shared";
+import { Check, ChevronDown, ChevronUp, Copy, Globe, Server, X } from "lucide-react";
+import { MEMORY_WAIT, PROVIDER_INFO, limitWaitWords, type Member, type Provider } from "@crosstalk/shared";
 import { SERVICE_COLOR, type ChatIdentity, type ServiceWhere } from "./chatIdentity";
 import { Attachment, FolderAttachment, ProjectFileLink, ProjectImage, isAttachmentUrl, isFolderUrl, isImageName } from "./views/Attachment";
 import { projectPath, urlTransform } from "./links";
@@ -12,6 +12,7 @@ import { codeBlockView } from "./codeblock";
 import { layoutZoom, onZoom } from "./zoom";
 import { currentPosture, onPosture } from "./viewport";
 import { EntranceScope, fadeIn, leave } from "./motion";
+import { openedOver } from "./back";
 
 /** The room whose messages are being shown, so file links in them can download from its project folder. */
 export const RoomFilesContext = createContext<string | null>(null);
@@ -43,14 +44,13 @@ export function ProviderAvatar({ provider, size, state, label }: { provider: Pro
 }
 
 /**
- * An AI service's avatar: a server for a model running on the hub's machine, a globe for an online one, linked machines
- * for the model pool, each in its own colour (chatIdentity.ts), so a chat on one is never read as Claude Code's or
- * Codex's. Icons, not initials: a service is named by the person ("Qwen on this Mac"), and two letters of that would
+ * An AI service's avatar: a server for a model running on the hub's machine, a globe for an online one, each in its
+ * own colour (chatIdentity.ts), so a chat on one is never read as Claude Code's or Codex's. Icons, not initials: a service is named by the person ("Qwen on this Mac"), and two letters of that would
  * say nothing.
  */
 export function ServiceAvatar({ where, size, state, label }: { where: ServiceWhere; size?: "sm" | "lg"; state?: string; label: string }) {
   const px = size === "lg" ? 21 : size === "sm" ? 12 : 16;
-  const Icon = where === "local" ? Server : where === "pool" ? Network : Globe;
+  const Icon = where === "local" ? Server : Globe;
   return (
     <div className={`avatar svc-avatar ${size ?? ""}`} style={{ ["--c" as string]: SERVICE_COLOR[where] }} title={label} aria-label={label}>
       <Icon size={px} aria-hidden="true" />
@@ -77,7 +77,7 @@ export function statusLabel(m: Member): string {
     case "idle":
       return "Ready";
     case "queued":
-      return "Waiting for its turn";
+      return m.statusDetail === MEMORY_WAIT ? MEMORY_WAIT : "Waiting for its turn";
     case "thinking":
       return m.statusDetail ?? "Thinking…";
     case "working":
@@ -100,9 +100,9 @@ export type RequestClose = (then?: () => void) => void;
 
 /**
  * A sheet. It rises into place and is live from its first frame; when it closes it's gone at once (its focus back where
- * it was, its role off the page) and a copy slides away (motion.ts). `step` changes when it moves to its next step (a
- * two-step question's "Are you sure?"): the new words fade in where the last ones were, as they do for "Discard
- * changes?".
+ * it was, its role off the page) and a copy slides away (motion.ts). The browser's Back closes it, as Escape does.
+ * `step` changes when it moves to its next step (a two-step question's "Are you sure?"): the new words fade in where
+ * the last ones were, as they do for "Discard changes?".
  */
 export function Dialog({ title, onClose, children, footer, wide, icon, dirty = false, step }: { title: string; onClose: () => void; children: ReactNode | ((requestClose: RequestClose) => ReactNode); footer?: ReactNode | ((requestClose: RequestClose) => ReactNode); wide?: boolean; icon?: ReactNode; dirty?: boolean; step?: string | number }) {
   const [discarding, setDiscarding] = useState(false);
@@ -156,12 +156,32 @@ export function Dialog({ title, onClose, children, footer, wide, icon, dirty = f
           e.preventDefault(); last.focus();
         } else if (!e.shiftKey && (document.activeElement === last || document.activeElement === dialog.current)) {
           e.preventDefault(); first.focus();
+        } else {
+          // The browser's own Tab may still leave the dialog: Safari skips buttons unless it's set to stop at them, so
+          // its last stop isn't the last control here. Once it has moved, a focus that ended up outside comes back in.
+          const here = dialog.current;
+          const backwards = e.shiftKey;
+          setTimeout(() => {
+            const open = document.querySelectorAll('[role="dialog"]');
+            if (!here || open[open.length - 1] !== here || here.contains(document.activeElement)) return;
+            (backwards ? last : first).focus();
+          }, 0);
         }
       }
     };
     window.addEventListener("keydown", k);
     return () => window.removeEventListener("keydown", k);
   }, [onClose, dirty, discarding]);
+  // The browser's or the phone's Back does what Escape does, for every dialog and sheet (back.ts): it closes this one and
+  // stays on the screen. Closed any other way, its place in the history goes with it.
+  const back = useRef((): boolean => false);
+  back.current = () => {
+    if (discarding) setDiscarding(false);
+    else requestClose();
+    // Still open after that (asking about unsaved changes, or back to editing): it keeps its place in the history.
+    return discarding || dirty;
+  };
+  useEffect(() => openedOver(() => back.current()), []);
   // Closing: this one goes in this commit; its copy slides away.
   useLayoutEffect(() => () => leave(overlay.current, "sheet", { part: ".dialog" }), []);
   // The next step's words (and title) fade in where the last ones were.
@@ -541,9 +561,12 @@ function mediaQuery(q: string) {
  * drawn: a new query (useIsMobile's at a new text size) is answered in that same frame, not one later.
  */
 export function useMedia(q: string): boolean {
-  const { list, subscribe } = mediaQuery(q);
-  return useSyncExternalStore(subscribe, () => list.matches);
+  // Drawn with no screen to ask (a test rendering to text): nothing matches.
+  const none = typeof window === "undefined" || typeof window.matchMedia !== "function";
+  const { list, subscribe } = none ? NO_SCREEN : mediaQuery(q);
+  return useSyncExternalStore(subscribe, () => list.matches, () => false);
 }
+const NO_SCREEN = { list: { matches: false }, subscribe: () => () => {} };
 
 /**
  * One screen at a time (the chats in a drawer), when the app is laid out 760 px wide or less: a phone, a folded

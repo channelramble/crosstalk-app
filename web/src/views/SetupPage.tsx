@@ -21,7 +21,7 @@ const GUIDE: Record<string, { install: string; signIn: string[]; plan: string }>
   claude: {
     install: "Installs Claude Code with Anthropic's official installer.",
     signIn: [
-      "Tap Sign in. A terminal opens on the hub running Anthropic's own sign-in (claude auth login).",
+      "Tap Sign in. A terminal opens on the machine running Anthropic's own sign-in (claude auth login).",
       "Open the link it shows and sign in with the Claude account that has your Pro or Max plan.",
       "Copy the code the page gives you, paste it in the field under the terminal, and tap Send.",
     ],
@@ -506,7 +506,7 @@ export function LoginDialog({ provider, accountId = "default", label = "Default 
           </div>
         </div>
         <p className="help" style={{ textAlign: "center" }}>
-          This closes by itself when the hub sees you're signed in{f.expiresAt ? ` (code expires ${new Date(f.expiresAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })})` : ""}.
+          This closes by itself when Crosstalk sees you're signed in{f.expiresAt ? ` (code expires ${new Date(f.expiresAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })})` : ""}.
         </p>
       </Dialog>
     );
@@ -539,6 +539,7 @@ export function TerminalDialog({ title, pty, hint, notice, onClose, showLinks, p
   const info = useStore((s) => s.ptys[pty.id]);
   const toast = useStore((s) => s.toast);
   const sendPty = useStore((s) => s.sendPty);
+  const machine = useMachineName();
   const running = !info || info.alive;
   // Closing a running terminal stops what's in it, so confirm first, and stay open if stopping fails.
   const close = async () => {
@@ -624,7 +625,7 @@ export function TerminalDialog({ title, pty, hint, notice, onClose, showLinks, p
       )}
       <p className="tiny muted" style={{ marginBottom: 0 }}>
         {paste && running ? "Send types it into the terminal and presses Enter. " : ""}
-        {info && !info.alive ? `Finished${info.exitCode !== null ? ` (exit ${info.exitCode})` : ""}.` : "Running on the hub."}
+        {info && !info.alive ? `Finished${info.exitCode !== null ? ` (exit ${info.exitCode})` : ""}.` : `Running on ${machine}.`}
       </p>
     </Dialog>
   );
@@ -693,10 +694,10 @@ export function GitHubCard() {
       )}
       {st && !st.installed && (
         <p className="help">
-          Install the GitHub CLI on the hub (for example <span className="kbd">{hub?.platform === "darwin" ? "brew install gh" : "sudo apt install gh"}</span> from the Terminal page), then check again.
+          Install the GitHub CLI on {machine} (for example <span className="kbd">{hub?.platform === "darwin" ? "brew install gh" : "sudo apt install gh"}</span> from its Terminal, under Advanced below), then check again.
         </p>
       )}
-      {st?.installed && st.signedIn && <p className="help">Signed in{st.account ? ` as ${st.account}` : ""}. Git on the hub uses this sign-in.</p>}
+      {st?.installed && st.signedIn && <p className="help">Signed in{st.account ? ` as ${st.account}` : ""}. Git on {machine} uses this account.</p>}
       <div className="row wrap" style={{ gap: 6, marginTop: 6 }}>
         {st?.installed && !st.signedIn && (
           <button className="btn small primary" onClick={login}>
@@ -723,7 +724,7 @@ export function GitHubCard() {
 }
 
 /** Adds an account billed through an API key, or replaces an API-key account's key. */
-function ApiKeyAccountDialog({ provider, account, onClose }: { provider: Provider; account: AgentAccount | null; onClose: () => void }) {
+export function ApiKeyAccountDialog({ provider, account, onClose }: { provider: Provider; account: AgentAccount | null; onClose: () => void }) {
   const [key, setKey] = useState("");
   const [label, setLabel] = useState(account?.label ?? "API key");
   const [workspace, setWorkspace] = useState(account?.workspaceId ?? "");
@@ -740,7 +741,7 @@ function ApiKeyAccountDialog({ provider, account, onClose }: { provider: Provide
         ...(account ? { id: account.id } : { label: label.trim() }),
         ...(provider === "claude" ? { workspaceId: workspace.trim() || null } : {}),
       });
-      toast("info", "API key saved on the hub.");
+      toast("info", "API key saved.");
       onClose();
     } catch (e) {
       toast("error", e instanceof Error ? e.message : String(e));
@@ -759,13 +760,13 @@ function ApiKeyAccountDialog({ provider, account, onClose }: { provider: Provide
         <label className="field">
           <span>Name</span>
           <input className="input" value={label} maxLength={40} onChange={(e) => setLabel(e.target.value)} />
-          <span className="help">Chats pick it like an account: your plan sign-in, or this key.</span>
+          <span className="help">Chats pick it like any account: your plan, or this key.</span>
         </label>
       )}
       <label className="field">
         <span>API key</span>
         <input className="input mono" type="password" value={key} onChange={(e) => setKey(e.target.value)} autoComplete="off" placeholder={account ? "Leave empty to keep the current key" : `From ${where}`} autoFocus={!account} />
-        <span className="help">Stored only on the hub, in a file only your user can read. Billed per use by {PROVIDER_INFO[provider].vendor}, not from your plan.</span>
+        <span className="help">Stored only on this machine, in a file only your user can read. Billed per use by {PROVIDER_INFO[provider].vendor}, not from your plan.</span>
       </label>
       {provider === "claude" && (
         <label className="field">
@@ -785,7 +786,7 @@ function endpointDescription(ep: NonNullable<AgentAccount["endpoint"]>): string 
   } catch {
     /* as entered */
   }
-  return ["Custom model", ep.models[0], host, ep.contextWindow ? `${Math.round(ep.contextWindow / 1024)}k context` : null].filter(Boolean).join(" · ");
+  return ["Your own model", ep.models[0], host, ep.contextWindow ? `${Math.round(ep.contextWindow / 1024)}k context` : null].filter(Boolean).join(" · ");
 }
 
 /** A new custom model's fields before anything is filled in: a server of your own on this machine. */
@@ -864,7 +865,7 @@ export function EndpointDialog({ provider, account, onClose, preset: startWith =
         ...(ep?.chatPath ? { chatPath: ep.chatPath } : {}),
         ...(ep?.contexts ? { contexts: ep.contexts } : {}),
       });
-      toast("info", account ? "Custom model saved. Chats using it pick up the change." : `Added. Pick it as the account in a new ${name} chat.`);
+      toast("info", account ? "Saved. Chats using it pick up the change." : `Added. Pick it as the account in a new ${name} chat.`);
       onClose();
     } catch (e) {
       const text = e instanceof Error ? e.message : String(e);
@@ -886,14 +887,14 @@ export function EndpointDialog({ provider, account, onClose, preset: startWith =
     (preset?.id ?? null) !== opened.current.preset;
   const addressField = (
     <label className="field">
-      <span>Server address</span>
+      <span>Address</span>
       <div className="row" style={{ gap: 8 }}>
         <input className="input mono" style={{ flex: 1 }} value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="http://127.0.0.1:8080" autoCapitalize="off" autoCorrect="off" spellCheck={false} />
         <button className="btn" onClick={check} disabled={checking || !baseUrl.trim()}>
           {checking ? "Checking…" : "Check"}
         </button>
       </div>
-      <span className="help">{preset ? `${preset.label}'s address for ${name}.` : "As this machine's hub reaches it: http://127.0.0.1:8080 when the server runs on the same machine."}</span>
+      <span className="help">{preset ? `${preset.label}'s address for ${name}.` : "As this machine reaches it: http://127.0.0.1:8080 when it runs on the same machine."}</span>
     </label>
   );
   const checked = (
@@ -901,7 +902,7 @@ export function EndpointDialog({ provider, account, onClose, preset: startWith =
       {error && <p className="small" style={{ color: "var(--red)", marginTop: 0 }}>{error}{preset ? " You can still save without checking." : ""}</p>}
       {probe && (
         <p className="small" style={{ color: "var(--green)", marginTop: 0 }}>
-          Found {probe.server ?? "a model server"}: {probe.models.length === 1 ? probe.models[0] : `${probe.models.length} models`}
+          Found {probe.server ?? "it"}: {probe.models.length === 1 ? probe.models[0] : `${probe.models.length} models`}
           {probe.contextWindow ? `, ${probe.contextWindow.toLocaleString()} tokens of context` : ""}.
         </p>
       )}
@@ -911,7 +912,7 @@ export function EndpointDialog({ provider, account, onClose, preset: startWith =
     <label className="field">
       <span>Models</span>
       <input className="input mono" value={models} onChange={(e) => setModels(e.target.value)} placeholder="Check fills this in" autoCapitalize="off" autoCorrect="off" spellCheck={false} />
-      <span className="help">The model names the server answers to, separated by commas. The first is the default.</span>
+      <span className="help">The model names it answers to, separated by commas. The first is the default.</span>
     </label>
   );
   const contextField = (
@@ -919,7 +920,7 @@ export function EndpointDialog({ provider, account, onClose, preset: startWith =
       <span>Context size (tokens)</span>
       <input className="input mono" inputMode="numeric" value={context} onChange={(e) => setContext(e.target.value.replace(/[^0-9]/g, ""))} placeholder="e.g. 65536" />
       <span className="help">
-        {preset ? "How much of a chat the model takes in at once." : "What the server gives each request (llama-server's -c)."} Chats summarize older messages at three quarters of it.{" "}
+        {preset ? "How much of a chat the model takes in at once." : "What your model is given for each request (llama-server's -c)."} Chats summarize older messages at three quarters of it.{" "}
         {!preset && provider === "claude" ? "Claude Code needs about 20,000 just to start, so 64k or more works best." : ""}
       </span>
     </label>
@@ -927,7 +928,7 @@ export function EndpointDialog({ provider, account, onClose, preset: startWith =
   const keyField = (
     <label className="field">
       <span>{preset ? "API key" : "API key (optional)"}</span>
-      <input className="input mono" type="password" value={apiKey} onChange={(e) => { setApiKey(e.target.value); setDropKey(false); }} autoComplete="off" placeholder={ep?.hasKey ? "Saved: leave empty to keep it" : preset ? "Paste your key" : "Only if the server asks for one"} />
+      <input className="input mono" type="password" value={apiKey} onChange={(e) => { setApiKey(e.target.value); setDropKey(false); }} autoComplete="off" placeholder={ep?.hasKey ? "Saved: leave empty to keep it" : preset ? "Paste your key" : "Only if it asks for one"} />
       {needsKey && <span className="help">Paste your key to save.</span>}
       {ep?.hasKey && (
         <label className="row small" style={{ gap: 6, marginTop: 4 }}>
@@ -944,7 +945,7 @@ export function EndpointDialog({ provider, account, onClose, preset: startWith =
   );
   return (
     <Dialog
-      title={account ? `${account.label}` : `Add a custom model for ${name}`}
+      title={account ? `${account.label}` : `Add an account for ${name}`}
       icon={<Cpu size={20} />}
       dirty={dirty && !busy}
       onClose={() => !busy && onClose()}
@@ -967,7 +968,7 @@ export function EndpointDialog({ provider, account, onClose, preset: startWith =
             value={preset?.id ?? "own"}
             onChange={choose}
             options={[
-              { id: "own", label: "Your own server", help: "llama.cpp, LM Studio, Ollama or another model server you run." },
+              { id: "own", label: "Your own model", help: "In llama.cpp, LM Studio, Ollama or another program you run." },
               ...presets.map((p) => ({ id: p.id, label: p.title, help: p.help })),
             ]}
           />
@@ -998,8 +999,8 @@ export function EndpointDialog({ provider, account, onClose, preset: startWith =
         <>
           <p className="help" style={{ marginTop: 0 }}>
             {provider === "claude"
-              ? "Runs Claude Code on a model server of your own. The server has to speak Anthropic's Messages API: llama.cpp's llama-server, LM Studio and Ollama do."
-              : "Runs Codex on a model server of your own. The server has to speak OpenAI's Responses API: Ollama and LM Studio do; llama.cpp's llama-server does too, but some of Codex's tools may not work with it."}
+              ? "Runs Claude Code on a model of your own. What runs it has to speak Anthropic's Messages API: llama.cpp's llama-server, LM Studio and Ollama do."
+              : "Runs Codex on a model of your own. What runs it has to speak OpenAI's Responses API: Ollama and LM Studio do; llama.cpp's llama-server does too, but some of Codex's tools may not work with it."}
           </p>
           {addressField}
           {checked}

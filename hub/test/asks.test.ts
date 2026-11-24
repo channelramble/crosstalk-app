@@ -97,11 +97,11 @@ afterAll(() => {
   for (const d of dirs) rmSync(d, { recursive: true, force: true });
   // Back to what providers/all.ts registers.
   registerDriver("claude", (ctx) => {
-    if (!ctx.bin) throw new Error("Claude Code isn't installed on the hub. Install it under Agents & sign-ins.");
+    if (!ctx.bin) throw new Error("Claude Code isn't installed on the machine. Install it under Agents & sign-ins.");
     return new ClaudeDriver(ctx, ctx.bin);
   });
   registerDriver("codex", (ctx) => {
-    if (!ctx.bin) throw new Error("Codex isn't installed on the hub. Install it under Agents & sign-ins.");
+    if (!ctx.bin) throw new Error("Codex isn't installed on the machine. Install it under Agents & sign-ins.");
     return new CodexDriver(ctx, ctx.bin);
   });
 });
@@ -294,7 +294,7 @@ describe("asking", () => {
       status: "done",
       answer: "Looks right, but check the refresh race.",
       error: null,
-      // A plan sign-in isn't billed: Claude Code's own figure is what the reply would cost.
+      // A account on a plan isn't billed: Claude Code's own figure is what the reply would cost.
       cost: { costUsd: 0.0421, basis: "plan", inputTokens: 1200, outputTokens: 300 },
     });
     expect(h.app.asks.get(one.id)!.startedAt).toBeGreaterThan(0);
@@ -730,7 +730,7 @@ describe("the rules for asking", () => {
     const err = await h.refused(h.ask(c, msg, [h.target("claude"), h.target("codex")]));
     expect(err).toMatchObject({ status: 409, code: "model_choice" });
     expect(err.message).toContain("Codex has no default model to ask");
-    expect(err.message).toContain("Settings → AI services");
+    expect(err.message).toContain("Settings → Accounts");
     expect(made).toHaveLength(0);
     expect(h.app.asks.list(c.room.id)).toEqual([]);
     // Naming the model is enough.
@@ -746,7 +746,7 @@ describe("the rules for asking", () => {
     const refusal = (targets: AskTarget[], m: Message = msg) => h.refused(h.ask(c, m, targets));
 
     h.main.claude.signedIn = false;
-    expect(await refusal([h.target("claude")])).toMatchObject({ status: 409, code: "not_signed_in", message: "Claude Code isn't signed in. Sign in under Settings → AI services, then ask again." });
+    expect(await refusal([h.target("claude")])).toMatchObject({ status: 409, code: "not_signed_in", message: "Claude Code isn't signed in. Sign in under Settings → Accounts → Claude Code, then ask again." });
     h.main.claude.signedIn = true;
 
     h.limits.set("claude:k1", "API key reached its $250 limit, so this reply didn't start.");
@@ -836,7 +836,7 @@ describe("cost", () => {
   };
   const used = { inputTokens: 3000, outputTokens: 1000, cachedInputTokens: 500, costUsd: 0.0421 };
 
-  test("a fresh Claude Code process's own figure is exact on an API key, and only what a plan sign-in would cost on a plan", async () => {
+  test("a fresh Claude Code process's own figure is exact on an API key, and only what a account on a plan would cost on a plan", async () => {
     expect((await costs("codex", apiKey("codex", "k1", "Key"), used)).cost).toEqual({ costUsd: 0.4, basis: "estimated", inputTokens: 3000, outputTokens: 1000 }); // tokens priced by the spend module
     const key = await costs("claude", apiKey("claude", "k2", "Key"), used);
     expect(key.cost).toEqual({ costUsd: 0.0421, basis: "exact", inputTokens: 3000, outputTokens: 1000 });
@@ -1176,17 +1176,19 @@ describe("picking the model", () => {
     expect((await popup(h, onSonnet.room.id)).claude).toMatchObject({ label: "Claude Code · Opus 5.5", target: { model: "opus" } });
   });
 
-  test("the model pool runs one model: its row says so instead of offering a list, and a pick never moves it", async () => {
+  test("an account a model pool once made is an ordinary model server's: its row offers its models, and a pick moves it", async () => {
     const h = hub();
-    const pool = h.app.providers.setEndpointAccount("claude", { label: "Model pool", baseUrl: "http://127.0.0.1:18080", models: ["qwen-pool", "qwen-other"], contextWindow: 65536 });
-    h.app.store.kvSet("pool.accounts", JSON.stringify({ claude: pool.id }));
+    // What a hub that had a pool keeps: the account, and the pool's own rows in kv (which nothing reads any more).
+    const left = h.app.providers.setEndpointAccount("claude", { label: "Model pool", baseUrl: "http://127.0.0.1:18080", models: ["qwen-pool", "qwen-other"], contextWindow: 65536 });
+    h.app.store.kvSet("pool.accounts", JSON.stringify({ claude: left.id }));
+    h.app.store.kvSet("pool", JSON.stringify({ build: "b11669", machines: [], mainId: "self", model: null, autostart: true }));
     const c = h.chat("codex");
     const msg = h.say(c, "human", "Fix it");
-    await h.app.asks.start({ roomId: c.room.id, messageId: msg.id, targets: [h.target("claude", pool.id, "qwen-pool")], remember: [{ provider: "claude", account: pool.id, model: "qwen-other", effort: null }] });
+    await h.app.asks.start({ roomId: c.room.id, messageId: msg.id, targets: [h.target("claude", left.id, "qwen-pool")], remember: [{ provider: "claude", account: left.id, model: "qwen-other", effort: null }] });
     const row = (await sheet(h, c.room.id))["model-pool"];
-    expect(row).toMatchObject({ fixedModel: "pool", available: true, target: { model: "qwen-pool" }, label: "Model pool · qwen-pool" });
-    expect(row.models).toBeUndefined();
-    expect(row.remembered).toBeUndefined();
+    expect(row).toMatchObject({ available: true, target: { model: "qwen-other" }, label: "Model pool · qwen-other" });
+    expect(row.fixedModel).toBeUndefined();
+    expect(row.models?.map((m) => m.id)).toEqual(["qwen-pool", "qwen-other"]);
   });
 
   test("over HTTP: the sheet asks with models=1, and its picks ride along with the question", async () => {

@@ -174,7 +174,7 @@ describe("a Claude Code that comes up on another model is stopped before it answ
       expect(t.inputs()).toEqual(["Add a retry to the upload step"]);
       const turn = t.turns().at(-1)!;
       expect(turn.status).toBe("error");
-      expect(turn.error).toBe("Claude Code started on Opus 5 instead of Opus 5.5, this chat's model, so Crosstalk stopped it before it answered. This account can't use Opus 5.5 right now. Pick another model in the model menu.");
+      expect(turn.error).toBe("Claude Code started on Opus 5 instead of Opus 5.5, this chat's model, so Crosstalk stopped it before it answered. This account can't use Opus 5.5 right now. Pick another model in Chat settings → Answers with.");
       // Opus 5 was never kept as the chat's model, and the message is still the person's (unread), for Try again.
       expect(t.session().model).toBeUndefined();
       expect(t.store.getLastSeen(t.member.id).seq).toBe(0);

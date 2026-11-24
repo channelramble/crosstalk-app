@@ -59,7 +59,7 @@ export class Computers {
     if (!existsSync(this.keyPath)) {
       this.ready();
       const r = Bun.spawnSync(["ssh-keygen", "-t", "ed25519", "-N", "", "-C", "crosstalk-agents", "-f", this.keyPath, "-q"]);
-      if (r.exitCode !== 0) throw new HttpError(500, `Couldn't create the hub's SSH key: ${r.stderr.toString().trim()}`);
+      if (r.exitCode !== 0) throw new HttpError(500, `Couldn't create Crosstalk's SSH key: ${r.stderr.toString().trim()}`);
     }
     return readFileSync(`${this.keyPath}.pub`, "utf8").trim();
   }
@@ -199,7 +199,7 @@ if (-not (Select-String -Path $keyFile -SimpleMatch $key -Quiet)) { Add-Content 
 icacls $keyFile /inheritance:r /grant 'Administrators:F' /grant 'SYSTEM:F' | Out-Null
 $ts = (Get-Command tailscale -ErrorAction SilentlyContinue).Source
 if (-not $ts) { $ts = Join-Path $env:ProgramFiles 'Tailscale\\tailscale.exe' }
-if (-not (Test-Path $ts)) { Write-Host "Tailscale isn't installed here. Install it and sign in to the same tailnet as the hub, then run this again." -ForegroundColor Yellow; return }
+if (-not (Test-Path $ts)) { Write-Host "Tailscale isn't installed here. Install it and sign in to the same tailnet as the machine that runs Crosstalk, then run this again." -ForegroundColor Yellow; return }
 $ip = (& $ts ip -4 | Select-Object -First 1).Trim()
 $body = @{ user = $env:USERNAME; host = $ip; label = $env:COMPUTERNAME; os = 'windows' } | ConvertTo-Json
 $res = Invoke-RestMethod -Method Post -Uri '${claim}' -ContentType 'application/json' -Body $body

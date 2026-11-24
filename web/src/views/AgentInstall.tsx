@@ -3,12 +3,11 @@
 // installer in a terminal on the hub), watched here until it ends and then checked: only the hub's own word that the agent
 // is there counts as installed.
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Download, Loader2, RefreshCw } from "lucide-react";
+import { Download, Loader2 } from "lucide-react";
 import { PROVIDER_INFO, type Provider, type ProviderStatus, type PtyInfo } from "@crosstalk/shared";
 import { api, ApiError } from "../api";
-import { errorMessage, installFailure, installWords, noDot, openCodeState, type InstallPhase } from "../services";
+import { errorMessage, installFailure, installWords, noDot, type InstallPhase } from "../services";
 import { useStore } from "../store";
-import { ProviderAvatar } from "../ui";
 import { useKeepFocus } from "./AgentSetupSection";
 import { useMachineName } from "./MachinePicker";
 import { Terminal } from "./Terminal";
@@ -32,7 +31,7 @@ export interface AgentInstall {
 /** What the hub says of a terminal, kept where every screen reads it (the live connection brings the same). */
 const notePty = (pty: PtyInfo) => useStore.setState((s) => ({ ptys: { ...s.ptys, [pty.id]: pty } }));
 /** What the hub says of an agent. */
-const noteStatus = (status: ProviderStatus) => useStore.setState((s) => ({ providers: { ...s.providers, [status.provider]: status } }));
+export const noteStatus = (status: ProviderStatus) => useStore.setState((s) => ({ providers: { ...s.providers, [status.provider]: status } }));
 
 /**
  * One agent's install: starting it, following it and how it ended. An install already running on that machine is taken up
@@ -185,54 +184,5 @@ export function InstallBox({ install, says, idleAction, fallback, children }: { 
         </div>
       )}
     </div>
-  );
-}
-
-/**
- * OpenCode's card in Settings → AI services: whether it's installed here, which version, and the button that puts the
- * version Crosstalk was checked against on this machine. Nothing to sign in to and no plan: the services it runs are on
- * their own rows above. A hub older than OpenCode doesn't list it, and shows no card.
- */
-export function OpenCodeCard() {
-  const info = PROVIDER_INFO.opencode;
-  const status = useStore((s) => s.providers.opencode);
-  const toast = useStore((s) => s.toast);
-  const install = useAgentInstall("opencode");
-  const [checking, setChecking] = useState(false);
-  if (!status) return null;
-  const state = openCodeState(status);
-  const check = async () => {
-    setChecking(true);
-    try {
-      noteStatus(await api<ProviderStatus>("POST", "/api/providers/opencode/refresh"));
-      install.forget();
-    } catch (e) {
-      toast("error", errorMessage(e));
-    } finally {
-      setChecking(false);
-    }
-  };
-  return (
-    <section className="card tinted svc-agent-card" style={{ ["--c" as string]: info.color }} aria-label={info.name}>
-      <div className="row" style={{ marginBottom: 6 }}>
-        <ProviderAvatar provider="opencode" size="lg" />
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <h3 style={{ margin: 0 }}>{info.name}</h3>
-          <div className="muted small">
-            {info.vendor}
-            {status.version ? ` · v${status.version}` : ""}
-          </div>
-        </div>
-        <span className={`pill ${state.tone}`}>{state.word}</span>
-      </div>
-      <p className="help">An open-source coding agent that Crosstalk drives, with no refusal rules of its own. It runs the AI services whose rows above say OpenCode.</p>
-      {state.line && <p className="help">{state.line}</p>}
-      {status.installed && status.binPath && <p className="help mono svc-bin">{status.binPath}</p>}
-      <InstallBox install={install} idleAction={state.action ?? undefined}>
-        <button className="btn small ghost" onClick={check} disabled={checking}>
-          <RefreshCw size={13} className={checking ? "spin" : ""} aria-hidden /> Check
-        </button>
-      </InstallBox>
-    </section>
   );
 }

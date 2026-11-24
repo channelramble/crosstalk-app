@@ -38,7 +38,7 @@ export function workOrder(room: Room, members: Member[], turns: Turn[]) {
     if (!queued.length && turn && loopStep && fits) {
       steps.push({ member: building ? reviewer : builder, when: building ? "Planned next" : "If fixes are needed", action: building ? "Reviewing" : "Improving" });
       note = building ? "Review follows a successful build. The loop may pause for your input." : "Approval finishes the task; otherwise the builder makes the fixes.";
-    } else if (!queued.length && turn && loopStep && !fits) note = "This is the last step at the room's current round limit.";
+    } else if (!queued.length && turn && loopStep && !fits) note = "This is the last step at the chat's current round limit.";
     else if (member.id === reviewer.id && turn && !loopStep) note = "Answering your request. A new build starts only if the reviewer asks the builder to act.";
   }
   return { steps, note, round, together: running.length > 1 };

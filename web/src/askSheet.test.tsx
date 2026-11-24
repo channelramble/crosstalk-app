@@ -98,9 +98,7 @@ test("what Codex's tools cost on a model is said in the ask's picker too, as in 
   expect(shown).toContain("Measured today.");
 });
 
-test("a row whose model can't be picked here says why, and where to change it", () => {
-  const pool: AskChoice = { ...CODEX, target: { provider: "claude", account: "pool1", model: "qwen-pool", effort: null }, label: "Model pool · qwen-pool", models: undefined, fixedModel: "pool" };
-  expect(words(renderPicker(pool, { model: "", effort: "" }))).toBe("The model pool runs one model at a time. To ask another, change it in Settings → Model pool.");
+test("a row whose model can't be picked here says why, and what to do", () => {
   const older: AskChoice = { ...CODEX, target: { ...CODEX.target, machine: PC.id }, label: "Codex · GPT-5.5 · on the PC", machine: PC, models: undefined, fixedModel: "update" };
   expect(words(renderPicker(older, { model: "", effort: "" }))).toBe("To pick its model from here, update Crosstalk on the PC. Until then it answers with the model the PC uses.");
   // A hub of 0.6.1 or older (no models, nothing said): the row is as it always was.

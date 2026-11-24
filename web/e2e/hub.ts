@@ -7,13 +7,12 @@ import type { Provider } from "@crosstalk/shared";
 
 const dir = mkdtempSync(join(tmpdir(), "crosstalk-browser-"));
 for (const key of Object.keys(process.env)) if (key.startsWith("CROSSTALK_")) delete process.env[key];
-// Settings → Model pool asks this hub about itself (a check when it first opens): it must never run this Mac's real
-// Tailscale (a path that isn't there reads as "not installed") or reach GitHub and Hugging Face (nothing listens on
-// port 9, so a request fails at once).
+// This hub asks about itself (Settings' checklist, the image editor's link, Local models): it must never run this
+// Mac's real Tailscale (a path that isn't there reads as "not installed") or reach GitHub and Hugging Face (nothing
+// listens on port 9, so a request fails at once).
 process.env.CROSSTALK_TAILSCALE_BIN = join(dir, "no-tailscale");
 process.env.CROSSTALK_TAILSCALE_APP_DIR = join(dir, "no-tailscale-app");
 process.env.CROSSTALK_GITHUB_API = "http://127.0.0.1:9";
-process.env.CROSSTALK_LLAMA_RELEASES = "http://127.0.0.1:9";
 process.env.CROSSTALK_HF_URL = "http://127.0.0.1:9";
 // Settings → AI services scans this machine's own model-server ports (Ollama, LM Studio, llama.cpp): never in a test hub.
 process.env.CROSSTALK_LOCAL_SERVER_PORTS = "";
@@ -49,6 +48,31 @@ app.providers.accounts = () => [
   ...statuses.filter((s) => s.provider !== "mock").map((s) => ({ ...s, id: "default", label: "Main" })),
   ...actualAccounts().filter((a) => a.id !== "default"),
 ];
+// The machine's screen is a small screen-sharing server of the test's own (never this Mac's real screen): the Screen
+// page signs in to it through the hub. A second port lets a spec paint on it and read the clicks and keys it was sent.
+const { fakeVnc } = await import("../../hub/test/fixtures/fake-vnc");
+const screen = fakeVnc({ password: "screen-pw", width: 640, height: 400 });
+process.env.CROSSTALK_SCREEN_PORT = String(screen.port);
+screen.paint(0, 0, 640, 400, [20, 60, 140]);
+screen.paint(40, 30, 200, 120, [240, 240, 240]);
+const screenControl = Bun.serve({
+  hostname: "127.0.0.1",
+  port: 8452,
+  async fetch(req) {
+    const url = new URL(req.url);
+    const cors = { "access-control-allow-origin": "*" };
+    if (url.pathname === "/events") {
+      const events = screen.events.splice(0);
+      return Response.json({ events, clients: screen.clients() }, { headers: cors });
+    }
+    if (url.pathname === "/paint" && req.method === "POST") {
+      const b = (await req.json()) as { x: number; y: number; w: number; h: number; rgb: [number, number, number] };
+      screen.paint(b.x, b.y, b.w, b.h, b.rgb);
+      return Response.json({ ok: true }, { headers: cors });
+    }
+    return new Response("not found", { status: 404 });
+  },
+});
 const device = (await app.auth.pair((await app.auth.createPairingCode()).code, "Browser tests", "Web"))!;
 writeFileSync(statePath, JSON.stringify({ token: device.token, workspaceRoot: dir }), { mode: 0o600 });
 await app.start();
@@ -56,6 +80,8 @@ const server = startServer(app);
 
 async function close() {
   server.stop(true);
+  screenControl.stop(true);
+  screen.stop();
   await app.engine.shutdown();
   app.store.close();
   rmSync(dir, { recursive: true, force: true });

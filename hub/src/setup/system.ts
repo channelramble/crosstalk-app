@@ -3,7 +3,7 @@
 // Only a hub on its real data folder gets these (app.ts): in-memory hubs (tests) get fakes or nothing.
 
 import { lookup as dnsLookup } from "node:dns/promises";
-import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } from "node:fs";
+import { closeSync, copyFileSync, existsSync, linkSync, openSync, readFileSync, readSync, renameSync, rmSync, statSync, truncateSync } from "node:fs";
 import { homedir, networkInterfaces, userInfo } from "node:os";
 import { join } from "node:path";
 import type { MacStatus } from "@crosstalk/shared";
@@ -57,9 +57,11 @@ export function systemProbes(run: Run, mac: (() => Promise<MacStatus>) | null): 
 // ---- the service ----
 
 export const DEFAULT_LABEL = "com.crosstalk.hub";
-const UNIT = "crosstalk-hub.service";
+export const DEFAULT_UNIT = "crosstalk-hub";
+/** The systemd user unit: CROSSTALK_UNIT names another (as it does for deploy/restart-when-idle.sh), like CROSSTALK_LABEL on a Mac. */
+export const unitName = (env: Record<string, string | undefined> = process.env) => `${(env.CROSSTALK_UNIT || DEFAULT_UNIT).replace(/\.service$/, "")}.service`;
 export const launchAgentFile = (label: string) => join(homedir(), "Library", "LaunchAgents", `${label}.plist`);
-export const unitFile = () => join(homedir(), ".config", "systemd", "user", UNIT);
+export const unitFile = (unit = unitName()) => join(homedir(), ".config", "systemd", "user", unit);
 
 /**
  * How the running hub was started, judged by the hub process itself: launchd's and systemd's variables are inherited by
@@ -74,10 +76,11 @@ export async function hubService(run: Run, env: Record<string, string | undefine
     return { runningUnder: launchd ? "launchd" : "none", label, file, fileExists: existsSync(file) };
   }
   if (platform === "linux") {
-    const file = unitFile();
-    const systemd = !!env.INVOCATION_ID && readText("/proc/self/cgroup").includes(UNIT) && readText(`/proc/${ppid}/comm`).trim() === "systemd";
+    const unit = unitName(env);
+    const file = unitFile(unit);
+    const systemd = !!env.INVOCATION_ID && readText("/proc/self/cgroup").includes(unit) && readText(`/proc/${ppid}/comm`).trim() === "systemd";
     const linger = await run(["loginctl", "show-user", userInfo().username, "--property=Linger", "--value"], 3000);
-    return { runningUnder: systemd ? "systemd" : "none", label: UNIT, file, fileExists: existsSync(file), linger: linger?.code === 0 ? linger.out.trim() === "yes" : null };
+    return { runningUnder: systemd ? "systemd" : "none", label: unit, file, fileExists: existsSync(file), linger: linger?.code === 0 ? linger.out.trim() === "yes" : null };
   }
   return null;
 }
@@ -93,8 +96,9 @@ export async function serviceFromManager(run: Run, env: Record<string, string | 
     return { runningUnder: null, label, file, fileExists: existsSync(file), loaded, active: loaded === null ? null : loaded && /^\s*state = running/m.test(r!.out) };
   }
   if (platform === "linux") {
-    const [enabled, active] = await Promise.all([run(["systemctl", "--user", "is-enabled", UNIT], 5000), run(["systemctl", "--user", "is-active", UNIT], 5000)]);
-    return { runningUnder: null, label: UNIT, file: unitFile(), fileExists: existsSync(unitFile()), loaded: enabled ? enabled.out.trim() === "enabled" : null, active: active ? active.out.trim() === "active" : null };
+    const unit = unitName(env);
+    const [enabled, active] = await Promise.all([run(["systemctl", "--user", "is-enabled", unit], 5000), run(["systemctl", "--user", "is-active", unit], 5000)]);
+    return { runningUnder: null, label: unit, file: unitFile(unit), fileExists: existsSync(unitFile(unit)), loaded: enabled ? enabled.out.trim() === "enabled" : null, active: active ? active.out.trim() === "active" : null };
   }
   return null;
 }
@@ -209,12 +213,19 @@ const resolveHost = async (host: string) => (await dnsLookup(host, { all: true }
 // ---- a newer build, other hubs' versions ----
 
 /**
- * A compiled hub replaced at its path (a deploy moves the new build in place): the new file's version, until the hub is
- * restarted with it. In development the program is bun itself, which says nothing about Crosstalk.
+ * Where a new build waits beside the running one. It's put in place only as the hub restarts (takeNextBuild): macOS
+ * knows a running program by the path its file has, so a program whose file was moved aside under it (the old way: the
+ * new build put in its place, the running one left as a backup's name) asks for every permission again until it
+ * restarts.
  */
-function stagedBuild(run: Run): () => Promise<string | null> {
-  const path = process.execPath;
-  const compiled = Bun.main.startsWith("/$bunfs/") || Bun.main.startsWith("B:\\~BUN\\");
+export const nextBuildPath = (path: string = process.execPath) => `${path}.next`;
+
+/**
+ * A new build of the compiled hub: one waiting beside it (nextBuildPath), or one put in its place under it (an
+ * installer, or a deploy to a hub from before 0.8). Its version, until the hub is restarted with it. In development the
+ * program is bun itself, which says nothing about Crosstalk.
+ */
+export function stagedBuild(run: Run, path: string = process.execPath, compiled = Bun.main.startsWith("/$bunfs/") || Bun.main.startsWith("B:\\~BUN\\")): () => Promise<string | null> {
   let start: { ino: number; mtime: number; size: number } | null = null;
   try {
     const s = statSync(path);
@@ -222,18 +233,48 @@ function stagedBuild(run: Run): () => Promise<string | null> {
   } catch {
     start = null;
   }
+  const versionOf = async (file: string) => {
+    const r = await run([file, "version"], 5000);
+    const v = r?.code === 0 ? r.out.trim().split("\n")[0] : "";
+    return /^\d+\.\d+[\w.-]*$/.test(v) ? v.slice(0, 30) : null;
+  };
   return async () => {
     if (!compiled || !start) return null;
+    // One that waits beside it (still being copied there, it says nothing yet).
+    if (existsSync(nextBuildPath(path))) {
+      const v = await versionOf(nextBuildPath(path));
+      if (v) return v;
+    }
     try {
       const s = statSync(path);
       if (s.ino === start.ino && s.mtimeMs === start.mtime && s.size === start.size) return null;
     } catch {
       return null;
     }
-    const r = await run([path, "version"], 5000);
-    const v = r?.code === 0 ? r.out.trim().split("\n")[0] : "";
-    return /^\d+\.\d+[\w.-]*$/.test(v) ? v.slice(0, 30) : null;
+    return versionOf(path);
   };
+}
+
+/**
+ * As the hub restarts for an update: the build that waited beside it takes its place, and the one that ran stays
+ * beside it as `<path>.bak-<version>`, to go back to. False when none waited (the new build is in place already).
+ */
+export function takeNextBuild(version: string, path: string = process.execPath): boolean {
+  const next = nextBuildPath(path);
+  if (!existsSync(next)) return false;
+  try {
+    const bak = `${path}.bak-${version}`;
+    rmSync(bak, { force: true });
+    linkSync(path, bak);
+  } catch {
+    // No backup (another disk, or no rights): the update still goes in.
+  }
+  try {
+    renameSync(next, path);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function hubVersion(url: string): Promise<string | null> {
@@ -256,10 +297,26 @@ function idleRestartScript(): string | null {
 /** The Mac hub's log file (the LaunchAgent writes there); on Linux, systemd's journal. */
 export const MAC_LOG = join(homedir(), "Library", "Logs", "Crosstalk", "hub.log");
 
+/**
+ * Keeps the Mac's log from growing without end: past `max` as Crosstalk starts, what's there moves to hub.log.1 (taking
+ * the place of the one before) and the log starts empty. The service writes to it by appending, so emptying it under
+ * the running service is safe. On Linux the journal keeps its own size.
+ */
+export function rotateLog(path = MAC_LOG, max = 5 * 1024 * 1024): boolean {
+  try {
+    if (statSync(path).size <= max) return false;
+    copyFileSync(path, `${path}.1`);
+    truncateSync(path, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function hubLog(run: Run, lines: number): Promise<string[] | null> {
   if (process.platform === "darwin") return tailFile(MAC_LOG, lines);
   if (process.platform === "linux") {
-    const r = await run(["journalctl", "--user", "-u", UNIT, "-n", String(lines), "-o", "cat", "--no-pager"], 5000);
+    const r = await run(["journalctl", "--user", "-u", unitName(), "-n", String(lines), "-o", "cat", "--no-pager"], 5000);
     return r?.code === 0 ? r.out.split("\n").filter((l) => l.trim()) : null;
   }
   return null;
@@ -302,8 +359,8 @@ export function redactLog(lines: string[]): string[] {
     l = l
       // Push endpoints are capabilities: only their host is kept.
       .replace(/https:\/\/([\w.-]*(?:push|fcm|notify|wns)[\w.-]*)\/\S*/gi, "https://$1/[hidden]")
-      // One-time links: computer claims, Linux setup, invites, pool helpers.
-      .replace(/\/(claim|install|invites|helper)\/[A-Za-z0-9_-]{8,}/g, "/$1/[hidden]")
+      // One-time links: computer claims, Linux setup, invites.
+      .replace(/\/(claim|install|invites)\/[A-Za-z0-9_-]{8,}/g, "/$1/[hidden]")
       .replace(/\bBearer\s+\S+/gi, "Bearer [hidden]")
       // Up to 40 characters of a name before "token" or "key" (any before them stay as they are): read from each word's
       // start to its end, a long dashed word took time that grew with its square.

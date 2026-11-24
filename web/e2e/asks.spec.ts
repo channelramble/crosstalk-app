@@ -230,14 +230,14 @@ test("the sheet says what to do when the list can't load or asking is refused", 
     s.targets.status = 404;
     s.targets.body = { error: "Not found" };
     let sheet = await openSheet(page, "Review the plan");
-    await expect(sheet.getByRole("alert")).toContainText("This hub can't do that yet. Update the hub on your computer, then try again.");
+    await expect(sheet.getByRole("alert")).toContainText("This machine can't do that yet. Update Crosstalk on it, then try again.");
     await sheet.getByRole("button", { name: "Cancel", exact: true }).click();
     await expect(sheet).toBeHidden();
     // A hub that's having trouble: the reason, and Try again (the sheet tries once more and shows the list).
     s.targets.status = 500;
-    s.targets.body = { error: "The hub hit a problem." };
+    s.targets.body = { error: "Crosstalk hit a problem." };
     sheet = await openSheet(page, "Review the plan");
-    await expect(sheet.getByRole("alert")).toContainText("Couldn't load who you can ask. The hub hit a problem.");
+    await expect(sheet.getByRole("alert")).toContainText("Couldn't load who you can ask. Crosstalk hit a problem.");
     await snap(page, "04-sheet-list-error.png");
     s.targets.status = 200;
     // One row has a `sub` that says something the badges don't (a hub that sends the model and effort): it is shown, the rest aren't.
@@ -602,7 +602,7 @@ test("@ when who can be asked can't be looked up: the notice says so, with Try a
   const s = await scenario(page, request, token);
   s.history.messages.push(s.message("human", "Plan the release"), s.message("agent", "Planned."));
   s.targets.status = 500;
-  s.targets.body = { error: "The hub hit a problem." };
+  s.targets.body = { error: "Crosstalk hit a problem." };
   try {
     await s.open();
     const box = messageBox(page);
@@ -613,7 +613,7 @@ test("@ when who can be asked can't be looked up: the notice says so, with Try a
     await box.fill("Plan it");
     await expect(hint).toHaveCount(0);
     await box.fill("@");
-    await expect(hint).toContainText("Couldn't check who you can ask. The hub hit a problem.");
+    await expect(hint).toContainText("Couldn't check who you can ask. Crosstalk hit a problem.");
     await expect(page.getByRole("listbox", { name: "Ask someone else" })).toHaveCount(0);
     // A lone @ names nobody: Try again only. A name typed in full is not lost without a word either: Send sends nothing.
     await expect(asIs).toHaveCount(0);
@@ -636,7 +636,7 @@ test("@ when who can be asked can't be looked up: the notice says so, with Try a
     s.targets.status = 404;
     s.targets.body = { error: "Not found." };
     await tryAgain.click();
-    await expect(hint).toContainText("This hub can't do that yet. Update the hub on your computer, then try again.");
+    await expect(hint).toContainText("This machine can't do that yet. Update Crosstalk on it, then try again.");
     await expect(tryAgain).toBeEnabled();
     s.targets.status = 200;
     s.targets.body = CHOICES;
@@ -654,7 +654,7 @@ test("when who can be asked can't be looked up, Send to the chat as it is is the
   await s.answerMessages();
   s.history.messages.push(s.message("human", "Plan the release"), s.message("agent", "Planned."));
   s.targets.status = 500;
-  s.targets.body = { error: "The hub hit a problem." };
+  s.targets.body = { error: "Crosstalk hit a problem." };
   try {
     await s.open();
     const box = messageBox(page);
@@ -723,7 +723,7 @@ test("a list that doesn't come: after about 8 seconds Send says it couldn't chec
     const waited = Date.now() - started;
     expect(waited).toBeGreaterThan(7_000);
     expect(waited).toBeLessThan(15_000);
-    await expect(gaveUp).toContainText("The hub is taking too long to answer.");
+    await expect(gaveUp).toContainText("The machine is taking too long to answer.");
     await expect(gaveUp.getByRole("button", { name: "Send to the chat as it is", exact: true })).toBeVisible();
     await expect(box).toHaveValue("@codex is this right?");
     expect(s.calls).toEqual([]);

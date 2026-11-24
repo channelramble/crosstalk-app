@@ -144,7 +144,7 @@ test("numbering the pins again writes only the ones whose place changes", () => 
 
 test("a pin that didn't happen says why: an older Crosstalk, a machine out of reach, or the hub's own words", () => {
   expect(pinProblem(new ApiError(404, "not found"), "Linux box")).toEqual({ why: "older", text: "Update Crosstalk on Linux box to pin its chats." });
-  expect(pinProblem(new ApiError(0, "Can't reach the hub. Check that it's running and that this device is on your Tailscale network."), "Linux box")).toEqual({ why: "down", text: "Can't reach Linux box. Try again when it's back." });
+  expect(pinProblem(new ApiError(0, "Can't reach the machine. Check that Crosstalk is running on it and that this device is on your Tailscale network."), "Linux box")).toEqual({ why: "down", text: "Can't reach Linux box. Try again when it's back." });
   const gone = "That chat is gone. It may have been deleted on another device.";
   expect(pinProblem(new ApiError(404, gone, "no_room"), "Mac mini")).toEqual({ why: "other", text: gone });
   expect(pinProblem(new ApiError(400, "Say whether to pin the chat (pinned: true or false)."), "Mac mini").why).toBe("other");

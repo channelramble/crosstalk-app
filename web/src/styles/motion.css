@@ -309,6 +309,10 @@
 .switch span::before {
   transition: opacity var(--dur-fade) var(--ease-fade);
 }
+/* A theme's background picture fades in over its own average colour once it's read from the device (themes.css). */
+:root[data-backdrop="picture"] body::before {
+  transition: opacity var(--dur-fade) var(--ease-fade);
+}
 /* The ×2 on a notice that came again: a box of its own, so it can pop. */
 .toast-count {
   display: inline-block;
@@ -417,7 +421,7 @@
    * a slid fill's box reaches past its bar, clipped on screen but not for anything that measures it. The ring's arc grows.
    */
   .meter > i,
-  .pool-bar > span {
+  .fill-bar > span {
     transition: transform 0.4s var(--ease-smooth);
   }
   .upload-bar > span {

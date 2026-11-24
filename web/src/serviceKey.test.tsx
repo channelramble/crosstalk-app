@@ -15,17 +15,17 @@ const { OpenAiServices } = await import("./views/ServiceKey");
 const { MessageRow } = await import("./views/RoomView");
 
 // A reply Crosstalk's own agent or OpenCode couldn't get because the service refused its key: the reply says so in plain
-// words, with Open AI services as the way there — never a Sign in, which they don't have (hub/test/builtin-signin.test.ts).
+// words, with Open Accounts as the way there — never a Sign in, which they don't have (hub/test/builtin-signin.test.ts).
 
 const words = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, "&").replace(/\s+/g, " ").trim();
 const NOW = Date.UTC(2026, 10, 1, 9, 40, 0);
 const REFUSED = serviceKeyWords("NanoGPT");
 
-test("Open AI services goes beside Try again on a refused key, and on nothing else", () => {
+test("Open Accounts goes beside Try again on a refused key, and on nothing else", () => {
   const draw = (error: string | null | undefined) => renderToStaticMarkup(createElement(OpenAiServices, { error }));
   for (const error of [REFUSED, `⚠️ ${REFUSED}`, serviceKeyWords("NanoGPT", true)]) {
     const html = draw(error);
-    expect(words(html)).toBe("Open AI services");
+    expect(words(html)).toBe("Open Accounts");
     expect(html).toContain('<button type="button" class="link-action open-ai-services"');
     // The icon is decoration: the button is named by its words alone.
     expect(html).toContain('aria-hidden="true"');
@@ -41,7 +41,7 @@ for (const [provider, service] of [["builtin", "NanoGPT"], ["opencode", "Refusel
     const reply: Message = { id: "m2", roomId: "r1", authorKind: "agent", memberId: "mb1", authorName: "agent", text: `⚠️ ${refused}`, mentions: [], turnId: "t1", status: "error", createdAt: NOW, updatedAt: NOW };
     const html = renderToStaticMarkup(createElement(MessageRow, { message: reply, member, handles: ["agent"], turn, statusKnown: true, announce: true }));
     expect(words(html).split(`${service} refused the key`).length - 1).toBe(1);
-    expect(words(html)).toContain("check it in Settings → AI services, then tap Try again.");
+    expect(words(html)).toContain("check it in Settings → Accounts, then tap Try again.");
     expect(html).not.toContain("signin-prompt");
     expect(words(html)).not.toMatch(/\bSign in\b/);
   });

@@ -24,7 +24,7 @@ export function pinChat(app: App, roomId: string, body: unknown): Room {
   const b = (body && typeof body === "object" ? body : {}) as { pinned?: unknown; order?: unknown };
   if (typeof b.pinned !== "boolean") throw new HttpError(400, "Say whether to pin the chat (pinned: true or false).");
   const order = b.order ?? undefined;
-  if (order !== undefined && (typeof order !== "number" || !Number.isFinite(order) || Math.abs(order) > MAX_PIN_ORDER)) throw new HttpError(400, "That place in the list isn't one the hub can keep.");
+  if (order !== undefined && (typeof order !== "number" || !Number.isFinite(order) || Math.abs(order) > MAX_PIN_ORDER)) throw new HttpError(400, "That place in the list isn't one Crosstalk can keep.");
   let pin: { at: number; order: number } | null = null;
   if (room.pinnedAt && b.pinned) {
     // Pinned already: a move. When it was pinned stays, and so does its place unless one is given.

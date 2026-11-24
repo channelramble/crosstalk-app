@@ -26,7 +26,7 @@ import { endStarted } from "./standins";
 setDefaultTimeout(30_000);
 const KEY = "sk-nano-test-key-0001";
 const PICK = "deepseek/deepseek-v4.1-flash-uncensored";
-const REFUSED = "NanoGPT refused the key — check it in Settings → AI services, then tap Try again.";
+const REFUSED = "NanoGPT refused the key — check it in Settings → Accounts, then tap Try again.";
 
 const cleanups: (() => void | Promise<void>)[] = [];
 const dirs: string[] = [];
@@ -93,7 +93,7 @@ async function hub(o: { key?: string; replies?: ScriptedReply[] } = {}) {
 }
 
 describe("a key the service refuses is never a sign-in", () => {
-  test("the reply says to check the key in Settings → AI services: no fresh start, no sign-in check, nothing signed out", async () => {
+  test("the reply says to check the key in Settings → Accounts: no fresh start, no sign-in check, nothing signed out", async () => {
     const h = await hub({ replies: [{ text: "Hello from NanoGPT." }] });
     expect(serviceKeyWords("NanoGPT")).toBe(REFUSED);
     h.app.engine.postHumanMessage(h.room.id, "Say hello", "Phone");
@@ -129,7 +129,7 @@ describe("a key the service refuses is never a sign-in", () => {
     expect(said(401, '{"error":{"message":"Invalid API key"}}')).toBe(REFUSED);
     expect(said(403, '{"error":"Forbidden"}')).toBe(REFUSED);
     expect(said(403, "<html>Forbidden</html>")).toBe(REFUSED);
-    expect(said(401, '{"error":{"message":"Missing API key"}}', false)).toBe("NanoGPT needs a key — add it in Settings → AI services, then tap Try again.");
+    expect(said(401, '{"error":{"message":"Missing API key"}}', false)).toBe("NanoGPT needs a key — add it in Settings → Accounts, then tap Try again.");
     // A new key wouldn't change these: the service's own words say what would.
     const money = said(403, '{"error":{"message":"Insufficient balance"}}');
     expect(money).toBe(`NanoGPT says there isn't enough money in the account for ${PICK}: Insufficient balance. Add money on its website, or pick another model in this chat's settings (on NanoGPT, one its subscription covers).`);
@@ -177,7 +177,7 @@ describe("a key the service refuses is never a sign-in", () => {
     expect(h.app.signIns.covers(h.member)).toBe(false);
     expect(h.app.signIns.covers({ ...h.member, config: { ...h.member.config, account: "gone" } })).toBe(false);
     expect(h.app.signIns.covers({ ...h.member, config: {} })).toBe(false);
-    // The agents that do have one still are (a plan sign-in), so the recovery itself is untouched.
+    // The agents that do have one still are (a account on a plan), so the recovery itself is untouched.
     expect(h.app.signIns.covers({ ...h.member, provider: "claude", config: {} })).toBe(true);
   });
 });
@@ -204,7 +204,7 @@ describe("no sign-in for Crosstalk's agent, from anywhere", () => {
     for (const account of [h.account.id, "gone"]) expect(await call("POST", `/api/accounts/builtin/${account}/logout`, {})).toEqual(refused);
     expect(await call("POST", "/api/providers/builtin/logout", {})).toEqual(refused);
     expect(await call("POST", "/api/accounts", { provider: "builtin", label: "Work" })).toEqual(refused);
-    expect(NO_SIGN_IN_WORDS).toBe("Crosstalk's own agent has no sign-in: it runs on an AI service's key. Check that key in Settings → AI services.");
+    expect(NO_SIGN_IN_WORDS).toBe("Crosstalk's own agent has no sign-in: it runs on an account's key. Check that key in Settings → Accounts.");
     // Nothing started, nothing to any device, and its service is the one account it has, untouched.
     expect(h.app.signIns.sessions()).toEqual([]);
     expect((await call("GET", "/api/signin")).body).toEqual({ needs: [], sessions: [] });
@@ -240,14 +240,14 @@ describe("no sign-in for Crosstalk's agent, from anywhere", () => {
 });
 
 describe("OpenCode has no sign-in either: it runs on a service's key, as Crosstalk's agent does", () => {
-  const OPENCODE_WORDS = "OpenCode has no sign-in: it runs on an AI service's key. Check that key in Settings → AI services.";
+  const OPENCODE_WORDS = "OpenCode has no sign-in: it runs on an account's key. Check that key in Settings → Accounts.";
 
   test("every agent that runs only on services is said to have none, in its own name, and the sign-in words asked for one are its key's", () => {
     expect(SERVICE_ONLY_AGENTS.filter((p) => agentHasSignIn(p))).toEqual([]);
     expect(noSignInWords("opencode")).toBe(OPENCODE_WORDS);
     expect(noSignInWords("builtin")).toBe(NO_SIGN_IN_WORDS);
     const who = { provider: "opencode", account: "svc1", accountLabel: "Refuseless" } as const;
-    const key = "Refuseless refused the key — check it in Settings → AI services, then tap Try again.";
+    const key = "Refuseless refused the key — check it in Settings → Accounts, then tap Try again.";
     expect(signInNeededWords(who, "Mac mini")).toBe(key);
     for (const signedIn of [true, false, null]) expect(staleSignInFailedWords(who, "Mac mini", { busy: false, signedIn })).toBe(key);
     // The agents that do sign in still do.
@@ -259,7 +259,7 @@ describe("OpenCode has no sign-in either: it runs on a service's key, as Crossta
     const account = h.app.providers.setEndpointAccount("opencode", { label: "Refuseless", baseUrl: h.fake.base, apiKey: "abl_wrong", models: [PICK], contextWindow: 1_048_576, protocol: "chat" });
     const member: Member = { ...h.member, provider: "opencode", config: { ...h.member.config, account: account.id } };
     for (const m of [member, { ...member, config: { ...member.config, account: "gone" } }, { ...member, config: {} }]) expect(h.app.signIns.covers(m)).toBe(false);
-    const key = "Refuseless refused the key — check it in Settings → AI services, then tap Try again.";
+    const key = "Refuseless refused the key — check it in Settings → Accounts, then tap Try again.";
     expect(h.app.signIns.needed(h.room, member)).toBe(key);
     expect(h.app.signIns.isNeeded(member)).toBe(false);
     expect(h.app.signIns.needs()).toEqual([]);
@@ -365,13 +365,13 @@ describe("its own failures: plain words, each with a way out, and never a sign-i
     expect(soon.limit?.resetsAt).toBeGreaterThan(Date.now());
 
     const refused = await run([() => status(400, { error: { message: "tool_choice is not supported" } })]);
-    expect(refused).toEqual({ ok: false, error: "NanoGPT turned the request down (error 400: tool_choice is not supported). Check the model and its settings in Settings → AI services, then tap Try again." });
+    expect(refused).toEqual({ ok: false, error: "NanoGPT turned the request down (error 400: tool_choice is not supported). Check the model and its settings in Settings → Accounts, then tap Try again." });
     const big = await run([() => status(400, { error: { message: "This model's maximum context length is 131072 tokens" } })]);
     // Since 0.6.6 it's summarised by itself first: only what that can't help reaches the person, with how to go on.
-    expect(big.error).toBe(`This conversation is too long for ${PICK}, and it couldn't be summarised to make room. To go on, edit your last message to make it shorter, start a new chat and say where the work stands, or pick a model that holds more in this chat's settings. (The service said: This model's maximum context length is 131072 tokens)`);
+    expect(big.error).toBe(`This chat is too long for ${PICK}, and it couldn't be summarised to make room. To go on, edit your last message to make it shorter, start a new chat and say where the work stands, or pick a model that holds more in this chat's settings. (The service said: This model's maximum context length is 131072 tokens)`);
     // A body that isn't one message never shows as "[object Object]".
     const odd = await run([() => status(400, { error: { type: "invalid_request_error" } })]);
-    expect(odd.error).toBe("NanoGPT turned the request down (error 400). Check the model and its settings in Settings → AI services, then tap Try again.");
+    expect(odd.error).toBe("NanoGPT turned the request down (error 400). Check the model and its settings in Settings → Accounts, then tap Try again.");
 
     // A server error is tried three more times first (0.6.6), then said.
     const s = scripted([() => status(503, { error: { message: "Upstream overloaded" } })]);
@@ -417,7 +417,7 @@ describe("its own failures: plain words, each with a way out, and never a sign-i
     const { sink, out } = sinkFor();
     expect(await d.runTurn(turn("/compact"), sink)).toEqual({ ok: false, error: REFUSED });
     expect(out.text).toBe("");
-    expect(out.notes).toEqual([{ title: "Summarising the conversation so far", detail: `Couldn't summarise: ${REFUSED}`, status: "error" }]);
+    expect(out.notes).toEqual([{ title: "Summarising the chat so far", detail: `Couldn't summarise: ${REFUSED}`, status: "error" }]);
     // With nothing to summarise yet it still says so, and that isn't a failure.
     const fresh = sinkFor();
     expect(await agent(temp("ct-agent-words-"), { fetch: scripted([() => answer("x")]).fetch }).runTurn(turn("/compact"), fresh.sink)).toEqual({ ok: true });

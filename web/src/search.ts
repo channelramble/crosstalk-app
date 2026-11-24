@@ -1,7 +1,7 @@
 // Search across chats (docs/SPEC-0.4.md section 14, track T8): what the sidebar asks each machine, and how it shows the
 // answers. Pure functions here (the web unit tests have no DOM); useMessageSearch.ts and views/MessageHits.tsx use them.
 
-import { SEARCH_MAX_HITS, SEARCH_MIN_CHARS, type SearchHit, type SearchResponse } from "@crosstalk/shared";
+import { settingsPath, SEARCH_MAX_HITS, SEARCH_MIN_CHARS, type SearchHit, type SearchResponse } from "@crosstalk/shared";
 import { ApiError, api, type Connection } from "./api";
 
 /** The sidebar waits this long after the last key before it asks the machines. */
@@ -107,7 +107,7 @@ function saidInError(e: ApiError): string {
 export function searchProblem(e: unknown): string {
   if (e instanceof ApiError) {
     if (e.status === 404 || e.status === 405) return "It runs an older Crosstalk that can't search yet. Update it, then try again.";
-    if (e.status === 401) return "It signed this device out. Pair it again in Settings → Machines.";
+    if (e.status === 401) return `It signed this device out. Pair it again in ${settingsPath("machines")}.`;
     // Status 0: the app's own plain words (it couldn't reach the machine). Otherwise the machine's own words go in a sentence.
     if (e.status === 0) return e.message;
     return `It answered with an error (${saidInError(e)}). Try again in a moment.`;

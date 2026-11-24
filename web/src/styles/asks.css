@@ -544,7 +544,7 @@
 @media (hover: hover) {
   .composer .send.ask:hover:not(:disabled) {
     background: var(--text);
-    color: #000;
+    color: var(--on-text);
     opacity: 0.88;
   }
 }

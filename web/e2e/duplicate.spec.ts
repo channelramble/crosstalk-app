@@ -1,4 +1,4 @@
-import { test, expect, noHorizontalOverflow } from "./fixtures";
+import { test, expect, noHorizontalOverflow, chatSettingsAll } from "./fixtures";
 import type { Page, Route, WebSocketRoute } from "@playwright/test";
 
 const HUB = "http://127.0.0.1:8451";
@@ -7,7 +7,7 @@ const HUB = "http://127.0.0.1:8451";
 async function openDuplicate(page: Page, roomId: string) {
   await page.goto(`/#/room/${roomId}`);
   await expect(page.getByRole("textbox", { name: "Message", exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Chat settings", exact: true }).click();
+  await chatSettingsAll(page);
   const settings = page.getByRole("dialog", { name: "Chat settings", exact: true });
   await settings.getByRole("button", { name: "Duplicate chat…", exact: true }).click();
   await expect(settings).toHaveCount(0);
@@ -63,7 +63,7 @@ test("Duplicate chat… asks where, how, which folder and what name, then opens 
   await dialog.getByRole("radio", { name: /^Codex: / }).click();
   await expect(dialog.getByRole("radio", { name: /^Codex: / })).toHaveAttribute("aria-checked", "true");
   await expect(dialog.getByText("Model, effort and helper agents: Codex's defaults.", { exact: true })).toBeVisible();
-  await expect(dialog.getByText(/^Codex reads this conversation/)).toBeVisible();
+  await expect(dialog.getByText(/^Codex reads this chat/)).toBeVisible();
   const model = dialog.getByRole("combobox", { name: "Model", exact: true });
   await expect(model).toHaveValue("");
   await expect(model.locator("option").first()).toHaveText("Default (codex model)");
@@ -98,6 +98,7 @@ test("agents and accounts that can't take the copy are listed, disabled, saying 
   const room = await (await request.post(`${HUB}/api/chats`, { headers, data: { provider: "claude", name: "Fix login" } })).json();
   const at = Date.now();
   // A custom model, a sign-in that's signed out, and Codex not installed.
+  let accounts: unknown[] | null = null;
   await page.route("**/api/state", async (route) => {
     const state = await (await route.fetch()).json();
     state.providers = state.providers.map((p: { provider: string }) => (p.provider === "codex" ? { ...p, installed: false } : p));
@@ -105,18 +106,21 @@ test("agents and accounts that can't take the copy are listed, disabled, saying 
       { provider: "claude", id: "qwen", label: "Qwen local", kind: "endpoint", endpoint: { baseUrl: "http://127.0.0.1:8080", models: ["qwen"], contextWindow: 32768, hasKey: false }, signedIn: true, account: null, plan: null, authMethod: "endpoint", error: null, checkedAt: at },
       { provider: "claude", id: "personal", label: "Personal", kind: "signin", signedIn: false, account: null, plan: null, authMethod: null, error: null, checkedAt: at },
     );
+    accounts = state.accounts;
     await route.fulfill({ json: state });
   });
+  // The chat's settings ask for the machine's accounts as they are now: the same ones.
+  await page.route("**/api/accounts", (route) => (route.request().method() === "GET" && accounts ? route.fulfill({ json: accounts }) : route.continue()));
   const dialog = await openDuplicate(page, room.id);
   await expect(dialog.getByRole("radio", { name: "Codex: Not installed", exact: true })).toBeDisabled();
   await expect(dialog.getByRole("radio", { name: "Personal: Not signed in", exact: true })).toBeDisabled();
-  const qwen = dialog.getByRole("radio", { name: "Qwen local: Custom model · Claude Code", exact: true });
+  const qwen = dialog.getByRole("radio", { name: "Qwen local: Your own model · Claude Code", exact: true });
   await expect(qwen).toBeEnabled();
   // One machine: no machine headings.
   await expect(dialog.locator(".dup-machine-name")).toHaveCount(0);
   await qwen.click();
   await expect(dialog.getByText("Model, effort and helper agents: Qwen local's defaults.", { exact: true })).toBeVisible();
-  await expect(dialog.getByText(/^Qwen local reads this conversation/)).toBeVisible();
+  await expect(dialog.getByText(/^Qwen local reads this chat/)).toBeVisible();
   await fits(page);
 });
 
@@ -185,7 +189,7 @@ test("a conversation open in the Claude app: send again once it's closed, or go 
   const room = await (await request.post(`${HUB}/api/chats`, { headers, data: { provider: "claude", name: "Open elsewhere" } })).json();
   const state = await (await request.get(`${HUB}/api/state`, { headers })).json();
   const member = state.members.find((m: { roomId: string }) => m.roomId === room.id);
-  const error = "This conversation is open in the Claude app right now. Close it there, then send your message again. Or duplicate this chat to go on in a copy.";
+  const error = "This chat is open in the Claude app right now. Close it there, then send your message again. Or duplicate this chat to go on in a copy.";
   const blocked = { ...member, status: "error", statusDetail: error };
   const older = { value: false };
   await page.route("**/api/state", async (route) => {

@@ -60,7 +60,7 @@ const CHAT_TOOLS = [
   {
     name: "list_chats",
     description:
-      "List the user's Crosstalk chats and group rooms on this machine and their other machines, most recently active first. The first line says which machines answered. Each line shows the chat's id, name, machine, agent, folder, whether its agent is working or waiting for the user, and its last message; your own chat is marked. Use the id with read_chat or send_to_chat.",
+      "List the user's Crosstalk chats (group chats too) on this machine and their other machines, most recently active first. The first line says which machines answered. Each line shows the chat's id, name, machine, agent, folder, whether its agent is working or waiting for the user, and its last message; your own chat is marked. Use the id with read_chat or send_to_chat.",
     inputSchema: {
       type: "object",
       properties: {
@@ -74,7 +74,7 @@ const CHAT_TOOLS = [
   {
     name: "read_chat",
     description:
-      "Read recent messages of one of the user's Crosstalk chats or group rooms, on any of their machines, oldest first, each labelled with who wrote it. Long messages are shortened: pass seq to read one message in full, or before to read older ones.",
+      "Read recent messages of one of the user's Crosstalk chats (group chats too), on any of their machines, oldest first, each labelled with who wrote it. Long messages are shortened: pass seq to read one message in full, or before to read older ones.",
     inputSchema: {
       type: "object",
       properties: {
@@ -153,8 +153,87 @@ const HELPER_MODEL_TOOL = {
   },
 };
 
+/** Helpers on another account (hub/src/helpers.ts): offered when the person chose one for this chat's helper work. */
+const HELPER_TOOLS = [
+  {
+    name: "start_helper",
+    description:
+      "Hand a piece of work to a helper: another agent that Crosstalk runs for you on the account the user chose for helper work in this chat. Use it wherever you would use a subagent or spawned agent. The helper works in this chat's folder with what this chat may do without asking, can't see this conversation, and can't ask you anything: give it the whole task. By default the call waits for the helper and returns its final report (up to 10 minutes; after that it says the helper is still working). With wait: false it returns at once, so you can start several and collect their reports with helper_result.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        task: { type: "string", maxLength: 20000, description: "What to do, in full: the goal, what you already know, what to report back" },
+        name: { type: "string", maxLength: 80, description: "A short name for it, shown to the user (e.g. 'Check the build')" },
+        files: { type: "array", items: { type: "string" }, maxItems: 40, description: "Paths of the files that matter" },
+        wait: { type: "boolean", description: "false: return at once instead of waiting for the report (default true)" },
+      },
+      required: ["task"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "helper_result",
+    description: "Wait for helpers you started with start_helper and get their reports. Leave id out to wait for every helper still working. A report is given once.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "The id start_helper gave you; leave out for all of them" },
+        wait_minutes: { type: "number", minimum: 0, maximum: 10, description: "How long to wait (default 10; 0 only looks)" },
+      },
+      additionalProperties: false,
+    },
+  },
+];
+const HELPERS_NOTE = " start_helper hands a piece of work to a helper on the account the user chose for helper work; use it instead of your own helper agents, as your instructions say.";
+
+/**
+ * This machine's screen (offered while the person lets agents use it): look at it and drive it like a person at the
+ * keyboard. Positions are pixels in the newest screenshot, from its top left corner.
+ */
+const POSITION = { x: { type: "number", description: "Pixels from the left edge of the screenshot" }, y: { type: "number", description: "Pixels from the top edge of the screenshot" } };
+const SCREEN_NOTE =
+  " The person can watch this live in Crosstalk's Screen view and may be using the machine too. Never type a password, a sign-in code or a key for them: ask them to type it themselves in the Screen view.";
+const SCREEN_TOOLS = [
+  { name: "screen_screenshot", description: "Take a screenshot of this machine's screen. Look before you act: every click, drag and scroll uses positions in the newest screenshot." + SCREEN_NOTE, inputSchema: { type: "object", properties: {}, additionalProperties: false } },
+  {
+    name: "screen_click",
+    description: "Click on this machine's screen at a position in the newest screenshot, then see the screen again. This is a real click: it can press buttons in any app and answer the system's dialogs. Use it only for what the task needs." + SCREEN_NOTE,
+    inputSchema: { type: "object", properties: { ...POSITION, button: { type: "string", enum: ["left", "right", "middle"], description: "Which mouse button (default left)" }, count: { type: "integer", minimum: 1, maximum: 3, description: "2 for a double click (default 1)" } }, required: ["x", "y"], additionalProperties: false },
+  },
+  { name: "screen_move", description: "Move the pointer to a position on this machine's screen without clicking (to show a tooltip or a hover menu), then see the screen again.", inputSchema: { type: "object", properties: POSITION, required: ["x", "y"], additionalProperties: false } },
+  {
+    name: "screen_drag",
+    description: "Press the mouse button at one position on this machine's screen, drag to another and let go, then see the screen again.",
+    inputSchema: { type: "object", properties: { fromX: POSITION.x, fromY: POSITION.y, toX: POSITION.x, toY: POSITION.y }, required: ["fromX", "fromY", "toX", "toY"], additionalProperties: false },
+  },
+  {
+    name: "screen_scroll",
+    description: "Scroll at a position on this machine's screen, then see the screen again.",
+    inputSchema: { type: "object", properties: { ...POSITION, direction: { type: "string", enum: ["up", "down", "left", "right"], description: "Default down" }, amount: { type: "integer", minimum: 1, maximum: 30, description: "How many notches (default 5)" } }, required: ["x", "y"], additionalProperties: false },
+  },
+  { name: "screen_type", description: "Type text on this machine's keyboard, into whatever has the keyboard's focus (click the field first), then see the screen again." + SCREEN_NOTE, inputSchema: { type: "object", properties: { text: { type: "string", description: "What to type; a newline presses Return" } }, required: ["text"], additionalProperties: false } },
+  { name: "screen_key", description: "Press a key or a key combination on this machine's keyboard, then see the screen again. Names: Return, Escape, Tab, Delete, Space, Left, Right, Up, Down, Home, End, PageUp, PageDown, F1 to F12; with modifiers as cmd+c, cmd+shift+4, ctrl+a, option+Left.", inputSchema: { type: "object", properties: { keys: { type: "string", description: "The key, or modifiers and a key joined with +" } }, required: ["keys"], additionalProperties: false } },
+  { name: "screen_windows", description: "List the windows on this machine's screen, front to back, with where each is in the screenshot.", inputSchema: { type: "object", properties: {}, additionalProperties: false } },
+];
+
 /** Teamwork in a chat: ask the other agent one focused question. */
 function askTool(provider: string) {
+  // The person chose who can be asked (Settings → Agents together): one tool, and the agent says whom.
+  if (provider === "agent") {
+    return {
+      name: "ask_agent",
+      description: "Ask another agent one focused question and get its answer. Your instructions list who you can ask. It can read the project's files but can't change them, and it can't see this conversation, so make the question self-contained. Each question uses up part of the user's plan or balance on that account: only ask when a second opinion really helps.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          question: { type: "string", description: "A short, self-contained question, with the file paths it's about" },
+          who: { type: "string", description: "Whom to ask, by the name your instructions give (leave out for the first one listed)" },
+        },
+        required: ["question"],
+        additionalProperties: false,
+      },
+    };
+  }
   const name = AGENT_NAMES[provider] ?? provider;
   return {
     name: `ask_${provider}`,
@@ -179,11 +258,15 @@ export async function runMcpStdio() {
   const ask = process.env.CROSSTALK_ASK || "";
   const chats = process.env.CROSSTALK_CHATS === "1";
   const helperModel = process.env.CROSSTALK_HELPER_MODEL === "1";
+  const screen = process.env.CROSSTALK_SCREEN === "1";
+  const helpers = process.env.CROSSTALK_HELPERS === "1";
   const tools = [
+    ...(screen ? SCREEN_TOOLS : []),
     ...(chat ? [] : TOOLS),
     ...(chat && ask ? [askTool(ask)] : []),
     ...(chats ? CHAT_TOOLS : []),
     ...(helperModel ? [HELPER_MODEL_TOOL] : []),
+    ...(helpers ? HELPER_TOOLS : []),
     ...(exposeApprove ? [APPROVE_TOOL] : []),
   ];
 
@@ -219,9 +302,9 @@ export async function runMcpStdio() {
             instructions:
               (chat
                 ? ask
-                  ? `Use ask_${ask} sparingly, for a second opinion from ${AGENT_NAMES[ask] ?? ask}; each question uses up part of the user's plan.`
+                  ? `Use ask_${ask} sparingly, for a second opinion from ${ask === "agent" ? "another agent" : AGENT_NAMES[ask] ?? ask}; each question uses up part of the user's plan.`
                   : "Crosstalk relays permission prompts to the user's phone."
-                : "You are in a Crosstalk group chat with other AI agents and a human. Use room_read to catch up on messages posted while you worked, and room_post for progress updates. Your room briefing says how work passes between agents in this room.") + (chats ? CHATS_NOTE : ""),
+                : "You are in a Crosstalk group chat with other AI agents and a human. Use room_read to catch up on messages posted while you worked, and room_post for progress updates. Your room briefing says how work passes between agents in this room.") + (chats ? CHATS_NOTE : "") + (helpers ? HELPERS_NOTE : ""),
           });
         case "notifications/initialized":
           return;
@@ -248,11 +331,29 @@ export async function runMcpStdio() {
               inFlight.delete(id);
             }
           }
+          if (helpers && (name === "start_helper" || name === "helper_result")) {
+            // Stops waiting in the hub too when the agent gives the call up (its reply was stopped, say).
+            const ctl = new AbortController();
+            inFlight.set(id, ctl);
+            try {
+              const r = (await call(`/internal/helper/${name === "start_helper" ? "start" : "result"}`, args, ctl.signal)) as { text?: string; error?: boolean };
+              return reply(id, { content: [{ type: "text", text: String(r.text ?? "") }], ...(r.error ? { isError: true } : {}) });
+            } finally {
+              inFlight.delete(id);
+            }
+          }
+          if (name.startsWith("screen_") && screen) {
+            const r = (await call(`/internal/screen/${name.slice("screen_".length)}`, args)) as { text?: string; image?: string; error?: boolean };
+            return reply(id, {
+              content: [{ type: "text", text: String(r.text ?? "") }, ...(r.image ? [{ type: "image", data: r.image, mimeType: "image/png" }] : [])],
+              ...(r.error ? { isError: true } : {}),
+            });
+          }
           if (name === HELPER_MODEL_TOOL.name) {
             const r = (await call("/internal/helper_model", { model: args.model })) as { text?: string; error?: boolean };
             return reply(id, { content: [{ type: "text", text: String(r.text ?? "") }], ...(r.error ? { isError: true } : {}) });
           }
-          if (name === `ask_${ask}`) text = String(((await call("/internal/ask", { question: args.question })) as { answer?: string }).answer ?? "");
+          if (name === `ask_${ask}`) text = String(((await call("/internal/ask", { question: args.question, ...(typeof args.who === "string" ? { who: args.who } : {}) })) as { answer?: string }).answer ?? "");
           else if (name === "room_members") text = JSON.stringify(await call("/internal/members", {}), null, 2);
           else if (name === "room_read") text = JSON.stringify(await call("/internal/read", { limit: args.limit ?? 20 }), null, 2);
           else if (name === "room_post") {

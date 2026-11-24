@@ -26,7 +26,7 @@ const memory = (over: Partial<MachineMemory> = {}): MachineMemory => ({
   swapUsedBytes: Math.round(9.6 * GiB),
   holders: [
     { what: "the image editor", ours: true, section: "image-editor", bytes: Math.round(16.9 * GiB) },
-    { what: "the model server on port 8080", ours: false, section: null, bytes: Math.round(3.8 * GiB) },
+    { what: "the model running on port 8080", ours: false, section: null, bytes: Math.round(3.8 * GiB) },
   ],
   at: 1,
   ...over,
@@ -43,7 +43,7 @@ test("the card names what is holding the machine, offers a tap for Crosstalk's o
   expect(html).toContain("Turn the image editor off");
   // The server on 8080 is the person's own: no button that would end it, just where to do it.
   expect(html).toContain("Quit it on Mac mini");
-  expect(html).not.toContain("Turn the model server on port 8080 off");
+  expect(html).not.toContain("Turn the model running on port 8080 off");
   expect(html).toContain("Crosstalk never stops anything by itself");
   expect(html).toContain("Full");
 });
@@ -55,9 +55,59 @@ test("nothing is on screen while memory is fine, or on a hub that can't read it"
 });
 
 test("a holder that couldn't be measured keeps its row and says so, rather than showing a made-up size", () => {
-  const html = draw(memory({ band: "busy", takenBytes: null, swapUsedBytes: null, holders: [{ what: "the model server on port 8080", ours: false, section: null, bytes: null }] }));
+  const html = draw(memory({ band: "busy", takenBytes: null, swapUsedBytes: null, holders: [{ what: "the model running on port 8080", ours: false, section: null, bytes: null }] }));
   expect(html).toContain("size unknown");
   expect(html).toContain("Getting full");
   expect(html).not.toContain("Together they hold");
   expect(html).not.toContain("moved to the disk");
+});
+
+// ---- "Free memory by itself" (HubSettings.memoryAct; the hub says whether it acts in MachineMemory.acts) ----
+
+test("a machine that can free memory by itself has the switch, on, with one sentence of help, and no longer says it stops nothing", () => {
+  const html = draw(memory({ acts: true }));
+  expect(html).toContain("Free memory by itself");
+  expect(html).toContain("When Mac mini is about to run out of memory, Crosstalk asks the agent that is filling it to close its pages, and stops that reply if it keeps growing.");
+  expect(html).toMatch(/<input type="checkbox"[^>]*checked=""/);
+  expect(html).not.toContain("Crosstalk never stops anything by itself");
+  expect(html).toContain("Crosstalk never stops anything you started yourself.");
+});
+
+test("switched off, the switch is still there and the card says again that nothing is stopped", () => {
+  const html = draw(memory({ acts: false }));
+  expect(html).toContain("Free memory by itself");
+  expect(html).not.toMatch(/<input type="checkbox"[^>]*checked=""/);
+  expect(html).toContain("Crosstalk never stops anything by itself, and never anything you started.");
+});
+
+test("the switch is there while memory is fine too, with nothing else to say; not on a machine that can't read its memory", () => {
+  const fine = draw(memory({ band: "fine", acts: true, holders: [] }));
+  expect(fine).toContain("Free memory by itself");
+  expect(fine).toContain("Fine");
+  expect(fine).not.toContain('role="status"');
+  expect(fine).not.toContain("Together they hold");
+  expect(fine).not.toContain("moved to the disk");
+  expect(draw(memory({ band: "unknown", blind: "Crosstalk only watches memory on macOS and Linux hubs.", acts: true }))).toBe("");
+});
+
+test("agents, their browser and the person's own programs each get their own words, and none gets a button that would end it", () => {
+  const html = draw(
+    memory({
+      acts: true,
+      takenBytes: null,
+      holders: [
+        { what: "the agents' browser", ours: true, section: null, bytes: Math.round(6.7 * GiB), kind: "browser", roomId: "r1", chat: "Shopping" },
+        { what: "Google Chrome", ours: false, section: null, bytes: Math.round(1.2 * GiB), kind: "other" },
+        { what: "Claude Code in Shopping", ours: true, section: null, bytes: Math.round(0.5 * GiB), kind: "agent", roomId: "r1", chat: "Shopping" },
+      ],
+    }),
+  );
+  expect(html).toContain("the agents&#x27; browser");
+  expect(html).toContain("Close its pages to free it");
+  expect(html).toContain("Claude Code in Shopping");
+  expect(html).toContain("Stop its reply to free it");
+  expect(html).toContain("Quit it on Mac mini");
+  expect(html).not.toContain("<button");
+  // The sentence under the list adds up the list itself: the hub's own total is only the model servers and the editor.
+  expect(html).toContain("Together they hold 8.4 GB of 16.0 GB.");
 });

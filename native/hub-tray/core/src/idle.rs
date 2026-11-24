@@ -140,7 +140,7 @@ pub fn start(place: &Place, setup: &Setup, script: &Path, log: &Path, runner: &d
         return Err(format!("The restart helper isn't in this copy of the app ({}).", script.display()));
     }
     if !setup.data_home.is_dir() {
-        return Err(format!("The hub's data folder ({}) isn't there, so there's nothing to wait for.", setup.data_home.display()));
+        return Err(format!("Crosstalk's data folder ({}) isn't there, so there's nothing to wait for.", setup.data_home.display()));
     }
     let env = env(place, setup);
     if let Some(why) = missing_tool(&env) {

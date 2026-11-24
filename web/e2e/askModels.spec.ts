@@ -35,7 +35,6 @@ const WORK = {
   remembered: { model: "sonnet", effort: null },
   models: [model("opus", "Opus 5.5", { isDefault: true, paid: "yes", typicalCostUsd: 0.12, contextWindow: 1_000_000 }), model("sonnet", "Sonnet 4.6", { paid: "yes", typicalCostUsd: 0.03, contextWindow: 200_000 })],
 };
-const POOL = { target: { provider: "claude", account: "pool1", model: "qwen-pool", effort: null }, label: "Model pool · qwen-pool", sub: "On this Mac", handle: "model-pool", paid: "no", local: true, available: true, why: null, typicalCostUsd: null, fixedModel: "pool" };
 const ON_PC = {
   target: { provider: "claude", account: "default", model: "opus", effort: null, machine: PC.id },
   label: "Claude Code · Opus 5.5 · on the PC",
@@ -51,7 +50,7 @@ const ON_PC = {
 };
 // A machine whose Crosstalk is older: no models came with its row, so the hub says it can't take a pick.
 const ON_LAPTOP = { target: { provider: "claude", account: "q1", model: "qwen3-30b", effort: null, machine: LAPTOP.id }, label: "Qwen3 · qwen3-30b · on the Laptop", sub: "", handle: "qwen3-on-laptop", paid: "no", local: true, available: true, why: null, typicalCostUsd: null, machine: LAPTOP, fixedModel: "update" };
-const CHOICES = [CODEX, WORK, POOL, ON_PC, ON_LAPTOP];
+const CHOICES = [CODEX, WORK, ON_PC, ON_LAPTOP];
 
 /** A card's title as the hub makes it: the name the row's machine gives the account, the model's own name, and where it runs. */
 function labelOf(t: { provider: string; account: string; model: string | null; machine?: string }, rows: any[]): string {
@@ -138,7 +137,7 @@ test("Ask others: each one picked has the model picker under it, with sizes, No 
   try {
     await s.open();
     const sheet = await openSheet(page, "Is the retry logic right?");
-    await expect(sheet.getByRole("checkbox")).toHaveCount(5);
+    await expect(sheet.getByRole("checkbox")).toHaveCount(4);
     // The sheet asks for the models with the list (the @ popup doesn't need them).
     expect(s.targets.urls.at(-1)).toContain("models=1");
     // A row is on the model its name says: the API key opens on Sonnet, the one picked for it last time.
@@ -178,9 +177,7 @@ test("Ask others: each one picked has the model picker under it, with sizes, No 
     await expect(sheet.getByText("Costs money: about $0.12", { exact: true })).toBeVisible();
     await expect(sheet.locator("li").filter({ has: page.getByRole("checkbox", { name: "Claude Code (Work) · Opus 5.5", exact: true }) })).toContainText("Costs money");
 
-    // The model pool and a machine with an older Crosstalk can't take a pick here: each says why, and where to change it.
-    await sheet.getByRole("checkbox", { name: "Model pool · qwen-pool", exact: true }).check();
-    await expect(sheet.getByText("The model pool runs one model at a time. To ask another, change it in Settings → Model pool.", { exact: true })).toBeVisible();
+    // A machine with an older Crosstalk can't take a pick here: it says why, and what to do.
     await sheet.getByRole("checkbox", { name: "Qwen3 · qwen3-30b · on the Laptop", exact: true }).check();
     await expect(sheet.getByText("To pick its model from here, update Crosstalk on the Laptop. Until then it answers with the model the Laptop uses.", { exact: true })).toBeVisible();
     // Another machine's agent: that machine's models.
@@ -204,9 +201,9 @@ test("Ask others: each one picked has the model picker under it, with sizes, No 
     await pc.scrollIntoViewIfNeeded();
     await snap(page, "ask-models-02-machines.png");
 
-    await sheet.getByRole("button", { name: "Ask 5", exact: true }).click();
+    await sheet.getByRole("button", { name: "Ask 4", exact: true }).click();
     await expect(sheet).toBeHidden();
-    // Each one is asked on the model and effort picked; the picks ride along for the hub to keep (not the pool's or the Laptop's).
+    // Each one is asked on the model and effort picked; the picks ride along for the hub to keep (not the Laptop's).
     expect(s.posted).toEqual([
       {
         roomId: s.room.id,
@@ -214,7 +211,6 @@ test("Ask others: each one picked has the model picker under it, with sizes, No 
         targets: [
           { provider: "codex", account: "default", model: "gpt-5.5-mini", effort: "medium" },
           { provider: "claude", account: "work", model: "opus", effort: null },
-          POOL.target,
           { provider: "claude", account: "default", model: "sonnet", effort: "high", machine: PC.id },
           ON_LAPTOP.target,
         ],
@@ -230,10 +226,10 @@ test("Ask others: each one picked has the model picker under it, with sizes, No 
 
     // The cards say the model each was asked on, and how hard it thinks when that was set.
     const cards = page.locator(".ask-card");
-    await expect(cards).toHaveCount(5);
+    await expect(cards).toHaveCount(4);
     await expect(cards.nth(0).getByRole("heading")).toHaveText("Codex · GPT-5.5 Mini · Medium effort");
     await expect(cards.nth(1).getByRole("heading")).toHaveText("Claude Code (Work) · Opus 5.5");
-    await expect(cards.nth(3).getByRole("heading")).toHaveText("Claude Code · Sonnet 4.6 · on the PC · High effort");
+    await expect(cards.nth(2).getByRole("heading")).toHaveText("Claude Code · Sonnet 4.6 · on the PC · High effort");
     s.send({ t: "ask", ask: { ...s.asks[0], status: "done", answer: "Retry is fine; add jitter.", cost: { costUsd: null, basis: "plan", inputTokens: 900, outputTokens: 40 }, endedAt: s.asks[0].startedAt + 9_000 } });
     s.send({ t: "ask", ask: { ...s.asks[1], status: "done", answer: "Looks right.", cost: { costUsd: 0.11, basis: "exact", inputTokens: 1200, outputTokens: 80 }, endedAt: s.asks[1].startedAt + 14_000 } });
     await expect(cards.nth(0)).toContainText("Plan · 9 s");

@@ -33,11 +33,11 @@ afterAll(() => {
   for (const d of dirs) rmSync(d, { recursive: true, force: true });
   // Back to what providers/all.ts registers.
   registerDriver("claude", (ctx) => {
-    if (!ctx.bin) throw new Error("Claude Code isn't installed on the hub. Install it under Agents & sign-ins.");
+    if (!ctx.bin) throw new Error("Claude Code isn't installed on the machine. Install it under Agents & sign-ins.");
     return new ClaudeDriver(ctx, ctx.bin);
   });
   registerDriver("codex", (ctx) => {
-    if (!ctx.bin) throw new Error("Codex isn't installed on the hub. Install it under Agents & sign-ins.");
+    if (!ctx.bin) throw new Error("Codex isn't installed on the machine. Install it under Agents & sign-ins.");
     return new CodexDriver(ctx, ctx.bin);
   });
 });

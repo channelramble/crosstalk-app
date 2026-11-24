@@ -353,3 +353,48 @@ test("a relayed notification puts the machine in the title, as it's called now",
   await machines.relay("relay-key", { title: "Fix login", body: "Codex finished: Done.", url: "./#/room/r1", tag: "done-r1" });
   expect(shown.at(-1)).toMatchObject({ title: "Fix login · Linux box", body: "Codex finished: Done." });
 });
+
+test("a push that didn't get through is tried again shortly, unless the device took the note meanwhile", async () => {
+  const was = Push.retryMs;
+  Push.retryMs = [30, 60];
+  const store = new Store(":memory:");
+  const push = new Push(store, () => null);
+  await push.init();
+  // The push service: busy twice, then fine.
+  const answers = [503, 429, 201];
+  let calls = 0;
+  const srv = Bun.serve({ port: 0, fetch: () => new Response(null, { status: answers[Math.min(calls++, answers.length - 1)] }) });
+  const endpoint = `http://127.0.0.1:${srv.port}/push/abc`;
+  try {
+    store.insertDevice({ id: "d1", name: "Phone", platform: "Web", createdAt: Date.now(), lastSeenAt: Date.now() }, "phone-token-hash");
+    store.db.query("INSERT INTO push_subs (endpoint, device_id, created_at) VALUES (?,?,?)").run(endpoint, "d1", Date.now());
+    // It says what happened at once, and goes on trying behind.
+    expect(await push.send({ title: "@codex needs approval", body: "npm test", url: "./#/room/r1", tag: "ap1" })).toEqual({ sent: 0, failed: 1 });
+    expect(calls).toBe(1);
+    for (const end = Date.now() + 3000; calls < 3 && Date.now() < end; ) await Bun.sleep(10);
+    expect(calls).toBe(3);
+    // Through: nothing more is sent.
+    await Bun.sleep(150);
+    expect(calls).toBe(3);
+
+    // The device takes the note (it opened the app) before the next try: that try doesn't happen.
+    calls = 0;
+    answers.splice(0, answers.length, 503);
+    expect(await push.send({ title: "Done", body: "x", url: "./", tag: "t2" })).toEqual({ sent: 0, failed: 1 });
+    store.db.query("UPDATE push_notes SET taken_at = ? WHERE endpoint = ? AND taken_at IS NULL").run(Date.now(), endpoint);
+    await Bun.sleep(200);
+    expect(calls).toBe(1);
+
+    // A plain no (the request itself was wrong) isn't tried again.
+    calls = 0;
+    answers.splice(0, answers.length, 400);
+    expect(await push.send({ title: "Done", body: "x", url: "./", tag: "t3" })).toEqual({ sent: 0, failed: 1 });
+    await Bun.sleep(200);
+    expect(calls).toBe(1);
+  } finally {
+    push.stopRetries();
+    Push.retryMs = was;
+    srv.stop(true);
+    store.close();
+  }
+});

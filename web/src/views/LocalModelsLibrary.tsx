@@ -4,8 +4,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { FolderOpen, Play } from "lucide-react";
 import type { LocalDownload, LocalFolder, LocalLibrary, LocalModelFile, LocalServerStart, LocalStarted } from "@crosstalk/shared";
-import { contextsFor, DEFAULT_CONTEXT, downloadWayOut, fileTitle, fitOf, folderLine, needOf, startChoice, startedLine, startedTitle } from "../localLibrary";
-import { bytesText, contextLabel, portProblem } from "../pool";
+import { bytesText, contextLabel, contextsFor, DEFAULT_CONTEXT, downloadWayOut, fileTitle, fitOf, folderLine, needOf, portProblem, startChoice, startedLine, startedTitle } from "../localLibrary";
 import { ConfirmButton, Dialog, Seg } from "../ui";
 import { HelpTip } from "./HelpTip";
 import { DownloadBar, TokenField } from "./LocalModelsGet";
@@ -46,14 +45,14 @@ export function StartServers({ library, shownPorts, ollamaPorts = [], actions, o
         ? library.files.length
           ? `From ${program("llamacpp")!.from}. Serves one downloaded model.`
           : `From ${program("llamacpp")!.from}. Get a model below first: it serves one downloaded model.`
-        : "Not installed here. Install it with Homebrew (brew install llama.cpp), or start the model pool once to get its build, then press Rescan.",
+        : "Not installed here. Install it with Homebrew (brew install llama.cpp), then press Rescan.",
     },
   ];
   return (
-    <section className="card local-start" aria-label="Start a server">
+    <section className="card local-start" aria-label="Start Ollama or llama.cpp">
       <div className="local-card-title">
-        <span className="pool-setting-title">Start a server</span>
-        <HelpTip label="Where do started servers run?">On 127.0.0.1, so only this machine reaches them. They keep running when the hub restarts, and Crosstalk only ever stops the ones it started.</HelpTip>
+        <span className="setting-title">Start Ollama or llama.cpp</span>
+        <HelpTip label="Where do they run?">On 127.0.0.1, so only this machine reaches them. They keep running when Crosstalk restarts, and Crosstalk only ever stops the ones it started.</HelpTip>
       </div>
       <ul className="local-rows">
         {rows.map((r) => (
@@ -139,7 +138,7 @@ export function ModelsHere({ library, machine, taken = 0, actions, onGet, onFold
       </span>
       <div className="local-head">
         <div className="local-head-text">
-          <div className="pool-setting-title">Models on {machine}</div>
+          <div className="setting-title">Models on {machine}</div>
         </div>
         <button type="button" className="btn small primary" onClick={onGet}>
           Get a model
@@ -382,7 +381,7 @@ export function StartDialog({ library, machine, taken = 0, kind: first, model: c
     >
       {kinds.length > 1 && (
         <Seg
-          label="Server"
+          label="Program"
           value={kind}
           onChange={(k) => {
             setKind(k);

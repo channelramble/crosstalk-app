@@ -1,10 +1,14 @@
-// "Send now" says why it didn't send, so the app can say what really holds your message. A chat's Send now once
-// answered "It's being answered already, or the reply just ended" while the message was held behind the agent's
-// helpers (the chat had been moved from Opus 5 to Opus 5.5 during a reply, and new settings wait for the helpers)
-// and nothing was being answered. Meanwhile Claude Code's own replies, as its helpers reported back, ran on the old
-// Opus 5 process. Now nothing waits for helpers at all unless it must (the default): see "messages keep flowing".
-// Settings → "Keep going while helpers work" off (messagesFlow) brings the hold back, with every safeguard since: see
-// "with the switch off". Every agent here is an in-process stand-in whose turns end when the test says; no CLI runs.
+// A message sent while the agent works goes into its running reply by itself, at its next step, whether or not its helpers
+// are at work: see "messages go to a working agent by themselves". There's no button for it and no setting (until 0.8 it
+// waited behind the reply for a tap on Send now unless helpers were at work, and Settings → "Keep going while helpers work"
+// could turn even that off). Only what may not be answered around holds it: an account switch, tighter permissions, a new
+// folder. A reply that can't take it gets it as the reply ends.
+//
+// "Send now" is still a call an older app can make, and it says why it didn't send, so that app can say what really holds
+// your message. A chat's Send now once answered "It's being answered already, or the reply just ended" while the message
+// was held behind the agent's helpers (the chat had been moved from Opus 5 to Opus 5.5 during a reply, and new settings
+// wait for the helpers) and nothing was being answered. Meanwhile Claude Code's own replies, as its helpers reported back,
+// ran on the old Opus 5 process. Every agent here is an in-process stand-in whose turns end when the test says; no CLI runs.
 
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -103,11 +107,11 @@ function chat(steer?: boolean, opts: { working?: boolean; provider?: "claude" | 
     const r = routes.find((x) => x.method === "POST" && x.pattern.test(path))!;
     return r.handler({ req: new Request("http://hub"), url: new URL(`http://hub${path}`), params: { id: room.id }, device: { id: "d", name: "Phone", platform: "", createdAt: 0, lastSeenAt: null }, body: async () => body });
   };
-  /** Send now or Answer now on the bar, with the line's agent. */
+  /** An older app's Send now, or its Answer now (`currentSettings`, which means nothing any more), with the line's agent. */
   const sendNow = (body: Record<string, unknown> = {}) => post("send-now", { memberId: member.id, ...body }) as Promise<SendNowResult>;
-  /** Try again, or Answer now under a message (`currentSettings`). */
+  /** Try again (an older app's Answer now under a message sends `currentSettings` with it: the same thing now). */
   const retry = (body: Record<string, unknown> = {}) => post("retry", body);
-  /** Stop, or "Stop and answer my message" (`keepWaiting`). */
+  /** Stop, or Interrupt under a message that waits for the reply's end (`keepWaiting`: stop, and answer what waits). */
   const stop = (body: Record<string, unknown> = {}) => post("stop", body);
   const until = async (what: () => unknown, ms = 5000) => {
     for (const end = Date.now() + ms; Date.now() < end; await Bun.sleep(5)) if (what()) return;
@@ -136,22 +140,47 @@ function chat(steer?: boolean, opts: { working?: boolean; provider?: "claude" | 
   return { app, deps, room, member, prompts, steered, drivers, knobs, ran, sendNow, retry, stop, until, end, say, now, done, notes, ownReply, tasks: (list: BackgroundTask[]) => tasks?.(list), turns: () => ends.length, queued: () => app.engine.queuedTurns(room.id).length };
 }
 
+// The app has no button for it any more (a message goes in by itself). An older app's tap still gets a true answer.
 describe("Send now says why it didn't send", () => {
-  test("into the running reply: sent, and nothing else said", async () => {
+  test("into the running reply: it went in by itself, so a tap finds it being answered, and nothing else is said", async () => {
     const t = chat(true);
     try {
       t.say("build it");
       await t.until(() => t.turns() === 1);
-      t.say("also add tests");
-      // No helpers: it waits for the tap (the app's bar), as ever.
-      await Bun.sleep(20);
-      expect(t.steered).toEqual([]);
-      expect(await t.sendNow()).toEqual({ sent: true });
+      const yours = t.say("also add tests");
+      // No helpers, no tap: it's in the reply already, and the turn that waited for it is gone.
       expect(t.steered).toEqual(["also add tests"]);
-      // Tapped again (another device): the reply has it already.
+      await t.until(() => t.queued() === 0);
+      expect(t.app.store.getLastSeen(t.member.id).seq).toBeGreaterThanOrEqual(yours.seq);
+      expect(t.notes()).toEqual([]);
+      // Tapped all the same (an older app, another device): the reply has it already.
       expect(await t.sendNow()).toEqual({ sent: false, why: "answering" });
+      expect(t.steered).toEqual(["also add tests"]);
       await t.end();
       expect(t.turns()).toBe(1); // no second reply for it
+    } finally {
+      await t.done();
+    }
+  });
+
+  test("a tap that gets there first (the reply was still starting): sent, once, and the hub's own next look hands nothing twice", async () => {
+    const t = chat(false);
+    try {
+      t.say("build it");
+      await t.until(() => t.turns() === 1);
+      t.say("also add tests");
+      await Bun.sleep(20);
+      // It couldn't take it yet: the hub asks again in a moment. The tap comes before that.
+      expect(t.steered).toEqual([]);
+      expect(t.queued()).toBe(1);
+      t.knobs.takes = true;
+      expect(await t.sendNow()).toEqual({ sent: true });
+      expect(t.steered).toEqual(["also add tests"]);
+      expect(t.queued()).toBe(0);
+      await Bun.sleep(700); // past the hub's own next look (FLOW_RETRY_MS)
+      expect(t.steered).toEqual(["also add tests"]);
+      await t.end();
+      expect(t.turns()).toBe(1);
     } finally {
       await t.done();
     }
@@ -163,6 +192,8 @@ describe("Send now says why it didn't send", () => {
       t.say("research what happened");
       await t.until(() => t.turns() === 1);
       const yours = t.say("and send the link");
+      await t.until(() => t.queued() === 0);
+      expect(t.steered).toEqual(["and send the link"]);
       const resetsAt = Date.now() + 33 * 60_000;
       await t.end({ ok: false, error: "You've hit your 5-hour limit", limit: { kind: "usage", label: "5-hour", resetsAt, source: "event" } });
       expect(t.now().status).toBe("waiting");
@@ -170,8 +201,7 @@ describe("Send now says why it didn't send", () => {
       expect(r).toMatchObject({ sent: false, why: "limit", wait: { kind: "usage", resetsAt, provider: "claude" } });
       // The words the app shows for it, in the device's own clock.
       expect(limitQueuedWords(r.wait!, Date.now())).toBe(`Paused until your usage limit resets at ${limitResetTime(resetsAt, Date.now())}. Your message goes first when it does.`);
-      // It's still the person's, unread: nothing was handed anywhere.
-      expect(t.steered).toEqual([]);
+      // It went into the reply the limit stopped: it's the person's again, unread.
       expect(t.app.store.getLastSeen(t.member.id).seq).toBeLessThan(yours.seq);
       // When it carries on (Try now here, the reset itself otherwise), that reply reads it.
       t.app.engine.tryNow(t.room.id);
@@ -184,11 +214,14 @@ describe("Send now says why it didn't send", () => {
   });
 
   test("the agent's turn for it has started: answering", async () => {
-    const t = chat(true);
+    // The reply was ending and took nothing, so the message got a turn of its own.
+    const t = chat(false, { working: true });
     try {
       t.say("build it");
       await t.until(() => t.turns() === 1);
       t.say("also add tests");
+      await Bun.sleep(20);
+      expect(t.queued()).toBe(1);
       await t.end();
       await t.until(() => t.turns() === 2);
       expect(t.prompts[1]).toContain("also add tests");
@@ -258,8 +291,9 @@ describe("Send now says why it didn't send", () => {
 });
 
 describe("new settings waiting for the agent's helpers", () => {
-  // These used to hold the message until the helpers finished, with Answer now as the way around it. Now a new model or
-  // the like holds nothing: the message goes, no button, and the words below are what's said instead. An account switch, tighter permissions or a new folder still hold it (further down).
+  // These used to hold the message until the helpers finished, with Answer now as the way around it. A new model or the
+  // like holds nothing: the message goes, no button, and the words below are what's said instead. An account switch,
+  // tighter permissions or a new folder still hold it (further down), and nothing an older app taps sends it sooner.
   test("the message starts at once on the agent as it is, says so once, and the settings still apply after the helpers", async () => {
     const t = chat(true);
     try {
@@ -335,7 +369,7 @@ describe("new settings waiting for the agent's helpers", () => {
     }
   });
 
-  test("an account switch waiting for the helpers: no Answer now, it says which change waits, and the message runs on the new account once they finish", async () => {
+  test("an account switch waiting for the helpers: the message waits for them, it says which change waits, and it runs on the new account once they finish", async () => {
     const t = chat(true);
     try {
       const work = t.app.providers.setEndpointAccount("claude", { label: "Work server", baseUrl: "http://127.0.0.1:9", models: ["work-model"] });
@@ -349,7 +383,7 @@ describe("new settings waiting for the agent's helpers", () => {
       t.say("Did this chat switch my model?");
       await Bun.sleep(20);
       expect(t.turns()).toBe(1);
-      // Answer now would run the old account's process on it (and drop what that reply saves): refused, saying why.
+      // An older app's Answer now would run the old account's process on it (and drop what that reply saves): refused, saying why.
       expect(await t.sendNow({ currentSettings: true })).toEqual({ sent: false, why: "helpers", held: { change: "account", helpers: true } });
       await Bun.sleep(20);
       expect(t.turns()).toBe(1);
@@ -365,7 +399,7 @@ describe("new settings waiting for the agent's helpers", () => {
     }
   });
 
-  test("tighter permissions waiting for the helpers: no Answer now, and no Send now into the agent's own reply on Full access", async () => {
+  test("tighter permissions waiting for the helpers: the message waits for them, and nothing goes into the agent's own reply on Full access", async () => {
     const t = chat(true);
     try {
       t.say("Install the browser");
@@ -424,7 +458,7 @@ describe("new settings waiting for the agent's helpers", () => {
   });
 });
 
-describe("messages keep flowing while helpers work", () => {
+describe("messages go to a working agent by themselves", () => {
   /** A chat whose agent has a helper at work and no reply running. `steer`: as for chat. */
   async function helperAtWork(steer?: boolean, opts: Parameters<typeof chat>[1] = {}) {
     const t = chat(steer, opts);
@@ -436,8 +470,46 @@ describe("messages keep flowing while helpers work", () => {
   }
   const effort = (t: ReturnType<typeof chat>, to: string) => t.app.updateMember(t.member.id, { config: { ...t.now().config, effort: to } });
   const arounds = (t: ReturnType<typeof chat>) => t.notes().filter((n) => n === AROUND).length;
+  /** What the process as it is may not answer around: a message for it waits until a new one runs. */
+  const HOLDS: [string, "account" | "permissions" | "other", string, (t: ReturnType<typeof chat>) => void][] = [
+    [
+      "an account switch",
+      "account",
+      "your account switch applies",
+      (t) => {
+        const work = t.app.providers.setEndpointAccount("claude", { label: "Work server", baseUrl: "http://127.0.0.1:9", models: ["work-model"] });
+        t.app.updateMember(t.member.id, { config: { ...t.now().config, account: work.id }, model: "work-model" });
+      },
+    ],
+    ["tighter permissions", "permissions", "your permission change applies", (t) => t.app.updateMember(t.member.id, { permissionMode: "ask" })],
+    [
+      "a new folder",
+      "other",
+      "your changes apply",
+      (t) => {
+        const moved = mkdtempSync(join(tmpdir(), "ct-send-now-moved-"));
+        dirs.push(moved);
+        t.app.updateRoom(t.room.id, { cwd: moved });
+      },
+    ],
+  ];
 
-  describe("no reply running, and only what the process may answer around waits", () => {
+  describe("helpers at work and no reply running, and at most what the process may answer around waits", () => {
+    test("no settings waiting: a message starts its turn while helpers work, as it always did", async () => {
+      const t = await helperAtWork(true);
+      try {
+        t.say("What's next?");
+        expect(t.turns()).toBe(2);
+        expect(t.queued()).toBe(0);
+        expect(t.now().held).toBeUndefined();
+        expect(t.notes()).toEqual([]);
+        await t.end();
+      } finally {
+        t.tasks([helper("completed")]);
+        await t.done();
+      }
+    });
+
     const CHANGES: [string, (t: ReturnType<typeof chat>) => void][] = [
       ["a new model", (t) => t.app.updateMember(t.member.id, { model: "claude-opus-5-5" })],
       ["a new effort", (t) => effort(t, "high")],
@@ -602,7 +674,7 @@ describe("messages keep flowing while helpers work", () => {
       }
     });
 
-    test("Stop everything under a hold: the message stays unanswered, and Answer now goes at once on the process as it is", async () => {
+    test("Stop everything under a hold: the message stays unanswered, and Try again goes at once on the process as it is", async () => {
       const t = chat(true);
       try {
         t.say("build it");
@@ -776,18 +848,17 @@ describe("messages keep flowing while helpers work", () => {
       }
     });
 
-    test("a helper starts with a message of yours already waiting behind the reply: it goes in from there", async () => {
+    test("a helper starts after a message of yours went in: it's in the reply already, and goes in once", async () => {
       const t = chat(true);
       try {
         t.say("build it");
         await t.until(() => t.turns() === 1);
         t.say("also add tests");
-        await Bun.sleep(20);
-        expect(t.steered).toEqual([]);
-        t.tasks([helper("running")]);
-        await t.until(() => t.steered.length === 1);
         expect(t.steered).toEqual(["also add tests"]);
         await t.until(() => t.queued() === 0);
+        t.tasks([helper("running")]);
+        await Bun.sleep(20);
+        expect(t.steered).toEqual(["also add tests"]);
         await t.end();
         expect(t.turns()).toBe(1);
       } finally {
@@ -910,12 +981,13 @@ describe("messages keep flowing while helpers work", () => {
   });
 
   describe("Stop after a message went in by itself", () => {
-    /** A reply and a helper at work, and a message that went in by itself and hasn't been read. */
-    async function wentIn() {
+    /** A reply and a helper at work, and a message that went in by itself and hasn't been read. `hold`: new settings wait too. */
+    async function wentIn(hold = false) {
       const t = chat(true);
       t.say("build it");
       await t.until(() => t.turns() === 1);
       t.tasks([helper("running")]);
+      if (hold) effort(t, "high");
       const yours = t.say("ALSO delete the old build folder");
       await t.until(() => t.queued() === 0);
       expect(t.steered).toEqual(["ALSO delete the old build folder"]);
@@ -924,34 +996,88 @@ describe("messages keep flowing while helpers work", () => {
     }
     const unread = (t: ReturnType<typeof chat>, seq: number) => t.app.store.getLastSeen(t.member.id).seq < seq;
 
-    test("Stop everything: it's unread again and starts nothing, and Answer now delivers it once", async () => {
-      const { t, yours } = await wentIn();
+    for (const hold of [false, true]) {
+      test(`Stop everything${hold ? ", with new settings waiting for the helpers" : ""}: it's unread again and starts nothing, and Try again delivers it once, at once`, async () => {
+        const { t, yours } = await wentIn(hold);
+        try {
+          await t.app.engine.stop(t.room.id);
+          await Bun.sleep(20);
+          expect(t.turns()).toBe(1);
+          expect(unread(t, yours.seq)).toBe(true);
+          expect(t.queued()).toBe(0);
+          // Only its helpers keep the status "working" then: what the app takes for that (sendNow.ts onlyFinishingHelpers).
+          if (hold) expect(t.now()).toMatchObject({ status: "working", statusDetail: "Finishing helpers before your new settings apply" });
+          // Try again under the message (an older app's Answer now sends currentSettings with it: the same thing).
+          await t.retry(hold ? { currentSettings: true } : {});
+          expect(t.turns()).toBe(2);
+          expect(t.queued()).toBe(0);
+          expect(t.prompts[1]).toContain("ALSO delete the old build folder");
+          expect(t.ran[1].driver).toBe(1);
+          // Said once for the hold, when it went in: nothing more for answering it again.
+          expect(arounds(t)).toBe(hold ? 1 : 0);
+          expect(t.notes().some((n) => n.startsWith("Answering now"))).toBe(false);
+          await t.end();
+          expect(t.turns()).toBe(2);
+        } finally {
+          t.tasks([helper("completed")]);
+          await t.done();
+        }
+      });
+
+      test(`Stop and answer my message${hold ? ", with new settings waiting for the helpers" : ""}: it's answered next on the process as it is, once, with no tap`, async () => {
+        const { t, yours } = await wentIn(hold);
+        try {
+          await t.app.engine.stop(t.room.id, undefined, { keepWaiting: true });
+          await t.until(() => t.turns() === 2);
+          expect(t.prompts[1]).toContain("ALSO delete the old build folder");
+          expect(t.ran[1].driver).toBe(1);
+          expect(t.queued()).toBe(0);
+          expect(unread(t, yours.seq)).toBe(false);
+          expect(arounds(t)).toBe(hold ? 1 : 0);
+          expect(t.notes().some((n) => n.startsWith("Answering now"))).toBe(false);
+          await t.end();
+          expect(t.turns()).toBe(2);
+        } finally {
+          t.tasks([helper("completed")]);
+          await t.done();
+        }
+      });
+
+      test(`Interrupt under a message still waiting behind a reply that can't take it${hold ? ", with new settings waiting for the helpers" : ""}: the reply stops, and it's answered next, once`, async () => {
+        const t = chat();
+        try {
+          t.say("build it");
+          await t.until(() => t.turns() === 1);
+          t.tasks([helper("running")]);
+          if (hold) effort(t, "high");
+          const yours = t.say("also add tests");
+          expect(t.queued()).toBe(1);
+          // The app's Interrupt: stop, and answer what waits.
+          await t.stop({ keepWaiting: true });
+          await t.until(() => t.turns() === 2);
+          expect(t.prompts[1]).toContain("also add tests");
+          expect(t.ran[1].driver).toBe(1);
+          expect(t.queued()).toBe(0);
+          expect(unread(t, yours.seq)).toBe(false);
+          expect(arounds(t)).toBe(hold ? 1 : 0);
+          await t.end();
+          await Bun.sleep(20);
+          expect(t.turns()).toBe(2);
+        } finally {
+          t.tasks([helper("completed")]);
+          await t.done();
+        }
+      });
+    }
+
+    test("Stop and answer with nothing waiting and nothing running: there's nothing to stop, and nothing changes", async () => {
+      const t = await helperAtWork(true);
       try {
-        await t.app.engine.stop(t.room.id);
+        await t.stop({ keepWaiting: true });
         await Bun.sleep(20);
         expect(t.turns()).toBe(1);
-        expect(unread(t, yours.seq)).toBe(true);
-        t.app.engine.retry(t.room.id);
-        await t.until(() => t.turns() === 2);
-        expect(t.prompts[1]).toContain("ALSO delete the old build folder");
-        await t.end();
-        expect(t.turns()).toBe(2);
-      } finally {
-        t.tasks([helper("completed")]);
-        await t.done();
-      }
-    });
-
-    test("Stop and answer my message: it's answered next, with no tap", async () => {
-      const { t, yours } = await wentIn();
-      try {
-        await t.app.engine.stop(t.room.id, undefined, { keepWaiting: true });
-        await t.until(() => t.turns() === 2);
-        expect(t.prompts[1]).toContain("ALSO delete the old build folder");
         expect(t.queued()).toBe(0);
-        expect(unread(t, yours.seq)).toBe(false);
-        await t.end();
-        expect(t.turns()).toBe(2);
+        expect(t.now().status).toBe("idle");
       } finally {
         t.tasks([helper("completed")]);
         await t.done();
@@ -974,30 +1100,8 @@ describe("messages keep flowing while helpers work", () => {
   });
 
   describe("what must still hold", () => {
-    const HOLDS: [string, "account" | "permissions" | "other", string, (t: ReturnType<typeof chat>) => void][] = [
-      [
-        "an account switch",
-        "account",
-        "your account switch applies",
-        (t) => {
-          const work = t.app.providers.setEndpointAccount("claude", { label: "Work server", baseUrl: "http://127.0.0.1:9", models: ["work-model"] });
-          t.app.updateMember(t.member.id, { config: { ...t.now().config, account: work.id }, model: "work-model" });
-        },
-      ],
-      ["tighter permissions", "permissions", "your permission change applies", (t) => t.app.updateMember(t.member.id, { permissionMode: "ask" })],
-      [
-        "a new folder",
-        "other",
-        "your changes apply",
-        (t) => {
-          const moved = mkdtempSync(join(tmpdir(), "ct-send-now-moved-"));
-          dirs.push(moved);
-          t.app.updateRoom(t.room.id, { cwd: moved });
-        },
-      ],
-    ];
     for (const [what, change, words, apply] of HOLDS) {
-      test(`${what}: never into the reply, never around it, and it goes on a new process once the helpers finish`, async () => {
+      test(`${what}: never into the reply, never around it, nothing an older app taps sends it, and it goes on a new process once the helpers finish`, async () => {
         const t = chat(true);
         try {
           t.say("Install the browser");
@@ -1017,6 +1121,7 @@ describe("messages keep flowing while helpers work", () => {
           expect(t.turns()).toBe(1);
           expect(t.now()).toMatchObject({ status: "working", statusDetail: `Finishing helpers before ${words}`, held: { change, helpers: true } });
           expect(await t.sendNow({ currentSettings: true })).toEqual({ sent: false, why: "helpers", held: { change, helpers: true } });
+          expect(await t.sendNow()).toEqual({ sent: false, why: "helpers", held: { change, helpers: true } });
           expect(t.turns()).toBe(1);
           expect(t.notes().some((n) => n === AROUND || n.startsWith("Answering now"))).toBe(false);
           t.tasks([helper("completed")]);
@@ -1028,27 +1133,186 @@ describe("messages keep flowing while helpers work", () => {
           await t.done();
         }
       });
+
+      test(`${what}: Stop and answer with no reply running: still held, and nothing claims it's being answered`, async () => {
+        const t = await helperAtWork(true);
+        try {
+          apply(t);
+          t.say("Delete the old build folder");
+          await Bun.sleep(20);
+          await t.stop({ keepWaiting: true });
+          await Bun.sleep(20);
+          expect(t.turns()).toBe(1);
+          expect(t.queued()).toBe(1);
+          expect(t.notes().some((n) => n === AROUND || n.startsWith("Answering now"))).toBe(false);
+          expect(t.now()).toMatchObject({ status: "working", statusDetail: `Finishing helpers before ${words}`, held: { change, helpers: true } });
+          t.tasks([helper("completed")]);
+          await t.until(() => t.turns() === 2);
+          expect(t.ran[1].driver).toBe(2);
+          expect(t.prompts[1]).toContain("Delete the old build folder");
+          await t.end();
+        } finally {
+          await t.done();
+        }
+      });
+
+      test(`${what}: Stop everything with no reply running, then another message: it waits for the helpers, saying so, whatever is tapped`, async () => {
+        const t = await helperAtWork(true);
+        try {
+          apply(t);
+          t.say("Delete the old build folder");
+          await Bun.sleep(20);
+          await t.stop();
+          await Bun.sleep(20);
+          expect(t.queued()).toBe(0);
+          t.say("Delete the new one too");
+          await Bun.sleep(20);
+          expect(t.turns()).toBe(1);
+          expect(t.queued()).toBe(1);
+          // And it says what it waits for, as a message sent under the hold does.
+          expect(t.now()).toMatchObject({ status: "working", held: { change, helpers: true } });
+          expect(t.now().statusDetail).toStartWith("Finishing helpers before ");
+          expect(await t.sendNow({ currentSettings: true })).toEqual({ sent: false, why: "helpers", held: { change, helpers: true } });
+          expect(t.turns()).toBe(1);
+          t.tasks([helper("completed")]);
+          await t.until(() => t.turns() === 2);
+          expect(t.ran[1].driver).toBe(2);
+          await t.end();
+        } finally {
+          await t.done();
+        }
+      });
+
+      test(`${what}: Stop everything, then Try again under the message: still held, saying why, and nothing claims it's being answered`, async () => {
+        const t = chat(true);
+        try {
+          t.say("build it");
+          await t.until(() => t.turns() === 1);
+          t.tasks([helper("running")]);
+          apply(t);
+          expect(t.now().held).toEqual({ change, helpers: true });
+          t.say("also add tests");
+          await t.app.engine.stop(t.room.id);
+          await Bun.sleep(20);
+          expect(t.turns()).toBe(1);
+          expect(t.queued()).toBe(0);
+          // (An older app's Answer now sends currentSettings with it: nothing goes by that.)
+          await t.retry({ currentSettings: true });
+          await Bun.sleep(20);
+          expect(t.turns()).toBe(1);
+          expect(t.queued()).toBe(1);
+          expect(t.notes().some((n) => n === AROUND || n.startsWith("Answering now"))).toBe(false);
+          expect(await t.sendNow({ currentSettings: true })).toEqual({ sent: false, why: "helpers", held: { change, helpers: true } });
+          t.tasks([helper("completed")]);
+          await t.until(() => t.turns() === 2);
+          expect(t.ran[1].driver).toBe(2);
+          expect(t.prompts[1]).toContain("also add tests");
+          await t.end();
+        } finally {
+          await t.done();
+        }
+      });
     }
 
-    test("Stop everything with no reply running, then another message: as it always was, queued for when the helpers finish", async () => {
+    test("Try again on a failed reply under such a hold waits for the helpers too, and the app hears the message is unread again", async () => {
+      // It had taken the message in: only Try again makes it unread again, with no other reason for a device to hear of it.
+      const t = await helperAtWork(true, { working: true });
+      try {
+        t.say("one");
+        expect(t.turns()).toBe(2);
+        t.app.updateMember(t.member.id, { permissionMode: "ask" });
+        await t.end({ ok: false, error: "The API said no." });
+        expect(t.now()).toMatchObject({ status: "working", statusDetail: "Finishing helpers before your permission change applies", held: { change: "permissions", helpers: true } });
+        const told: number[] = [];
+        const off = t.app.bus.on((e: ServerEvent) => {
+          if (e.t === "member" && e.member.id === t.member.id && e.member.readSeq !== undefined) told.push(e.member.readSeq);
+        });
+        await t.retry();
+        off();
+        expect(t.turns()).toBe(2);
+        expect(t.queued()).toBe(1);
+        const one = t.app.store.listMessages(t.room.id).findLast((m) => m.text === "one")!;
+        expect(told.at(-1)).toBe(t.app.store.messageSeq(one.id) - 1);
+        // The helpers finish: tried again on a new process, under the new permissions.
+        t.tasks([helper("completed")]);
+        await t.until(() => t.turns() === 3);
+        expect(t.ran[2]).toMatchObject({ driver: 2, permissionMode: "ask" });
+        expect(t.prompts[2]).toContain("one");
+        await t.end();
+      } finally {
+        await t.done();
+      }
+    });
+
+    test("what a new process has to carry on from comes first: the message waits for it, and nothing an older app taps goes around it", async () => {
       const t = await helperAtWork(true);
       try {
-        t.app.updateMember(t.member.id, { permissionMode: "ask" });
-        t.say("Delete the old build folder");
+        // Claude Code starts a reply of its own while a change it may not answer around waits: stopped, for a new process to carry on from.
+        const was = t.now().config;
+        t.app.updateMember(t.member.id, { config: { ...was, helperModel: "claude-haiku-4-5" } });
+        expect(t.now().held).toEqual({ change: "other", helpers: true });
+        expect(t.ownReply()).toBe("stop");
+        // Taken back, with a new effort: only what it may answer around waits now, and that carry-on still comes first.
+        t.app.updateMember(t.member.id, { config: { ...was, effort: "high" } });
+        expect(t.now().held).toEqual({ change: "settings", helpers: true });
+        t.say("Carry on");
         await Bun.sleep(20);
-        await t.stop();
-        await Bun.sleep(20);
-        t.say("Delete the new one too");
+        expect(await t.sendNow({ currentSettings: true })).toEqual({ sent: false, why: "helpers", held: { change: "settings", helpers: true } });
         await Bun.sleep(20);
         expect(t.turns()).toBe(1);
         expect(t.queued()).toBe(1);
-        // (Off says what holds it instead, for its Answer now. On has no button here to bring back.)
-        expect(t.now()).toMatchObject({ status: "queued", statusDetail: null, held: { change: "permissions", helpers: true } });
+        expect(t.notes().some((n) => n === AROUND || n.startsWith("Answering now"))).toBe(false);
+        // The helper finishes: a new process carries on, and reads the message.
         t.tasks([helper("completed")]);
+        await t.until(() => t.turns() === 2);
+        expect(t.ran[1].driver).toBe(2);
+        expect(t.prompts[1]).toContain("Carry on");
+        await t.end();
+      } finally {
+        await t.done();
+      }
+    });
+
+    test("what it owes by itself comes next, with no helpers to wait for: the status doesn't say it's finishing any", async () => {
+      const t = chat(true);
+      try {
+        t.say("build it");
+        await t.until(() => t.turns() === 1);
+        effort(t, "high");
+        t.knobs.owed = "message";
+        await t.end();
+        expect(t.now()).toMatchObject({ status: "idle", held: { change: "settings", helpers: false, owed: "message" } });
+        t.say("and this");
+        await Bun.sleep(20);
+        expect(t.turns()).toBe(1);
+        expect(t.queued()).toBe(1);
+        expect(t.now()).toMatchObject({ status: "queued", statusDetail: null });
+        // Its own reply has been: the setting applies, and the message goes on the new process.
+        t.knobs.owed = null;
+        t.tasks([]);
         await t.until(() => t.turns() === 2);
         expect(t.ran[1].driver).toBe(2);
         await t.end();
       } finally {
+        await t.done();
+      }
+    });
+
+    test("a change taken back with nothing waiting leaves no \"Finishing helpers\" behind", async () => {
+      const t = await helperAtWork(true);
+      try {
+        const was = t.now().config;
+        effort(t, "high");
+        await t.until(() => /^Finishing helpers/.test(t.now().statusDetail ?? ""));
+        t.app.updateMember(t.member.id, { config: was });
+        await t.until(() => !/^Finishing helpers/.test(t.now().statusDetail ?? ""));
+        expect(t.now().status).toBe("idle");
+        expect(t.now().held).toBeUndefined();
+        t.tasks([helper("completed")]);
+        await Bun.sleep(20);
+        expect(t.now().status).toBe("idle");
+      } finally {
+        t.tasks([helper("completed")]);
         await t.done();
       }
     });
@@ -1088,6 +1352,7 @@ describe("messages keep flowing while helpers work", () => {
           await t.end({ ok: false, error: "You've hit your 5-hour limit", limit: { kind: "usage", label: "5-hour", resetsAt, source: "event" } });
           expect(t.now().status).toBe("waiting");
           expect(await t.sendNow()).toMatchObject({ sent: false, why: "limit", wait: { kind: "usage", resetsAt } });
+          expect(await t.sendNow({ currentSettings: true })).toMatchObject({ sent: false, why: "limit", wait: { kind: "usage", resetsAt } });
           // It's still the person's, unread, handed to the reply or not.
           expect(t.app.store.getLastSeen(t.member.id).seq).toBeLessThan(yours.seq);
           t.app.engine.tryNow(t.room.id);
@@ -1101,7 +1366,7 @@ describe("messages keep flowing while helpers work", () => {
       }
     });
 
-    test("a reply the agent owes by itself comes first, as ever; once it runs, a message that waited for it goes in, if other helpers still work", async () => {
+    test("a reply the agent owes by itself comes first, as ever; once it runs, a message that waited for it goes in", async () => {
       const t = await helperAtWork(true);
       try {
         effort(t, "high");
@@ -1113,7 +1378,11 @@ describe("messages keep flowing while helpers work", () => {
         expect(t.turns()).toBe(1);
         expect(t.queued()).toBe(1);
         expect(t.now().held).toEqual({ change: "settings", helpers: true, owed: "report" });
-        expect(await t.sendNow()).toEqual({ sent: false, why: "ownTurn", held: { change: "settings", helpers: true, owed: "report" } });
+        // Whatever an older app taps: nothing is promised around it.
+        const owed: SendNowResult = { sent: false, why: "ownTurn", held: { change: "settings", helpers: true, owed: "report" } };
+        expect(await t.sendNow()).toEqual(owed);
+        expect(await t.sendNow({ currentSettings: true })).toEqual(owed);
+        expect(t.notes().some((n) => n.startsWith("Answering now"))).toBe(false);
         t.knobs.owed = null;
         expect(t.ownReply()).toBe(true);
         await t.until(() => t.steered.length === 1);
@@ -1147,21 +1416,24 @@ describe("messages keep flowing while helpers work", () => {
         await Bun.sleep(20);
         expect(t.drivers).toEqual({ made: 1, ended: 0 });
         expect(t.now().held).toEqual({ change: "settings", helpers: false });
-        // They keep writing: from here it waits for the reply, so the reply can end.
+        // They keep writing: it still goes into the reply, which is said once now that only the reply is in the way.
         t.say("five");
         t.say("six");
-        await Bun.sleep(20);
-        expect(t.steered).toEqual(["two", "three", "four"]);
-        expect(t.queued()).toBe(1);
+        await t.until(() => t.queued() === 0);
+        expect(t.steered).toEqual(["two", "three", "four", "five", "six"]);
+        expect(t.notes().filter((n) => n.startsWith("Answering now"))).toEqual(["Answering now with the settings Claude Code started with. Your changes apply from its next reply."]);
+        expect(t.drivers).toEqual({ made: 1, ended: 0 });
         await t.end();
-        // The reply's end is the moment: the process is replaced before the next turn starts.
+        // The reply's end is the moment: no helper and no reply runs, and the process is replaced there and then.
+        await t.until(() => t.drivers.ended === 1);
+        expect(t.turns()).toBe(2);
+        expect(t.notes()).toContain("Now on Opus 5.5: the next reply uses it.");
+        expect(t.now().held).toBeUndefined();
+        t.say("seven");
         await t.until(() => t.turns() === 3);
         expect(t.drivers).toEqual({ made: 2, ended: 1 });
         expect(t.ran[2]).toMatchObject({ driver: 2, model: "claude-opus-5-5" });
-        expect(t.prompts[2]).toContain("five");
-        expect(t.prompts[2]).toContain("six");
-        expect(t.notes()).toContain("Now on Opus 5.5: the next reply uses it.");
-        expect(t.now().held).toBeUndefined();
+        expect(t.prompts[2]).toContain("seven");
         await t.end();
       } finally {
         await t.done();
@@ -1216,73 +1488,118 @@ describe("messages keep flowing while helpers work", () => {
     });
   });
 
-  describe("no helpers at work: nothing changes", () => {
+  describe("no helpers at work: the same", () => {
     const TASKS: [string, BackgroundTask[]][] = [
       ["none has started", []],
       ["one has finished", [helper("completed")]],
       ["a command in the foreground (the reply's own step)", [{ ...helper("running"), id: "bash-1", kind: "local_bash", workflow: null, background: false }]],
+      ["a command left running in the background", [{ ...helper("running"), id: "bash-1", kind: "local_bash", workflow: null, background: true }]],
     ];
     for (const [what, list] of TASKS) {
-      test(`${what}: it waits behind the reply for the tap`, async () => {
+      test(`${what}: it goes into the reply by itself, once, and nothing waits behind it`, async () => {
         const t = chat(true);
         try {
           t.say("build it");
           await t.until(() => t.turns() === 1);
           t.tasks(list);
-          t.say("also add tests");
-          await Bun.sleep(30);
-          expect(t.steered).toEqual([]);
-          expect(t.queued()).toBe(1);
-          expect(await t.sendNow()).toEqual({ sent: true });
+          const yours = t.say("also add tests");
+          expect(t.steered).toEqual(["also add tests"]);
+          await t.until(() => t.queued() === 0);
+          // Read at its next step, and the app shows it as handed over (with Interrupt, to be read sooner).
+          expect(t.app.store.getLastSeen(t.member.id).seq).toBeGreaterThanOrEqual(yours.seq);
+          expect(t.app.engine.liveTurn(t.app.engine.runningTurns(t.room.id)[0]).unread).toEqual([yours.id]);
+          expect(t.notes()).toEqual([]);
+          // An older app's tap has nothing left to do.
+          expect(await t.sendNow()).toEqual({ sent: false, why: "answering" });
           expect(t.steered).toEqual(["also add tests"]);
           await t.end();
           expect(t.turns()).toBe(1);
         } finally {
+          t.tasks(list.map((x) => ({ ...x, status: "completed" })));
           await t.done();
         }
       });
     }
 
-    test("a command left running in the background counts as a helper: it goes in by itself", async () => {
+    test("three quick messages, on an agent whose hand-over takes a moment: each goes in once, in order", async () => {
       const t = chat(true);
       try {
         t.say("build it");
         await t.until(() => t.turns() === 1);
-        t.tasks([{ ...helper("running"), id: "bash-1", kind: "local_bash", workflow: null, background: true }]);
-        t.say("also add tests");
-        expect(t.steered).toEqual(["also add tests"]);
+        t.knobs.steerMs = 30;
+        t.say("one");
+        t.say("two");
+        t.say("three");
         await t.until(() => t.queued() === 0);
+        expect(t.steered).toEqual(["one", "two\n\nthree"]);
         await t.end();
+        expect(t.turns()).toBe(1);
       } finally {
-        t.tasks([{ ...helper("completed"), id: "bash-1", kind: "local_bash", workflow: null, background: true }]);
         await t.done();
       }
     });
 
-    test("new settings waiting for the reply alone: the message waits, on the new settings after it; Send now says so at each tap", async () => {
+    test("new settings waiting for the reply alone: the message goes in all the same, said once for the reply, and the settings apply as it ends", async () => {
       const t = chat(true);
+      const said = "Answering now with the settings Claude Code started with. Your changes apply from its next reply.";
       try {
         t.say("build it");
         await t.until(() => t.turns() === 1);
         effort(t, "high");
         expect(t.now().held).toEqual({ change: "settings", helpers: false });
         t.say("also add tests");
-        await Bun.sleep(20);
-        expect(t.steered).toEqual([]);
-        expect(await t.sendNow()).toEqual({ sent: true });
-        expect(t.notes().at(-1)).toBe("Answering now with the settings Claude Code started with. Your changes apply from its next reply.");
-        t.say("and the docs");
-        await Bun.sleep(20);
+        await t.until(() => t.queued() === 0);
         expect(t.steered).toEqual(["also add tests"]);
+        expect(t.notes().at(-1)).toBe(said);
+        // The next one too, with nothing more to say: the reply is the same one.
+        t.say("and the docs");
+        await t.until(() => t.queued() === 0);
+        expect(t.steered).toEqual(["also add tests", "and the docs"]);
+        expect(t.notes().filter((n) => n === said)).toHaveLength(1);
+        // An older app's Send now has nothing left to send.
+        expect(await t.sendNow()).toEqual({ sent: false, why: "answering" });
         await t.end();
+        // The reply's end is the moment the settings apply: the next reply runs on a new process.
+        await t.until(() => t.drivers.ended === 1);
+        expect(t.turns()).toBe(1);
+        expect(t.now().held).toBeUndefined();
+        t.say("and now?");
         await t.until(() => t.turns() === 2);
         expect(t.ran[1].driver).toBe(2);
-        expect(t.prompts[1]).toContain("and the docs");
+        expect(t.prompts[1]).toContain("and now?");
         await t.end();
       } finally {
         await t.done();
       }
     });
+
+    for (const [what, change, , apply] of HOLDS) {
+      test(`${what} waiting for the reply alone: never into the reply, and it goes on a new process as the reply ends`, async () => {
+        const t = chat(true);
+        try {
+          t.say("Install the browser");
+          await t.until(() => t.turns() === 1);
+          apply(t);
+          expect(t.now().held).toEqual({ change, helpers: false });
+          t.say("Delete the old build folder");
+          await Bun.sleep(20);
+          expect(t.steered).toEqual([]);
+          expect(t.queued()).toBe(1);
+          expect(await t.sendNow()).toEqual({ sent: false, why: "settings", held: { change, helpers: false } });
+          expect(await t.sendNow({ currentSettings: true })).toEqual({ sent: false, why: "settings", held: { change, helpers: false } });
+          expect(t.steered).toEqual([]);
+          expect(t.notes().some((n) => n === AROUND || n.startsWith("Answering now"))).toBe(false);
+          await t.end();
+          await t.until(() => t.turns() === 2);
+          expect(t.ran[1].driver).toBe(2);
+          expect(t.prompts[1]).toContain("Delete the old build folder");
+          expect(t.steered).toEqual([]);
+          await t.end();
+        } finally {
+          await t.done();
+        }
+      });
+    }
   });
 });
 
@@ -1350,7 +1667,7 @@ describe("per agent, in a group chat", () => {
     await g.end("claude");
   }
 
-  test("each agent's helpers and settings are its own: @claude's message goes around what waits for its helpers, with one note naming it, and @codex's isn't touched", async () => {
+  test("each agent's helpers and settings are its own: @claude's message goes around what waits for its helpers, with one note naming it, and @codex's goes into its own reply with nothing said", async () => {
     const g = group();
     try {
       await claudeHelper(g);
@@ -1365,16 +1682,18 @@ describe("per agent, in a group chat", () => {
       expect(g.agents.claude.ends).toHaveLength(3);
       await g.end("claude");
       expect(g.notes()).toEqual([note]);
-      // @codex has no helpers and nothing waiting: its messages are as they always were, and so is its Send now.
+      // @codex has no helpers and nothing waiting: its message goes into its reply by itself, with nothing to say about it.
       g.say("@codex look at the tests");
       expect(g.agents.codex.ends).toHaveLength(1);
       g.say("@codex and the fixtures");
-      await Bun.sleep(20);
-      expect(g.agents.codex.steered).toEqual([]);
-      expect(g.queued()).toEqual(["codex"]);
-      expect(await g.app.engine.sendNowWhy(g.room.id, g.member("codex").id)).toEqual({ sent: true });
+      await g.until(() => g.agents.codex.steered.length === 1 && g.queued().length === 0);
+      expect(g.agents.codex.steered).toEqual(["[Human · Phone]\n@codex and the fixtures"]);
+      expect(g.agents.claude.steered).toEqual([]);
+      // An older app's Send now on its line has nothing left to send.
+      expect(await g.app.engine.sendNowWhy(g.room.id, g.member("codex").id)).toEqual({ sent: false, why: "answering" });
       expect(g.notes()).toEqual([note]);
       await g.end("codex");
+      expect(g.agents.codex.ends).toHaveLength(1);
     } finally {
       g.agents.claude.tasks?.([helper("completed")]);
       await g.done();
@@ -1434,7 +1753,7 @@ describe("per agent, in a group chat", () => {
     }
   });
 
-  test("with parallel work, a message goes into the reply of the agent it's for only while that agent's helpers work", async () => {
+  test("with parallel work, a message goes into the reply of the agent it's for, helpers or not, and only that one", async () => {
     const g = group();
     try {
       g.app.updateRoom(g.room.id, { parallel: true });
@@ -1446,14 +1765,18 @@ describe("per agent, in a group chat", () => {
       // Labelled as in its turns, as Send now does: what @codex has to do says so.
       expect(g.agents.claude.steered).toEqual(["[Human · Phone]\n@codex start the tests\n(For @codex, not you: they answer it in their own turn.)\n\n[Human · Phone]\n@claude and the docs"]);
       await g.until(() => g.queued().length === 0);
-      g.say("@codex and the fixtures");
-      await Bun.sleep(20);
       expect(g.agents.codex.steered).toEqual([]);
-      expect(g.queued()).toEqual(["codex"]);
-      await g.end("codex");
-      await g.until(() => g.agents.codex.ends.length === 2);
+      // @codex has no helper at work: its message goes into its reply all the same, and @claude's reply isn't given it again.
+      g.say("@codex and the fixtures");
+      await g.until(() => g.agents.codex.steered.length === 1 && g.queued().length === 0);
+      expect(g.agents.codex.steered).toEqual(["[Human · Phone]\n@claude and the docs\n(For @claude, not you: they answer it in their own turn.)\n\n[Human · Phone]\n@codex and the fixtures"]);
+      expect(g.agents.claude.steered).toHaveLength(1);
       await g.end("codex");
       await g.end("claude");
+      await Bun.sleep(20);
+      // Each answered in the reply it had: no second one for either.
+      expect(g.agents.claude.ends).toHaveLength(1);
+      expect(g.agents.codex.ends).toHaveLength(1);
     } finally {
       g.agents.claude.tasks?.([helper("completed")]);
       await g.done();
@@ -1485,7 +1808,7 @@ describe("per agent, in a group chat", () => {
     }
   });
 
-  for (const way of ["by itself, while its helpers work", "by Send now's tap"] as const) {
+  for (const way of ["while its helpers work", "with no helper at work"] as const) {
     test(`another agent's reply still being written as a message goes in ${way}: it reaches the agent on its next turn`, async () => {
       const g = group();
       try {
@@ -1493,9 +1816,8 @@ describe("per agent, in a group chat", () => {
         g.say("@claude start the API");
         g.say("@codex start the tests");
         await g.until(() => g.agents.claude.ends.length === 1 && g.agents.codex.ends.length === 1);
-        if (way !== "by Send now's tap") g.agents.claude.tasks?.([helper("running")]);
+        if (way === "while its helpers work") g.agents.claude.tasks?.([helper("running")]);
         g.say("@claude and the docs");
-        if (way === "by Send now's tap") expect(await g.app.engine.sendNowWhy(g.room.id, g.member("claude").id)).toEqual({ sent: true });
         await g.until(() => g.agents.claude.steered.length === 1 && g.queued().length === 0);
         // @codex ends only now. (Counted as read with everything else, it was never seen again.)
         g.agents.codex.ends.at(-1)!({ ok: true, text: "CODEX-FOUND-THE-BUG" });
@@ -1563,7 +1885,7 @@ describe("per agent, in a group chat", () => {
     }
   });
 
-  for (const off of [false, true]) test(`a message given back by Stop reads as that message, not the note said about it${off ? ", with the switch off" : ""}`, async () => {
+  test("a message given back by Stop reads as that message, not the note said about it", async () => {
     const dir = mkdtempSync(join(tmpdir(), "ct-send-now-note-"));
     dirs.push(dir);
     const app = new App({ dbPath: ":memory:", config: { port: 0, host: "127.0.0.1", publicUrl: null, workspaceRoot: dir, maxHopsDefault: 5 } });
@@ -1601,17 +1923,16 @@ describe("per agent, in a group chat", () => {
       await until(() => ends.length === 1);
       tasks?.([helper("running")]);
       app.updateMember(claude().id, { config: { ...claude().config, effort: "high" } });
-      if (off) app.setHubSettings({ messagesFlow: false });
-      // In by itself, or by the tap, with the note after it.
+      // In by itself, with the note after it.
       say("@claude also this");
-      if (off) expect(await app.engine.sendNowWhy(room.id, claude().id)).toEqual({ sent: true });
       await until(() => handed.length === 1 && app.engine.queuedTurns(room.id).length === 0);
-      const note = off ? "Answering now with the settings @claude started with. Your changes apply once its reply and its helpers finish." : "Your new settings apply when @claude's helpers finish. Until then it answers with the settings it started with.";
+      const note = "Your new settings apply when @claude's helpers finish. Until then it answers with the settings it started with.";
       expect(notes().at(-1)).toBe(note);
       await app.engine.stop(room.id);
       await Bun.sleep(20);
       expect(ends).toHaveLength(1);
-      app.engine.retry(room.id, null, { currentSettings: true });
+      // Try again under the message: it goes to whoever it's for.
+      app.engine.retry(room.id);
       await until(() => ends.length === 2);
       expect(prompts[1]).toContain("@claude also this");
       expect(prompts[1]).not.toContain(note);
@@ -1655,6 +1976,36 @@ describe("per agent, in a group chat", () => {
       expect(g.agents.claude.ends).toHaveLength(2);
       expect(g.queued()).toEqual([]);
       await g.end("codex");
+    } finally {
+      g.agents.claude.tasks?.([helper("completed")]);
+      await g.done();
+    }
+  });
+
+  test("Stop and answer for one agent leaves another agent's reply running: its turn waits for that reply, and goes as it ends", async () => {
+    const g = group();
+    try {
+      await claudeHelper(g);
+      g.app.updateMember(g.member("claude").id, { config: { ...g.member("claude").config, effort: "high" } });
+      g.say("@codex look at this");
+      await g.until(() => g.agents.codex.ends.length === 1);
+      // Not @codex's to take: it waits for its own agent's turn.
+      g.say("@claude and this");
+      await Bun.sleep(10);
+      expect(g.agents.codex.steered).toEqual([]);
+      await g.app.engine.stop(g.room.id, g.member("claude").id, { keepWaiting: true });
+      expect(g.agents.claude.ends).toHaveLength(1);
+      expect(g.agents.codex.ends).toHaveLength(1);
+      expect(g.queued()).toEqual(["claude"]);
+      await g.end("codex");
+      await g.until(() => g.agents.claude.ends.length === 2);
+      expect(g.agents.claude.prompts[1]).toContain("@claude and this");
+      // On the process as it is, said once for the hold.
+      expect(g.agents.claude.ran).toEqual([1, 1]);
+      expect(g.notes()).toEqual(["Your new settings apply when @claude's helpers finish. Until then it answers with the settings it started with."]);
+      await g.end("claude");
+      await Bun.sleep(20);
+      expect(g.agents.claude.ends).toHaveLength(2);
     } finally {
       g.agents.claude.tasks?.([helper("completed")]);
       await g.done();
@@ -1736,1800 +2087,8 @@ describe("per agent, in a group chat", () => {
   });
 });
 
-describe("with the switch off: messages wait for the helpers, and a tap sends one sooner (as it used to)", () => {
-  /** A chat with "Keep going while helpers work" off. */
-  function offChat(steer?: boolean, opts: Parameters<typeof chat>[1] = {}) {
-    const t = chat(steer, opts);
-    t.app.setHubSettings({ messagesFlow: false });
-    return t;
-  }
-  /** Its agent has a helper at work and no reply running. */
-  async function helperAtWork(steer?: boolean, opts: Parameters<typeof chat>[1] = {}) {
-    const t = offChat(steer, opts);
-    t.say("Install the browser");
-    await t.until(() => t.turns() === 1);
-    t.tasks([helper("running")]);
-    await t.end();
-    return t;
-  }
-  const effort = (t: ReturnType<typeof chat>, to: string) => t.app.updateMember(t.member.id, { config: { ...t.now().config, effort: to } });
-  /** What the app shows as handed to the running reply and not read yet ("Read it now"). */
-  const handedOver = (t: ReturnType<typeof chat>) => t.app.engine.liveTurn(t.app.engine.runningTurns(t.room.id)[0]).unread ?? [];
-  const ANSWERING = "Answering now with the settings Claude Code started with. Your changes apply once its helpers finish.";
-  const ANSWERING_REPLY = "Answering now with the settings Claude Code started with. Your changes apply once this reply and its helpers finish.";
-
-  // The tests the hold had before messages kept flowing, as they were.
-  test("Send now says so instead of 'being answered'; Answer now answers it with the agent as it is; the settings still apply after the helpers", async () => {
-    const t = offChat(true);
-    try {
-      // A reply starts a long background workflow, and the chat is moved from Opus 5 to Opus 5.5 meanwhile.
-      t.say("Install the browser and make it a setup step");
-      await t.until(() => t.turns() === 1);
-      t.tasks([helper("running")]);
-      t.app.updateMember(t.member.id, { model: "claude-opus-5-5" });
-      expect(t.now().held).toEqual({ change: "settings", helpers: true });
-      // Their question waits behind the reply, as it should.
-      t.say("Did this chat switch my model?");
-      await t.end({ ok: true, text: "Installed. A workflow is building the setup step." });
-      // The reply ended, but the question doesn't start: the new model waits for the workflow, and so does it.
-      expect(t.turns()).toBe(1);
-      expect(t.now()).toMatchObject({ status: "working", statusDetail: "Finishing helpers before your new settings apply", held: { change: "settings", helpers: true } });
-      expect(t.app.engine.queuedTurns(t.room.id)).toHaveLength(1);
-      // Send now: there's no reply to put it into, and it says what is really holding it.
-      expect(await t.sendNow()).toEqual({ sent: false, why: "helpers", held: { change: "settings", helpers: true } });
-      expect(t.turns()).toBe(1);
-      // Answer now: it's answered now, by the agent as it is (its helpers keep going), and the chat says so.
-      expect(await t.sendNow({ currentSettings: true })).toEqual({ sent: true });
-      await t.until(() => t.turns() === 2);
-      expect(t.prompts[1]).toContain("Did this chat switch my model?");
-      expect(t.drivers).toEqual({ made: 1, ended: 0 });
-      expect(t.ran[1]).toMatchObject({ driver: 1, model: "claude-opus-5" });
-      expect(t.notes()).toContain(ANSWERING);
-      await t.end();
-      // The settings still wait for the helpers, and the next message with them, until asked again.
-      expect(t.now()).toMatchObject({ status: "working", statusDetail: "Finishing helpers before your new settings apply" });
-      t.say("Send the link too");
-      await Bun.sleep(20);
-      expect(t.turns()).toBe(2);
-      expect(await t.sendNow()).toEqual({ sent: false, why: "helpers", held: { change: "settings", helpers: true } });
-      // The workflow finishes: the agent restarts with the new settings and answers what waited.
-      t.tasks([helper("completed")]);
-      await t.until(() => t.turns() === 3);
-      expect(t.drivers).toEqual({ made: 2, ended: 1 });
-      expect(t.ran[2]).toMatchObject({ driver: 2, model: "claude-opus-5-5" });
-      expect(t.prompts[2]).toContain("Send the link too");
-      expect(t.now().held).toBeUndefined();
-      await t.end();
-    } finally {
-      await t.done();
-    }
-  });
-
-  test("Send now into a reply while new settings wait: it goes in, and the chat says it's answered with the settings it started with", async () => {
-    const t = offChat(true);
-    try {
-      t.say("Install the browser");
-      await t.until(() => t.turns() === 1);
-      t.tasks([helper("running")]);
-      t.app.updateMember(t.member.id, { model: "claude-opus-5-5" });
-      t.say("Did this chat switch my model?");
-      // The reply is still running: Send now puts it in (currentSettings only matters once no reply runs)...
-      expect(await t.sendNow({ currentSettings: true })).toEqual({ sent: true });
-      expect(t.steered).toEqual(["Did this chat switch my model?"]);
-      // ...but the reply runs on Opus 5, and the new model waits for it and its helpers: never silently.
-      expect(t.notes()).toContain(ANSWERING_REPLY);
-      await t.end();
-      expect(t.turns()).toBe(1);
-    } finally {
-      t.tasks([helper("completed")]);
-      await t.done();
-    }
-  });
-
-  test("Claude Code's own reply as its helpers report back runs on the old process; Send now into it says so too", async () => {
-    const t = offChat(true);
-    try {
-      t.say("Install the browser");
-      await t.until(() => t.turns() === 1);
-      t.tasks([helper("running")]);
-      t.app.updateMember(t.member.id, { model: "claude-opus-5-5" });
-      await t.end();
-      // A helper reports back and Claude Code carries on by itself, on the Opus 5 process.
-      expect(t.ownReply()).toBe(true);
-      await t.until(() => t.turns() === 2);
-      expect(t.ran[1]).toMatchObject({ driver: 1, model: "claude-opus-5" });
-      // While that reply runs, a message waits for it and then for the helpers: the hold rides along with the reply.
-      t.say("Did this chat switch my model?");
-      await Bun.sleep(20);
-      expect(t.steered).toEqual([]);
-      expect(t.now().held).toEqual({ change: "settings", helpers: true });
-      expect(await t.sendNow()).toEqual({ sent: true });
-      expect(t.notes().at(-1)).toBe(ANSWERING_REPLY);
-      await t.end();
-      // Its reply ended: back to waiting for the helpers.
-      expect(t.now()).toMatchObject({ status: "working", statusDetail: "Finishing helpers before your new settings apply" });
-    } finally {
-      t.tasks([helper("completed")]);
-      await t.done();
-    }
-  });
-
-  test("an account switch waiting for the helpers: no Answer now, it says which change waits, and the message runs on the new account once they finish", async () => {
-    const t = offChat(true);
-    try {
-      const work = t.app.providers.setEndpointAccount("claude", { label: "Work server", baseUrl: "http://127.0.0.1:9", models: ["work-model"] });
-      t.say("Install the browser");
-      await t.until(() => t.turns() === 1);
-      t.tasks([helper("running")]);
-      await t.end();
-      t.app.updateMember(t.member.id, { config: { ...t.now().config, account: work.id }, model: "work-model" });
-      expect(t.notes().some((n) => n.startsWith("@claude now uses the Work server account"))).toBe(true);
-      expect(t.now()).toMatchObject({ status: "working", statusDetail: "Finishing helpers before your account switch applies", held: { change: "account", helpers: true } });
-      t.say("Did this chat switch my model?");
-      await Bun.sleep(20);
-      expect(t.turns()).toBe(1);
-      // Answer now would run the old account's process on it (and drop what that reply saves): refused, saying why.
-      expect(await t.sendNow({ currentSettings: true })).toEqual({ sent: false, why: "helpers", held: { change: "account", helpers: true } });
-      await Bun.sleep(20);
-      expect(t.turns()).toBe(1);
-      expect(t.notes().some((n) => n.startsWith("Answering now"))).toBe(false);
-      // The helpers finish: the message runs on a new process, on the Work server.
-      t.tasks([helper("completed")]);
-      await t.until(() => t.turns() === 2);
-      expect(t.ran[1]).toMatchObject({ driver: 2, account: work.id });
-      expect(t.prompts[1]).toContain("Did this chat switch my model?");
-      await t.end();
-    } finally {
-      await t.done();
-    }
-  });
-
-  test("tighter permissions waiting for the helpers: no Answer now, and no Send now into the agent's own reply on Full access", async () => {
-    const t = offChat(true);
-    try {
-      t.say("Install the browser");
-      await t.until(() => t.turns() === 1);
-      t.tasks([helper("running")]);
-      await t.end();
-      t.app.updateMember(t.member.id, { permissionMode: "ask" });
-      expect(t.now()).toMatchObject({ statusDetail: "Finishing helpers before your permission change applies", held: { change: "permissions", helpers: true } });
-      t.say("Delete the old build folder");
-      expect(await t.sendNow({ currentSettings: true })).toEqual({ sent: false, why: "helpers", held: { change: "permissions", helpers: true } });
-      // A reply of Claude Code's own would run on the Full access process: it's stopped as it starts, before it does
-      // anything, and nothing is handed to it. (It used to run there whole, with no approval asked.)
-      expect(t.ownReply()).toBe("stop");
-      await Bun.sleep(20);
-      expect(t.turns()).toBe(1);
-      expect(await t.sendNow()).toEqual({ sent: false, why: "helpers", held: { change: "permissions", helpers: true } });
-      expect(t.steered).toEqual([]);
-      // Back to Full access: the process still holds what it was always allowed before, which the change took back, so
-      // it still waits.
-      t.app.updateMember(t.member.id, { permissionMode: "full" });
-      expect(t.now().held).toEqual({ change: "permissions", helpers: true });
-      t.app.updateMember(t.member.id, { permissionMode: "ask" });
-      // The helpers finish: a new process, under Ask, carries on from what the stopped reply had taken up, and answers
-      // the message, in one reply.
-      t.tasks([helper("completed")]);
-      await t.until(() => t.turns() === 2);
-      expect(t.ran[1]).toMatchObject({ driver: 2, permissionMode: "ask" });
-      expect(t.prompts.at(-1)).toContain("You had started on something by yourself (above)");
-      expect(t.prompts.at(-1)).toContain("Delete the old build folder");
-      expect(t.notes().at(-1)).toBe("Claude Code had started on something by itself. Your permission change applies first: Claude Code starts again under your new permissions and carries on with it.");
-      await t.end();
-    } finally {
-      await t.done();
-    }
-  });
-
-  test("looser permissions waiting for the helpers: the process as it is may answer (it only asks more), and the chat says so", async () => {
-    const t = offChat(true);
-    try {
-      t.app.updateMember(t.member.id, { permissionMode: "ask" });
-      t.say("Install the browser");
-      await t.until(() => t.turns() === 1);
-      t.tasks([helper("running")]);
-      await t.end();
-      t.app.updateMember(t.member.id, { permissionMode: "full" });
-      expect(t.now().held).toEqual({ change: "settings", helpers: true });
-      t.say("Carry on");
-      expect(await t.sendNow({ currentSettings: true })).toEqual({ sent: true });
-      await t.until(() => t.turns() === 2);
-      expect(t.ran[1]).toMatchObject({ driver: 1, permissionMode: "ask" });
-      expect(t.notes().at(-1)).toBe(ANSWERING);
-      await t.end();
-    } finally {
-      t.tasks([helper("completed")]);
-      await t.done();
-    }
-  });
-
-  // What came since.
-  describe("each thing the process may answer around holds the message", () => {
-    const CHANGES: [string, (t: ReturnType<typeof chat>) => void][] = [
-      ["a new model", (t) => t.app.updateMember(t.member.id, { model: "claude-opus-5-5" })],
-      ["a new effort", (t) => effort(t, "high")],
-      ["fast mode", (t) => t.app.updateMember(t.member.id, { config: { ...t.now().config, fast: true } })],
-      ["looser permissions", (t) => t.app.updateMember(t.member.id, { permissionMode: "full" })],
-    ];
-    for (const [what, change] of CHANGES) {
-      test(`${what}: nothing starts until a tap or the helpers' end, and it's said at each tap, never as a hold's one note`, async () => {
-        const t = offChat(true);
-        try {
-          t.app.updateMember(t.member.id, { permissionMode: "ask" });
-          t.say("Install the browser");
-          await t.until(() => t.turns() === 1);
-          t.tasks([helper("running")]);
-          await t.end();
-          change(t);
-          expect(t.now().held).toEqual({ change: "settings", helpers: true });
-          t.say("Carry on");
-          await Bun.sleep(20);
-          expect(t.turns()).toBe(1);
-          expect(t.queued()).toBe(1);
-          expect(await t.sendNow({ currentSettings: true })).toEqual({ sent: true });
-          await t.until(() => t.turns() === 2);
-          expect(t.ran[1].driver).toBe(1);
-          await t.end();
-          t.say("And again");
-          await Bun.sleep(20);
-          expect(t.turns()).toBe(2);
-          expect(await t.sendNow({ currentSettings: true })).toEqual({ sent: true });
-          await t.until(() => t.turns() === 3);
-          expect(t.notes().filter((n) => n === ANSWERING)).toHaveLength(2);
-          expect(t.notes().some((n) => n === AROUND)).toBe(false);
-          await t.end();
-        } finally {
-          t.tasks([helper("completed")]);
-          await t.done();
-        }
-      });
-    }
-
-    test("said under the message and above the reply, and a second tap on one that's going says it's going", async () => {
-      const t = await helperAtWork(true);
-      try {
-        effort(t, "high");
-        t.say("Carry on");
-        expect(await t.sendNow({ currentSettings: true })).toEqual({ sent: true });
-        expect(t.app.store.listMessages(t.room.id).slice(-3).map((m) => [m.authorKind, m.text])).toEqual([["human", "Carry on"], ["system", ANSWERING], ["agent", ""]]);
-        expect(t.prompts[1]).not.toContain("Answering now");
-        expect(await t.sendNow({ currentSettings: true })).toEqual({ sent: false, why: "answering" });
-        expect(t.notes().filter((n) => n === ANSWERING)).toHaveLength(1);
-        await t.end();
-      } finally {
-        t.tasks([helper("completed")]);
-        await t.done();
-      }
-    });
-
-    test("new settings that wait for the reply alone: the switch changes nothing", async () => {
-      const t = offChat(true);
-      try {
-        t.say("build it");
-        await t.until(() => t.turns() === 1);
-        effort(t, "high");
-        expect(t.now().held).toEqual({ change: "settings", helpers: false });
-        t.say("also add tests");
-        await Bun.sleep(20);
-        expect(t.steered).toEqual([]);
-        expect(await t.sendNow()).toEqual({ sent: true });
-        expect(t.notes().at(-1)).toBe("Answering now with the settings Claude Code started with. Your changes apply from its next reply.");
-        t.say("and the docs");
-        await t.end();
-        await t.until(() => t.turns() === 2);
-        expect(t.ran[1].driver).toBe(2);
-        expect(t.prompts[1]).toContain("and the docs");
-        await t.end();
-      } finally {
-        await t.done();
-      }
-    });
-
-    test("no settings waiting: a message starts its turn while helpers work, as it always did", async () => {
-      const t = await helperAtWork(true);
-      try {
-        t.say("What's next?");
-        expect(t.turns()).toBe(2);
-        expect(t.queued()).toBe(0);
-        expect(t.now().held).toBeUndefined();
-        await t.end();
-      } finally {
-        t.tasks([helper("completed")]);
-        await t.done();
-      }
-    });
-
-    test("the agent's own wake-up comes first, whatever is tapped, and Answer now isn't promised around it", async () => {
-      const t = await helperAtWork(true);
-      try {
-        effort(t, "high");
-        t.knobs.owed = "report";
-        t.tasks([helper("running"), { ...helper("completed"), id: "workflow-2" }]);
-        t.say("What's next?");
-        await Bun.sleep(20);
-        expect(t.turns()).toBe(1);
-        const owed: SendNowResult = { sent: false, why: "ownTurn", held: { change: "settings", helpers: true, owed: "report" } };
-        expect(await t.sendNow({ currentSettings: true })).toEqual(owed);
-        expect(await t.sendNow()).toEqual(owed);
-        expect(t.notes().some((n) => n.startsWith("Answering now"))).toBe(false);
-        t.knobs.owed = null;
-        expect(t.ownReply()).toBe(true);
-        await t.until(() => t.turns() === 2);
-        // Its reply runs: the message stays behind it until tapped.
-        await Bun.sleep(20);
-        expect(t.steered).toEqual([]);
-        expect(await t.sendNow()).toEqual({ sent: true });
-        expect(t.steered).toEqual(["What's next?"]);
-        await t.end();
-      } finally {
-        t.tasks([helper("completed")]);
-        await t.done();
-      }
-    });
-
-    test("a usage limit stops the reply: the same words, nothing can send it sooner, and Answer now isn't one", async () => {
-      const t = offChat(true);
-      try {
-        t.say("research what happened");
-        await t.until(() => t.turns() === 1);
-        t.tasks([helper("running")]);
-        effort(t, "high");
-        const yours = t.say("and send the link");
-        const resetsAt = Date.now() + 33 * 60_000;
-        await t.end({ ok: false, error: "You've hit your 5-hour limit", limit: { kind: "usage", label: "5-hour", resetsAt, source: "event" } });
-        expect(t.now().status).toBe("waiting");
-        expect(await t.sendNow({ currentSettings: true })).toMatchObject({ sent: false, why: "limit", wait: { kind: "usage", resetsAt } });
-        expect(t.app.store.getLastSeen(t.member.id).seq).toBeLessThan(yours.seq);
-      } finally {
-        t.tasks([helper("completed")]);
-        await t.done();
-      }
-    });
-
-    test("a change taken back with nothing waiting leaves no \"Finishing helpers\" behind", async () => {
-      const t = offChat(true);
-      try {
-        t.say("build it");
-        await t.until(() => t.turns() === 1);
-        t.tasks([helper("running")]);
-        await t.end();
-        const was = t.now().config;
-        effort(t, "high");
-        await t.until(() => /^Finishing helpers/.test(t.now().statusDetail ?? ""));
-        t.app.updateMember(t.member.id, { config: was });
-        await t.until(() => !/^Finishing helpers/.test(t.now().statusDetail ?? ""));
-        expect(t.now().status).toBe("idle");
-        expect(t.now().held).toBeUndefined();
-        t.tasks([helper("completed")]);
-        await Bun.sleep(20);
-        expect(t.now().status).toBe("idle");
-      } finally {
-        t.tasks([helper("completed")]);
-        await t.done();
-      }
-    });
-
-    test("a change taken back lets the message go at once, on the process as it is, with nothing to tap", async () => {
-      const t = await helperAtWork(true);
-      try {
-        const was = t.now().config;
-        effort(t, "high");
-        t.say("Carry on");
-        await Bun.sleep(20);
-        expect(t.turns()).toBe(1);
-        t.app.updateMember(t.member.id, { config: was });
-        await t.until(() => t.turns() === 2);
-        expect(t.now().held).toBeUndefined();
-        expect(t.ran[1].driver).toBe(1);
-        expect(t.notes().some((n) => n.startsWith("Answering now") || n === AROUND)).toBe(false);
-        await t.end();
-      } finally {
-        t.tasks([helper("completed")]);
-        await t.done();
-      }
-    });
-  });
-
-  describe("nothing goes in mid-reply without a tap", () => {
-    test("a reply and a helper at work, with or without settings waiting: it waits behind the reply until Send now, then shows as handed (Read it now)", async () => {
-      for (const held of [false, true]) {
-        const t = offChat(true);
-        try {
-          t.say("build it");
-          await t.until(() => t.turns() === 1);
-          t.tasks([helper("running")]);
-          if (held) effort(t, "high");
-          const yours = t.say("also add tests");
-          await Bun.sleep(30);
-          expect(t.steered).toEqual([]);
-          expect(t.queued()).toBe(1);
-          expect(handedOver(t)).toEqual([]);
-          expect(await t.sendNow()).toEqual({ sent: true });
-          expect(t.steered).toEqual(["also add tests"]);
-          expect(handedOver(t)).toEqual([yours.id]);
-          expect(t.queued()).toBe(0);
-          // A tap is said each time, and never as the hold's one note.
-          expect(t.notes().filter((n) => n === AROUND)).toEqual([]);
-          expect(t.notes().filter((n) => n === ANSWERING_REPLY)).toHaveLength(held ? 1 : 0);
-          await t.end();
-          expect(t.turns()).toBe(1);
-        } finally {
-          t.tasks([helper("completed")]);
-          await t.done();
-        }
-      }
-    });
-
-    test("a helper starting with a message already waiting doesn't send it", async () => {
-      const t = offChat(true);
-      try {
-        t.say("build it");
-        await t.until(() => t.turns() === 1);
-        t.say("also add tests");
-        t.tasks([helper("running")]);
-        await Bun.sleep(30);
-        expect(t.steered).toEqual([]);
-        expect(t.queued()).toBe(1);
-        await t.end();
-        // No settings wait: it starts its own reply as this one ends.
-        await t.until(() => t.turns() === 2);
-        expect(t.prompts[1]).toContain("also add tests");
-        await t.end();
-      } finally {
-        t.tasks([helper("completed")]);
-        await t.done();
-      }
-    });
-  });
-
-  describe("what holds in both modes", () => {
-    const HOLDS: [string, "account" | "permissions" | "other", string, (t: ReturnType<typeof chat>) => void][] = [
-      [
-        "an account switch",
-        "account",
-        "your account switch applies",
-        (t) => {
-          const work = t.app.providers.setEndpointAccount("claude", { label: "Work server", baseUrl: "http://127.0.0.1:9", models: ["work-model"] });
-          t.app.updateMember(t.member.id, { config: { ...t.now().config, account: work.id }, model: "work-model" });
-        },
-      ],
-      ["tighter permissions", "permissions", "your permission change applies", (t) => t.app.updateMember(t.member.id, { permissionMode: "ask" })],
-      [
-        "a new folder",
-        "other",
-        "your changes apply",
-        (t) => {
-          const moved = mkdtempSync(join(tmpdir(), "ct-send-now-moved-"));
-          dirs.push(moved);
-          t.app.updateRoom(t.room.id, { cwd: moved });
-        },
-      ],
-    ];
-    for (const [what, change, words, apply] of HOLDS) {
-      test(`${what}: never into the reply, never around it, no tap sends it, and it goes on a new process once the helpers finish`, async () => {
-        const t = offChat(true);
-        try {
-          t.say("Install the browser");
-          await t.until(() => t.turns() === 1);
-          t.tasks([helper("running")]);
-          apply(t);
-          expect(t.now().held).toEqual({ change, helpers: true });
-          t.say("Delete the old build folder");
-          await Bun.sleep(20);
-          expect(t.steered).toEqual([]);
-          expect(t.queued()).toBe(1);
-          expect(await t.sendNow()).toEqual({ sent: false, why: "settings", held: { change, helpers: true } });
-          await t.end();
-          await Bun.sleep(20);
-          expect(t.turns()).toBe(1);
-          expect(t.now()).toMatchObject({ status: "working", statusDetail: `Finishing helpers before ${words}`, held: { change, helpers: true } });
-          expect(await t.sendNow({ currentSettings: true })).toEqual({ sent: false, why: "helpers", held: { change, helpers: true } });
-          expect(await t.sendNow()).toEqual({ sent: false, why: "helpers", held: { change, helpers: true } });
-          expect(t.turns()).toBe(1);
-          expect(t.notes().some((n) => n === AROUND || n.startsWith("Answering now"))).toBe(false);
-          t.tasks([helper("completed")]);
-          await t.until(() => t.turns() === 2);
-          expect(t.ran[1].driver).toBe(2);
-          expect(t.prompts[1]).toContain("Delete the old build folder");
-          await t.end();
-        } finally {
-          await t.done();
-        }
-      });
-
-      test(`${what}: Stop and answer with no reply running: still held, and nothing claims it's being answered`, async () => {
-        const t = offChat(true);
-        try {
-          t.say("Install the browser");
-          await t.until(() => t.turns() === 1);
-          t.tasks([helper("running")]);
-          await t.end();
-          apply(t);
-          t.say("Delete the old build folder");
-          await Bun.sleep(20);
-          await t.stop({ keepWaiting: true });
-          await Bun.sleep(20);
-          expect(t.turns()).toBe(1);
-          expect(t.queued()).toBe(1);
-          expect(t.notes().some((n) => n === AROUND || n.startsWith("Answering now"))).toBe(false);
-          expect(t.now()).toMatchObject({ status: "working", statusDetail: `Finishing helpers before ${words}`, held: { change, helpers: true } });
-          t.tasks([helper("completed")]);
-          await t.until(() => t.turns() === 2);
-          expect(t.ran[1].driver).toBe(2);
-          expect(t.prompts[1]).toContain("Delete the old build folder");
-          await t.end();
-        } finally {
-          await t.done();
-        }
-      });
-
-      test(`${what}: Stop everything with no reply running, then another message: the status says why, with no button`, async () => {
-        const t = offChat(true);
-        try {
-          t.say("Install the browser");
-          await t.until(() => t.turns() === 1);
-          t.tasks([helper("running")]);
-          await t.end();
-          apply(t);
-          t.say("Delete the old build folder");
-          await Bun.sleep(20);
-          await t.stop();
-          await Bun.sleep(20);
-          expect(t.queued()).toBe(0);
-          t.say("Delete the new one too");
-          await Bun.sleep(20);
-          expect(t.turns()).toBe(1);
-          expect(t.queued()).toBe(1);
-          expect(t.now()).toMatchObject({ status: "working", statusDetail: `Finishing helpers before ${words}`, held: { change, helpers: true } });
-          expect(await t.sendNow({ currentSettings: true })).toEqual({ sent: false, why: "helpers", held: { change, helpers: true } });
-          expect(t.turns()).toBe(1);
-          t.tasks([helper("completed")]);
-          await t.until(() => t.turns() === 2);
-          expect(t.ran[1].driver).toBe(2);
-          await t.end();
-        } finally {
-          await t.done();
-        }
-      });
-
-      test(`${what}: Stop everything, then Answer now under the message: still held, saying why, and nothing claims it's being answered`, async () => {
-        const t = offChat(true);
-        try {
-          t.say("build it");
-          await t.until(() => t.turns() === 1);
-          t.tasks([helper("running")]);
-          apply(t);
-          expect(t.now().held).toEqual({ change, helpers: true });
-          t.say("also add tests");
-          await t.app.engine.stop(t.room.id);
-          await Bun.sleep(20);
-          expect(t.turns()).toBe(1);
-          expect(t.queued()).toBe(0);
-          t.app.engine.retry(t.room.id, null, { currentSettings: true });
-          await Bun.sleep(20);
-          expect(t.turns()).toBe(1);
-          expect(t.queued()).toBe(1);
-          expect(t.notes().some((n) => n === AROUND || n.startsWith("Answering now"))).toBe(false);
-          expect(await t.sendNow({ currentSettings: true })).toEqual({ sent: false, why: "helpers", held: { change, helpers: true } });
-          t.tasks([helper("completed")]);
-          await t.until(() => t.turns() === 2);
-          expect(t.ran[1].driver).toBe(2);
-          expect(t.prompts[1]).toContain("also add tests");
-          await t.end();
-        } finally {
-          await t.done();
-        }
-      });
-    }
-  });
-
-  describe("Stop gives back what wasn't read", () => {
-    /** A reply and a helper at work, new settings waiting, and a message Send now handed over that hasn't been read. */
-    async function handed(hold = true) {
-      const t = offChat(true);
-      t.say("build it");
-      await t.until(() => t.turns() === 1);
-      t.tasks([helper("running")]);
-      if (hold) effort(t, "high");
-      const yours = t.say("ALSO delete the old build folder");
-      expect(await t.sendNow()).toEqual({ sent: true });
-      t.knobs.dropsHanded = true;
-      return { t, yours };
-    }
-    const unread = (t: ReturnType<typeof chat>, seq: number) => t.app.store.getLastSeen(t.member.id).seq < seq;
-
-    test("Stop everything: it's unread again and starts nothing, under a hold too, and Answer now under it delivers it once, at once, saying so", async () => {
-      const { t, yours } = await handed();
-      try {
-        await t.app.engine.stop(t.room.id);
-        await Bun.sleep(20);
-        expect(t.turns()).toBe(1);
-        expect(unread(t, yours.seq)).toBe(true);
-        expect(t.queued()).toBe(0);
-        // Only its helpers keep the status "working": what the app takes for that (sendNow.ts onlyFinishingHelpers).
-        expect(t.now()).toMatchObject({ status: "working", statusDetail: "Finishing helpers before your new settings apply" });
-        t.app.engine.retry(t.room.id, null, { currentSettings: true });
-        expect(t.turns()).toBe(2);
-        expect(t.queued()).toBe(0);
-        expect(t.prompts[1]).toContain("ALSO delete the old build folder");
-        expect(t.ran[1].driver).toBe(1);
-        expect(t.notes().at(-1)).toBe(ANSWERING);
-        await t.end();
-        expect(t.turns()).toBe(2);
-      } finally {
-        t.tasks([helper("completed")]);
-        await t.done();
-      }
-    });
-
-    test("no settings waiting: the same, and Answer now has nothing to go around", async () => {
-      const { t, yours } = await handed(false);
-      try {
-        await t.app.engine.stop(t.room.id);
-        await Bun.sleep(20);
-        expect(unread(t, yours.seq)).toBe(true);
-        t.app.engine.retry(t.room.id, null, { currentSettings: true });
-        expect(t.turns()).toBe(2);
-        expect(t.notes().some((n) => n.startsWith("Answering now"))).toBe(false);
-        await t.end();
-      } finally {
-        t.tasks([helper("completed")]);
-        await t.done();
-      }
-    });
-
-    test("Stop and answer my message: answered next on the process as it is, once, saying so", async () => {
-      const { t, yours } = await handed();
-      try {
-        await t.app.engine.stop(t.room.id, undefined, { keepWaiting: true });
-        await t.until(() => t.turns() === 2);
-        expect(t.prompts[1]).toContain("ALSO delete the old build folder");
-        expect(t.ran[1].driver).toBe(1);
-        expect(t.queued()).toBe(0);
-        expect(unread(t, yours.seq)).toBe(false);
-        expect(t.notes().at(-1)).toBe(ANSWERING);
-        await t.end();
-        expect(t.turns()).toBe(2);
-      } finally {
-        t.tasks([helper("completed")]);
-        await t.done();
-      }
-    });
-
-    test("Stop and answer a message still waiting behind the reply: the same", async () => {
-      const t = offChat(true);
-      try {
-        t.say("build it");
-        await t.until(() => t.turns() === 1);
-        t.tasks([helper("running")]);
-        effort(t, "high");
-        t.say("also add tests");
-        await t.app.engine.stop(t.room.id, undefined, { keepWaiting: true });
-        await t.until(() => t.turns() === 2);
-        expect(t.prompts[1]).toContain("also add tests");
-        expect(t.ran[1].driver).toBe(1);
-        expect(t.notes().at(-1)).toBe(ANSWERING);
-        await t.end();
-      } finally {
-        t.tasks([helper("completed")]);
-        await t.done();
-      }
-    });
-
-    test("an older app's Answer now under the message waits as any message does, the bar offers the tap, and that tap is used up", async () => {
-      const t = offChat(true);
-      try {
-        t.say("build it");
-        await t.until(() => t.turns() === 1);
-        t.tasks([helper("running")]);
-        effort(t, "high");
-        t.say("also add tests");
-        await t.app.engine.stop(t.room.id);
-        await Bun.sleep(20);
-        t.app.engine.retry(t.room.id);
-        await Bun.sleep(20);
-        expect(t.turns()).toBe(1);
-        expect(t.queued()).toBe(1);
-        expect(await t.sendNow({ currentSettings: true })).toEqual({ sent: true });
-        await t.until(() => t.turns() === 2);
-        await t.end();
-        t.say("and the docs");
-        await Bun.sleep(20);
-        expect(t.turns()).toBe(2);
-        expect(t.queued()).toBe(1);
-      } finally {
-        t.tasks([helper("completed")]);
-        await t.done();
-      }
-    });
-
-    test("Try again on a failed reply waits like any message, and the app hears the message is unread again, so the bar shows with Answer now", async () => {
-      // It had taken the message in: only Try again makes it unread again, with no other reason for a device to hear of it.
-      const t = await helperAtWork(true, { working: true });
-      try {
-        t.say("one");
-        expect(t.turns()).toBe(2);
-        effort(t, "high");
-        await t.end({ ok: false, error: "The API said no." });
-        expect(t.now()).toMatchObject({ status: "working", statusDetail: "Finishing helpers before your new settings apply", held: { change: "settings", helpers: true } });
-        const told: number[] = [];
-        const off = t.app.bus.on((e: ServerEvent) => {
-          if (e.t === "member" && e.member.id === t.member.id && e.member.readSeq !== undefined) told.push(e.member.readSeq);
-        });
-        t.app.engine.retry(t.room.id);
-        off();
-        expect(t.turns()).toBe(2);
-        expect(t.queued()).toBe(1);
-        const one = t.app.store.listMessages(t.room.id).findLast((m) => m.text === "one")!;
-        expect(told.at(-1)).toBe(t.app.store.messageSeq(one.id) - 1);
-        expect(await t.sendNow({ currentSettings: true })).toEqual({ sent: true });
-        await t.until(() => t.turns() === 3);
-        expect(t.ran[2].driver).toBe(1);
-        expect(t.notes().at(-1)).toBe(ANSWERING);
-        await t.end();
-      } finally {
-        t.tasks([helper("completed")]);
-        await t.done();
-      }
-    });
-  });
-
-  describe("no reply running: a tap goes at once, and the bar is there for it", () => {
-    /** What the app's bar goes by: it says what holds the turn, so it offers Answer now (web sendNow.ts). */
-    const HELD = { status: "working", statusDetail: "Finishing helpers before your new settings apply", held: { change: "settings", helpers: true } };
-    /** A helper at work, a new setting waiting, and a message held. */
-    async function held(text = "Carry on") {
-      const t = await helperAtWork(true);
-      effort(t, "high");
-      const message = t.say(text);
-      await Bun.sleep(20);
-      expect(t.turns()).toBe(1);
-      expect(t.queued()).toBe(1);
-      return { t, message };
-    }
-    /** The bar's tap: answered now, once, on the process as it is, saying so; and the next message waits again. */
-    async function tapGoes(t: ReturnType<typeof chat>, reads: string[]) {
-      expect(t.now()).toMatchObject(HELD);
-      const before = t.turns();
-      expect(await t.sendNow({ currentSettings: true })).toEqual({ sent: true });
-      await t.until(() => t.turns() === before + 1);
-      for (const text of reads) expect(t.prompts.at(-1)).toContain(text);
-      expect(t.ran.at(-1)!.driver).toBe(1);
-      expect(t.queued()).toBe(0);
-      expect(t.notes().at(-1)).toBe(ANSWERING);
-      await t.end();
-      await Bun.sleep(20);
-      expect(t.turns()).toBe(before + 1);
-      expect(t.now()).toMatchObject(HELD);
-    }
-    const limit = (resetsAt = Date.now() + 33 * 60_000): TurnResult => ({ ok: false, error: "You've hit your 5-hour limit", limit: { kind: "usage", label: "5-hour", resetsAt, source: "event" } });
-    /** A reply and a helper at work, a new setting waiting, a message behind the reply, and a usage limit stops the reply. */
-    async function limited() {
-      const t = offChat(true);
-      t.say("build it");
-      await t.until(() => t.turns() === 1);
-      t.tasks([helper("running")]);
-      effort(t, "high");
-      t.say("also add tests");
-      await t.end(limit());
-      expect(t.now().status).toBe("waiting");
-      return t;
-    }
-
-    test("Stop and answer my message: it starts at once, once, saying so, and the next message waits again", async () => {
-      const { t } = await held();
-      try {
-        // Why Stop is on screen with nothing running.
-        expect(t.now()).toMatchObject(HELD);
-        await t.stop({ keepWaiting: true });
-        expect(t.turns()).toBe(2);
-        expect(t.queued()).toBe(0);
-        expect(t.prompts[1]).toContain("Carry on");
-        expect(t.ran[1].driver).toBe(1);
-        expect(t.notes().filter((n) => n === ANSWERING)).toHaveLength(1);
-        expect(t.app.store.listMessages(t.room.id).slice(-3).map((m) => [m.authorKind, m.text])).toEqual([["human", "Carry on"], ["system", ANSWERING], ["agent", ""]]);
-        await t.end();
-        await Bun.sleep(20);
-        expect(t.turns()).toBe(2);
-        t.say("And the docs");
-        await Bun.sleep(20);
-        expect(t.turns()).toBe(2);
-        expect(t.queued()).toBe(1);
-        // The bar's tap still works after it.
-        await tapGoes(t, ["And the docs"]);
-      } finally {
-        t.tasks([helper("completed")]);
-        await t.done();
-      }
-    });
-
-    test("Stop and answer with nothing held and nothing running: there's nothing to stop, and nothing changes", async () => {
-      const t = await helperAtWork(true);
-      try {
-        await t.stop({ keepWaiting: true });
-        await Bun.sleep(20);
-        expect(t.turns()).toBe(1);
-        expect(t.queued()).toBe(0);
-        expect(t.now().status).toBe("idle");
-      } finally {
-        t.tasks([helper("completed")]);
-        await t.done();
-      }
-    });
-
-    for (const [how, memberId] of [["Stop everything", false], ["this agent's own Stop", true]] as const) {
-      test(`${how}, then another message: the status says what holds it, so the bar is back, and Answer now goes`, async () => {
-        const { t } = await held("one");
-        try {
-          await t.stop(memberId ? { memberId: t.member.id } : {});
-          await Bun.sleep(20);
-          expect(t.queued()).toBe(0);
-          expect(t.now().status).toBe("idle");
-          t.say("two");
-          await Bun.sleep(20);
-          expect(t.turns()).toBe(1);
-          expect(t.queued()).toBe(1);
-          await tapGoes(t, ["one", "two"]);
-        } finally {
-          t.tasks([helper("completed")]);
-          await t.done();
-        }
-      });
-    }
-
-    test("a held message unsent, and written again: the bar is back, and Answer now goes", async () => {
-      const { t, message } = await held("Delete it");
-      try {
-        await t.app.engine.reviseMessage(message.id, null, "Phone");
-        expect(t.queued()).toBe(0);
-        expect(t.now().status).toBe("idle");
-        t.say("Delete it all");
-        await Bun.sleep(20);
-        expect(t.turns()).toBe(1);
-        await tapGoes(t, ["Delete it all"]);
-      } finally {
-        t.tasks([helper("completed")]);
-        await t.done();
-      }
-    });
-
-    test("Try now during a usage limit's wait: it waits like any message, the bar is back, and Answer now goes", async () => {
-      const t = await limited();
-      try {
-        t.app.engine.tryNow(t.room.id);
-        await Bun.sleep(20);
-        expect(t.turns()).toBe(1);
-        expect(t.queued()).toBe(1);
-        await tapGoes(t, ["also add tests"]);
-      } finally {
-        t.tasks([helper("completed")]);
-        await t.done();
-      }
-    });
-
-    test("a message sent during a usage limit's wait: the same", async () => {
-      const t = await limited();
-      try {
-        t.say("and the docs");
-        await Bun.sleep(20);
-        expect(t.turns()).toBe(1);
-        expect(t.queued()).toBe(1);
-        await tapGoes(t, ["and the docs"]);
-      } finally {
-        t.tasks([helper("completed")]);
-        await t.done();
-      }
-    });
-
-    test("what it owes by itself comes next, with no helpers to wait for: the status doesn't say it's finishing any", async () => {
-      const t = offChat(true);
-      try {
-        t.say("build it");
-        await t.until(() => t.turns() === 1);
-        effort(t, "high");
-        t.knobs.owed = "message";
-        await t.end();
-        expect(t.now()).toMatchObject({ status: "idle", held: { change: "settings", helpers: false, owed: "message" } });
-        t.say("and this");
-        await Bun.sleep(20);
-        expect(t.turns()).toBe(1);
-        expect(t.queued()).toBe(1);
-        expect(t.now()).toMatchObject({ status: "queued", statusDetail: null });
-        // Its own reply has been: the setting applies, and the message goes on the new process.
-        t.knobs.owed = null;
-        t.tasks([]);
-        await t.until(() => t.turns() === 2);
-        expect(t.ran[1].driver).toBe(2);
-        await t.end();
-      } finally {
-        await t.done();
-      }
-    });
-
-    test("Answer now under a message during a usage limit's wait is the tap: it goes at once in a one-agent chat too", async () => {
-      const t = await limited();
-      try {
-        const before = t.notes().length;
-        t.app.engine.retry(t.room.id, null, { currentSettings: true });
-        expect(t.turns()).toBe(2);
-        expect(t.queued()).toBe(0);
-        expect(t.prompts[1]).toContain("also add tests");
-        expect(t.ran[1].driver).toBe(1);
-        expect(t.notes().slice(before)).toEqual([ANSWERING]);
-        await t.end();
-        await Bun.sleep(20);
-        expect(t.turns()).toBe(2);
-      } finally {
-        t.tasks([helper("completed")]);
-        await t.done();
-      }
-    });
-
-    test("Try again during a usage limit's wait isn't one: it waits, and the bar offers the tap", async () => {
-      const t = await limited();
-      try {
-        t.app.engine.retry(t.room.id);
-        await Bun.sleep(20);
-        expect(t.turns()).toBe(1);
-        expect(t.queued()).toBe(1);
-        await tapGoes(t, ["also add tests"]);
-      } finally {
-        t.tasks([helper("completed")]);
-        await t.done();
-      }
-    });
-
-    test("an account past its spending limit: Answer now gets the usual refusal with no 'Answering now', the tap is used up, and the next message gets the bar", async () => {
-      const { t, message } = await held("Carry on");
-      const refusal = "Work key reached its $5.00 limit, so this reply didn't start.";
-      try {
-        t.deps.checkBudget = () => refusal;
-        expect(await t.sendNow({ currentSettings: true })).toEqual({ sent: true });
-        // Nothing ran, and nothing says it's answering.
-        expect(t.turns()).toBe(1);
-        expect(t.notes().some((n) => n.startsWith("Answering now"))).toBe(false);
-        expect(t.app.store.listMessages(t.room.id).filter((m) => m.authorKind === "agent").at(-1)).toMatchObject({ text: refusal, status: "error" });
-        expect(t.now()).toMatchObject({ status: "error", statusDetail: refusal });
-        // Still the person's, unread.
-        expect(t.app.store.getLastSeen(t.member.id).seq).toBeLessThan(message.seq);
-        // Raised: the next message waits for a tap of its own, and the bar offers it.
-        t.deps.checkBudget = () => null;
-        t.say("And the docs");
-        await Bun.sleep(20);
-        expect(t.turns()).toBe(1);
-        expect(t.queued()).toBe(1);
-        await tapGoes(t, ["Carry on", "And the docs"]);
-        expect(t.notes().filter((n) => n === ANSWERING)).toHaveLength(1);
-      } finally {
-        t.tasks([helper("completed")]);
-        await t.done();
-      }
-    });
-
-    test("Answer now tapped during a hand-over, and that hand-over ends the reply: it's still the tap", async () => {
-      const t = offChat(true);
-      try {
-        t.say("build it");
-        await t.until(() => t.turns() === 1);
-        t.tasks([helper("running")]);
-        effort(t, "high");
-        t.say("also add tests");
-        t.knobs.steerMs = 150;
-        t.knobs.takes = false;
-        const handOver = t.sendNow();
-        const tap = t.sendNow({ currentSettings: true });
-        // Both are on their way, the second waiting for the first, when the reply ends.
-        await Bun.sleep(10);
-        await t.end();
-        expect(await handOver).toEqual({ sent: false, why: "ended" });
-        expect(await tap).toEqual({ sent: true });
-        await t.until(() => t.turns() === 2);
-        expect(t.prompts[1]).toContain("also add tests");
-        expect(t.ran[1].driver).toBe(1);
-        expect(t.notes().at(-1)).toBe(ANSWERING);
-        await t.end();
-      } finally {
-        t.tasks([helper("completed")]);
-        await t.done();
-      }
-    });
-
-    test("what a new process has to carry on from comes first: Answer now isn't promised around it, and says so", async () => {
-      const t = await helperAtWork(true);
-      try {
-        // Claude Code starts a reply of its own while a change it may not answer around waits: stopped, for a new process to carry on from.
-        const was = t.now().config;
-        t.app.updateMember(t.member.id, { config: { ...was, helperModel: "claude-haiku-4-5" } });
-        expect(t.now().held).toEqual({ change: "other", helpers: true });
-        expect(t.ownReply()).toBe("stop");
-        // Taken back, with a new effort: only what it may answer around waits now, and that carry-on still comes first.
-        t.app.updateMember(t.member.id, { config: { ...was, effort: "high" } });
-        expect(t.now().held).toEqual({ change: "settings", helpers: true });
-        t.say("Carry on");
-        await Bun.sleep(20);
-        expect(await t.sendNow({ currentSettings: true })).toEqual({ sent: false, why: "helpers", held: { change: "settings", helpers: true } });
-        await Bun.sleep(20);
-        expect(t.turns()).toBe(1);
-        expect(t.queued()).toBe(1);
-        expect(t.notes().some((n) => n.startsWith("Answering now"))).toBe(false);
-        // The helper finishes: a new process carries on, and reads the message.
-        t.tasks([helper("completed")]);
-        await t.until(() => t.turns() === 2);
-        expect(t.ran[1].driver).toBe(2);
-        expect(t.prompts[1]).toContain("Carry on");
-        await t.end();
-      } finally {
-        await t.done();
-      }
-    });
-
-    test("through the app's own route: Answer now under a message sends currentSettings and goes; anything else waits like any message", async () => {
-      const { t } = await held("one");
-      try {
-        await t.stop();
-        await Bun.sleep(20);
-        expect(t.queued()).toBe(0);
-        // Try again, and a value that isn't the tap.
-        await t.retry({ currentSettings: "yes" });
-        await Bun.sleep(20);
-        expect(t.turns()).toBe(1);
-        expect(t.queued()).toBe(1);
-        await t.stop();
-        await Bun.sleep(20);
-        await t.retry({});
-        await Bun.sleep(20);
-        expect(t.turns()).toBe(1);
-        expect(t.queued()).toBe(1);
-        await t.stop();
-        await Bun.sleep(20);
-        // Answer now.
-        await t.retry({ currentSettings: true });
-        expect(t.turns()).toBe(2);
-        expect(t.queued()).toBe(0);
-        expect(t.prompts[1]).toContain("one");
-        expect(t.ran[1].driver).toBe(1);
-        expect(t.notes().at(-1)).toBe(ANSWERING);
-        await t.end();
-      } finally {
-        t.tasks([helper("completed")]);
-        await t.done();
-      }
-    });
-  });
-
-  describe("per agent, in a group chat", () => {
-    function group() {
-      const dir = mkdtempSync(join(tmpdir(), "ct-send-now-group-"));
-      dirs.push(dir);
-      const app = new App({ dbPath: ":memory:", config: { port: 0, host: "127.0.0.1", publicUrl: null, workspaceRoot: dir, maxHopsDefault: 5 } });
-      const deps = (app.engine as unknown as { deps: EngineDeps }).deps;
-      type Agent = { ends: ((r: TurnResult) => void)[]; steered: string[]; prompts: string[]; tasks?: DriverContext["onTasks"] };
-      const agents: Record<string, Agent> = { claude: { ends: [], steered: [], prompts: [] }, codex: { ends: [], steered: [], prompts: [] } };
-      deps.createDriver = (ctx) => {
-        const a = agents[ctx.member.handle];
-        a.tasks = ctx.onTasks;
-        return {
-          provider: ctx.member.provider,
-          runTurn: (input) => {
-            a.prompts.push(input.prompt);
-            return new Promise<TurnResult>((res) => a.ends.push(res));
-          },
-          steer: async (text) => (a.steered.push(text), true),
-          interrupt: async () => a.ends.at(-1)?.({ ok: false, error: "stopped" }),
-          dispose: async () => {},
-        } satisfies AgentDriver;
-      };
-      deps.agentEnv = () => ({});
-      deps.resolveBin = () => "";
-      deps.endpointFor = () => null;
-      deps.turnNotice = () => null;
-      app.storage.check = async () => {};
-      app.setHubSettings({ messagesFlow: false });
-      const room: Room = app.chats.createGroup({ members: [{ provider: "claude" }, { provider: "codex" }], cwd: dir });
-      const member = (handle: string) => app.store.listMembers(room.id).find((m) => m.handle === handle)!;
-      const until = async (what: () => unknown, ms = 5000) => {
-        for (const end = Date.now() + ms; Date.now() < end; await Bun.sleep(5)) if (what()) return;
-        throw new Error("timed out waiting");
-      };
-      return {
-        app,
-        room,
-        agents,
-        member,
-        until,
-        say: (text: string) => app.engine.postHumanMessage(room.id, text, "Phone"),
-        end: async (handle: string) => {
-          agents[handle].ends.at(-1)!({ ok: true, text: `${handle} answered.` });
-          await Bun.sleep(10);
-        },
-        notes: () => app.store.listMessages(room.id).filter((m) => m.authorKind === "system").map((m) => m.text),
-        queued: () => app.engine.queuedTurns(room.id).map((t) => app.store.getMember(t.memberId)!.handle),
-        done: async () => {
-          for (const a of Object.values(agents)) for (const e of a.ends) e({ ok: false, error: "stopped" });
-          await app.shutdown();
-        },
-      };
-    }
-    async function claudeHelper(g: ReturnType<typeof group>) {
-      g.say("@claude Install the browser");
-      await g.until(() => g.agents.claude.ends.length === 1);
-      g.agents.claude.tasks?.([helper("running")]);
-      await g.end("claude");
-      g.app.updateMember(g.member("claude").id, { config: { ...g.member("claude").config, effort: "high" } });
-    }
-    const ANSWERING_CLAUDE = "Answering now with the settings @claude started with. Your changes apply once its helpers finish.";
-
-    test("one agent's hold holds only that agent's message, and Answer now names it, in a note its reply never reads", async () => {
-      const g = group();
-      try {
-        await claudeHelper(g);
-        g.say("@claude and this");
-        await Bun.sleep(20);
-        expect(g.agents.claude.ends).toHaveLength(1);
-        expect(g.queued()).toEqual(["claude"]);
-        // The next agent's goes past it (kept with the switch off too).
-        g.say("@codex and that");
-        await g.until(() => g.agents.codex.ends.length === 1);
-        expect(g.queued()).toEqual(["claude"]);
-        await g.end("codex");
-        expect(await g.app.engine.sendNowWhy(g.room.id, g.member("claude").id, { currentSettings: true })).toEqual({ sent: true });
-        await g.until(() => g.agents.claude.ends.length === 2);
-        expect(g.notes().at(-1)).toBe(ANSWERING_CLAUDE);
-        expect(g.agents.claude.prompts[1]).toContain("@claude and this");
-        expect(g.agents.claude.prompts[1]).not.toContain("Answering now");
-        expect(g.app.store.listMessages(g.room.id).slice(-2).map((m) => m.authorKind)).toEqual(["system", "agent"]);
-        await g.end("claude");
-        // Nor on its next turn.
-        g.say("@codex and more");
-        await g.until(() => g.agents.codex.ends.length === 2);
-        await g.end("codex");
-      } finally {
-        g.agents.claude.tasks?.([helper("completed")]);
-        await g.done();
-      }
-    });
-
-    for (const parallel of [false, true]) {
-      test(`Stop and answer with no reply running${parallel ? ", with parallel work" : ""}: the held message starts at once, once, saying so`, async () => {
-        const g = group();
-        try {
-          if (parallel) g.app.updateRoom(g.room.id, { parallel: true });
-          await claudeHelper(g);
-          g.say("@claude and this");
-          await Bun.sleep(20);
-          expect(g.queued()).toEqual(["claude"]);
-          await g.app.engine.stop(g.room.id, undefined, { keepWaiting: true });
-          expect(g.agents.claude.ends).toHaveLength(2);
-          expect(g.queued()).toEqual([]);
-          expect(g.notes().filter((n) => n === ANSWERING_CLAUDE)).toHaveLength(1);
-          expect(g.agents.claude.prompts[1]).toContain("@claude and this");
-          await g.end("claude");
-          await Bun.sleep(20);
-          expect(g.agents.claude.ends).toHaveLength(2);
-        } finally {
-          g.agents.claude.tasks?.([helper("completed")]);
-          await g.done();
-        }
-      });
-    }
-
-    test("Stop and answer waits for another agent's reply it isn't stopping: that agent's own Stop leaves the other's reply running, and the turn goes as that ends", async () => {
-      const g = group();
-      try {
-        await claudeHelper(g);
-        g.say("@codex look at this");
-        await g.until(() => g.agents.codex.ends.length === 1);
-        g.say("@claude and this");
-        await Bun.sleep(10);
-        await g.app.engine.stop(g.room.id, g.member("claude").id, { keepWaiting: true });
-        expect(g.agents.claude.ends).toHaveLength(1);
-        expect(g.queued()).toEqual(["claude"]);
-        await g.end("codex");
-        await g.until(() => g.agents.claude.ends.length === 2);
-        expect(g.notes().at(-1)).toBe(ANSWERING_CLAUDE);
-        await g.end("claude");
-      } finally {
-        g.agents.claude.tasks?.([helper("completed")]);
-        await g.done();
-      }
-    });
-
-    test("Stop everything with no reply running, then another message: the agent's own line says what holds it, with Answer now", async () => {
-      const g = group();
-      try {
-        await claudeHelper(g);
-        g.say("@claude and this");
-        await Bun.sleep(20);
-        await g.app.engine.stop(g.room.id);
-        await Bun.sleep(20);
-        expect(g.queued()).toEqual([]);
-        expect(g.member("claude").status).toBe("idle");
-        g.say("@claude and that");
-        await Bun.sleep(20);
-        expect(g.queued()).toEqual(["claude"]);
-        // Queued, the app only lists it in the turn order, with no line of its own (WorkingPanel GroupStatus).
-        expect(g.member("claude")).toMatchObject({ status: "working", statusDetail: "Finishing helpers before your new settings apply", held: { change: "settings", helpers: true } });
-        expect(await g.app.engine.sendNowWhy(g.room.id, g.member("claude").id, { currentSettings: true })).toEqual({ sent: true });
-        await g.until(() => g.agents.claude.ends.length === 2);
-        expect(g.agents.claude.prompts[1]).toContain("@claude and this");
-        expect(g.agents.claude.prompts[1]).toContain("@claude and that");
-        await g.end("claude");
-      } finally {
-        g.agents.claude.tasks?.([helper("completed")]);
-        await g.done();
-      }
-    });
-
-    test("an Answer now that hasn't started, then its hold ended: the tap went with that hold, and a new one needs its own", async () => {
-      const g = group();
-      try {
-        await claudeHelper(g);
-        const high = g.member("claude").config;
-        const { effort: _, ...was } = high as Record<string, unknown>;
-        g.say("@codex look at this");
-        await g.until(() => g.agents.codex.ends.length === 1);
-        g.say("@claude and this");
-        await Bun.sleep(10);
-        expect(await g.app.engine.sendNowWhy(g.room.id, g.member("claude").id, { currentSettings: true })).toEqual({ sent: true });
-        expect(g.queued()).toEqual(["claude"]);
-        // Taken back, and changed again, with the turn still behind @codex's reply: a new hold, and nobody tapped for it.
-        g.app.updateMember(g.member("claude").id, { config: was });
-        await Bun.sleep(10);
-        expect(g.member("claude").held).toBeUndefined();
-        g.app.updateMember(g.member("claude").id, { config: high });
-        expect(g.member("claude").held).toEqual({ change: "settings", helpers: true });
-        await g.end("codex");
-        await Bun.sleep(20);
-        expect(g.agents.claude.ends).toHaveLength(1);
-        expect(g.queued()).toEqual(["claude"]);
-        expect(g.notes().some((n) => n.startsWith("Answering now"))).toBe(false);
-        expect(await g.app.engine.sendNowWhy(g.room.id, g.member("claude").id, { currentSettings: true })).toEqual({ sent: true });
-        await g.until(() => g.agents.claude.ends.length === 2);
-        expect(g.notes().at(-1)).toBe(ANSWERING_CLAUDE);
-        await g.end("claude");
-      } finally {
-        g.agents.claude.tasks?.([helper("completed")]);
-        await g.done();
-      }
-    });
-
-    test("Answer now under your message goes to whoever it's for", async () => {
-      const g = group();
-      try {
-        await claudeHelper(g);
-        const yours = g.say("@claude and this");
-        await g.app.engine.stop(g.room.id);
-        await Bun.sleep(20);
-        expect(g.app.store.getLastSeen(g.member("claude").id).seq).toBeLessThan(yours.seq);
-        g.app.engine.retry(g.room.id, null, { currentSettings: true });
-        await g.until(() => g.agents.claude.ends.length === 2);
-        expect(g.notes().at(-1)).toBe(ANSWERING_CLAUDE);
-        await g.end("claude");
-      } finally {
-        g.agents.claude.tasks?.([helper("completed")]);
-        await g.done();
-      }
-    });
-
-    test("an Answer now that hasn't started, its turn waiting for another agent's reply: Stop takes it with it, and the next message waits again", async () => {
-      const g = group();
-      try {
-        await claudeHelper(g);
-        g.say("@codex look at this");
-        await g.until(() => g.agents.codex.ends.length === 1);
-        g.say("@claude and this");
-        await Bun.sleep(10);
-        expect(await g.app.engine.sendNowWhy(g.room.id, g.member("claude").id, { currentSettings: true })).toEqual({ sent: true });
-        expect(g.agents.claude.ends).toHaveLength(1);
-        expect(g.queued()).toEqual(["claude"]);
-        await g.app.engine.stop(g.room.id);
-        await Bun.sleep(20);
-        expect(g.queued()).toEqual([]);
-        g.say("@claude and that");
-        await Bun.sleep(20);
-        expect(g.agents.claude.ends).toHaveLength(1);
-        expect(g.queued()).toEqual(["claude"]);
-        expect(g.notes().some((n) => n.startsWith("Answering now"))).toBe(false);
-      } finally {
-        g.agents.claude.tasks?.([helper("completed")]);
-        await g.done();
-      }
-    });
-
-    test("an Answer now that hasn't started, then the switch turned on: overtaken, so the hold's one note is all that's said", async () => {
-      const g = group();
-      const around = "Your new settings apply when @claude's helpers finish. Until then it answers with the settings it started with.";
-      try {
-        await claudeHelper(g);
-        g.say("@codex look at this");
-        await g.until(() => g.agents.codex.ends.length === 1);
-        g.say("@claude and this");
-        await Bun.sleep(10);
-        expect(await g.app.engine.sendNowWhy(g.room.id, g.member("claude").id, { currentSettings: true })).toEqual({ sent: true });
-        g.app.setHubSettings({ messagesFlow: true });
-        await g.end("codex");
-        await g.until(() => g.agents.claude.ends.length === 2);
-        expect(g.notes().filter((n) => n === around)).toHaveLength(1);
-        await g.end("claude");
-        g.say("@claude and that");
-        await g.until(() => g.agents.claude.ends.length === 3);
-        expect(g.notes().filter((n) => n === around)).toHaveLength(1);
-        expect(g.notes().some((n) => n.startsWith("Answering now"))).toBe(false);
-        await g.end("claude");
-      } finally {
-        g.agents.claude.tasks?.([helper("completed")]);
-        await g.done();
-      }
-    });
-
-    test("a Send now's note reads as it did before messages kept flowing: on the agent's next turn, before what came after it", async () => {
-      const g = group();
-      try {
-        await claudeHelper(g);
-        g.say("@claude and this");
-        await Bun.sleep(10);
-        expect(await g.app.engine.sendNowWhy(g.room.id, g.member("claude").id, { currentSettings: true })).toEqual({ sent: true });
-        await g.until(() => g.agents.claude.ends.length === 2);
-        g.say("@claude also that");
-        expect(await g.app.engine.sendNowWhy(g.room.id, g.member("claude").id)).toEqual({ sent: true });
-        expect(g.notes().at(-1)).toBe("Answering now with the settings @claude started with. Your changes apply once its reply and its helpers finish.");
-        await g.end("claude");
-        g.say("@claude and then");
-        await Bun.sleep(10);
-        expect(await g.app.engine.sendNowWhy(g.room.id, g.member("claude").id, { currentSettings: true })).toEqual({ sent: true });
-        await g.until(() => g.agents.claude.ends.length === 3);
-        const next = g.agents.claude.prompts.at(-1)!;
-        expect(next).toContain("@claude and then");
-        // Once: this turn's own note goes in after what it reads.
-        expect(next.split("Answering now")).toHaveLength(2);
-        expect(next.indexOf("Answering now")).toBeLessThan(next.indexOf("@claude and then"));
-        await g.end("claude");
-      } finally {
-        g.agents.claude.tasks?.([helper("completed")]);
-        await g.done();
-      }
-    });
-  });
-});
-
-describe("flipping the switch mid-hold", () => {
-  const off = (t: { app: App }) => t.app.setHubSettings({ messagesFlow: false });
-  const on = (t: { app: App }) => t.app.setHubSettings({ messagesFlow: true });
-  const effort = (t: ReturnType<typeof chat>, to: string) => t.app.updateMember(t.member.id, { config: { ...t.now().config, effort: to } });
-  const arounds = (t: ReturnType<typeof chat>) => t.notes().filter((n) => n === AROUND).length;
-  /** Off, a helper at work, no reply running. */
-  async function helperAtWork(steer?: boolean) {
-    const t = chat(steer);
-    off(t);
-    t.say("Install the browser");
-    await t.until(() => t.turns() === 1);
-    t.tasks([helper("running")]);
-    await t.end();
-    return t;
-  }
-
-  describe("turned on", () => {
-    test("a held message goes now, once, on the process as it is, with the hold's one note; flipping again sends nothing more", async () => {
-      const t = await helperAtWork(true);
-      try {
-        effort(t, "high");
-        t.say("Carry on");
-        await Bun.sleep(20);
-        expect(t.turns()).toBe(1);
-        expect(t.queued()).toBe(1);
-        on(t);
-        await t.until(() => t.turns() === 2);
-        expect(t.queued()).toBe(0);
-        expect(t.prompts[1]).toContain("Carry on");
-        expect(t.ran[1].driver).toBe(1);
-        expect(t.drivers).toEqual({ made: 1, ended: 0 });
-        expect(arounds(t)).toBe(1);
-        expect(t.notes().some((n) => n.startsWith("Answering now"))).toBe(false);
-        expect(t.app.store.listMessages(t.room.id).slice(-3).map((m) => [m.authorKind, m.text])).toEqual([["human", "Carry on"], ["system", AROUND], ["agent", ""]]);
-        // Back and forth: nothing is sent twice.
-        off(t);
-        on(t);
-        await Bun.sleep(20);
-        expect(t.turns()).toBe(2);
-        expect(t.steered).toEqual([]);
-        expect(arounds(t)).toBe(1);
-        await t.end();
-        // From here on it's as if it had always been on: the next goes around with no second note, and the settings still
-        // apply after the helpers.
-        t.say("And now?");
-        expect(t.turns()).toBe(3);
-        expect(arounds(t)).toBe(1);
-        await t.end();
-        t.tasks([helper("completed")]);
-        await t.until(() => t.drivers.ended === 1);
-        expect(t.now().held).toBeUndefined();
-      } finally {
-        await t.done();
-      }
-    });
-
-    test("several messages held together: one turn reads them all, each once", async () => {
-      const t = await helperAtWork(true);
-      try {
-        effort(t, "high");
-        t.say("first");
-        t.say("second");
-        t.say("third");
-        await Bun.sleep(20);
-        expect(t.queued()).toBe(1);
-        on(t);
-        await t.until(() => t.turns() === 2);
-        for (const m of ["first", "second", "third"]) expect(t.prompts[1].split(m)).toHaveLength(2);
-        await t.end();
-        await Bun.sleep(20);
-        expect(t.turns()).toBe(2);
-        expect(arounds(t)).toBe(1);
-      } finally {
-        t.tasks([helper("completed")]);
-        await t.done();
-      }
-    });
-
-    test("a reply running: a message waiting behind it goes into it, once, with the one note", async () => {
-      const t = chat(true);
-      try {
-        off(t);
-        t.say("build it");
-        await t.until(() => t.turns() === 1);
-        t.tasks([helper("running")]);
-        effort(t, "high");
-        t.say("also add tests");
-        await Bun.sleep(20);
-        expect(t.steered).toEqual([]);
-        on(t);
-        await t.until(() => t.steered.length === 1);
-        expect(t.steered).toEqual(["also add tests"]);
-        await t.until(() => t.queued() === 0);
-        expect(arounds(t)).toBe(1);
-        on(t);
-        await Bun.sleep(20);
-        expect(t.steered).toHaveLength(1);
-        await t.end();
-        await Bun.sleep(20);
-        expect(t.turns()).toBe(1);
-      } finally {
-        t.tasks([helper("completed")]);
-        await t.done();
-      }
-    });
-
-    test("an agent with no mid-reply form: it goes when the reply ends, not when the helpers finish", async () => {
-      const t = chat();
-      try {
-        off(t);
-        t.say("build it");
-        await t.until(() => t.turns() === 1);
-        t.tasks([helper("running")]);
-        effort(t, "high");
-        t.say("also add tests");
-        on(t);
-        await Bun.sleep(20);
-        expect(t.turns()).toBe(1);
-        expect(t.queued()).toBe(1);
-        await t.end();
-        await t.until(() => t.turns() === 2);
-        expect(t.ran[1].driver).toBe(1);
-        expect(t.prompts[1]).toContain("also add tests");
-        await t.end();
-      } finally {
-        t.tasks([helper("completed")]);
-        await t.done();
-      }
-    });
-
-    test("a model change's own note was the one: nothing more is said", async () => {
-      const t = await helperAtWork();
-      try {
-        t.app.updateMember(t.member.id, { model: "claude-opus-5-5" });
-        const said = t.notes().at(-1);
-        expect(said).toBe("Model changed from Opus 5 to Opus 5.5. Claude Code answers on Opus 5 until its helpers finish.");
-        t.say("Carry on");
-        await Bun.sleep(20);
-        expect(t.turns()).toBe(1);
-        on(t);
-        await t.until(() => t.turns() === 2);
-        expect(t.notes().at(-1)).toBe(said!);
-        await t.end();
-      } finally {
-        t.tasks([helper("completed")]);
-        await t.done();
-      }
-    });
-
-    for (const [what, change] of [
-      ["an account switch", "account"],
-      ["tighter permissions", "permissions"],
-    ] as const) {
-      test(`${what}: stays held, says so, and nothing is released`, async () => {
-        const t = await helperAtWork(true);
-        try {
-          if (change === "account") {
-            const work = t.app.providers.setEndpointAccount("claude", { label: "Work server", baseUrl: "http://127.0.0.1:9", models: ["work-model"] });
-            t.app.updateMember(t.member.id, { config: { ...t.now().config, account: work.id }, model: "work-model" });
-          } else t.app.updateMember(t.member.id, { permissionMode: "ask" });
-          t.say("Delete the old build folder");
-          await Bun.sleep(20);
-          on(t);
-          await Bun.sleep(20);
-          expect(t.turns()).toBe(1);
-          expect(t.queued()).toBe(1);
-          expect(await t.sendNow({ currentSettings: true })).toEqual({ sent: false, why: "helpers", held: { change, helpers: true } });
-          expect(arounds(t)).toBe(0);
-          t.tasks([helper("completed")]);
-          await t.until(() => t.turns() === 2);
-          expect(t.ran[1].driver).toBe(2);
-          await t.end();
-        } finally {
-          await t.done();
-        }
-      });
-    }
-
-    test("each agent in a group chat goes once, in turn, with its own one note", async () => {
-      const dir = mkdtempSync(join(tmpdir(), "ct-send-now-flip-"));
-      dirs.push(dir);
-      const app = new App({ dbPath: ":memory:", config: { port: 0, host: "127.0.0.1", publicUrl: null, workspaceRoot: dir, maxHopsDefault: 5 } });
-      const deps = (app.engine as unknown as { deps: EngineDeps }).deps;
-      const agents: Record<string, { ends: ((r: TurnResult) => void)[]; tasks?: DriverContext["onTasks"]; prompts: string[] }> = { claude: { ends: [], prompts: [] }, codex: { ends: [], prompts: [] } };
-      deps.createDriver = (ctx) => {
-        const a = agents[ctx.member.handle];
-        a.tasks = ctx.onTasks;
-        return { provider: ctx.member.provider, runTurn: (input) => (a.prompts.push(input.prompt), new Promise<TurnResult>((res) => a.ends.push(res))), interrupt: async () => a.ends.at(-1)?.({ ok: false, error: "stopped" }), dispose: async () => {} } satisfies AgentDriver;
-      };
-      deps.agentEnv = () => ({});
-      deps.resolveBin = () => "";
-      deps.endpointFor = () => null;
-      deps.turnNotice = () => null;
-      app.storage.check = async () => {};
-      off({ app });
-      const room: Room = app.chats.createGroup({ members: [{ provider: "claude" }, { provider: "codex" }], cwd: dir });
-      const member = (h: string) => app.store.listMembers(room.id).find((m) => m.handle === h)!;
-      const say = (text: string) => app.engine.postHumanMessage(room.id, text, "Phone");
-      const until = async (what: () => unknown) => {
-        for (const end = Date.now() + 5000; Date.now() < end; await Bun.sleep(5)) if (what()) return;
-        throw new Error("timed out waiting");
-      };
-      const finish = async (h: string) => {
-        agents[h].ends.at(-1)!({ ok: true, text: `${h} answered.` });
-        await Bun.sleep(10);
-      };
-      const notes = () => app.store.listMessages(room.id).filter((m) => m.authorKind === "system").map((m) => m.text);
-      try {
-        for (const h of ["claude", "codex"]) {
-          say(`@${h} start`);
-          await until(() => agents[h].ends.length === 1);
-          agents[h].tasks?.([{ ...helper("running"), id: `workflow-${h}` }]);
-          await finish(h);
-          app.updateMember(member(h).id, { config: { ...member(h).config, effort: "high" } });
-        }
-        say("@claude one");
-        say("@codex two");
-        await Bun.sleep(20);
-        expect(app.engine.queuedTurns(room.id)).toHaveLength(2);
-        on({ app });
-        await until(() => agents.claude.ends.length === 2);
-        expect(agents.codex.ends).toHaveLength(1);
-        await finish("claude");
-        await until(() => agents.codex.ends.length === 2);
-        expect(agents.claude.prompts[1]).toContain("@claude one");
-        expect(agents.codex.prompts[1]).toContain("@codex two");
-        await finish("codex");
-        await Bun.sleep(20);
-        expect(agents.claude.ends).toHaveLength(2);
-        expect(agents.codex.ends).toHaveLength(2);
-        for (const h of ["claude", "codex"]) expect(notes().filter((n) => n === `Your new settings apply when @${h}'s helpers finish. Until then it answers with the settings it started with.`)).toHaveLength(1);
-      } finally {
-        for (const h of ["claude", "codex"]) agents[h].tasks?.([{ ...helper("completed"), id: `workflow-${h}` }]);
-        for (const a of Object.values(agents)) for (const e of a.ends) e({ ok: false, error: "stopped" });
-        await app.shutdown();
-      }
-    });
-  });
-
-  describe("turned off", () => {
-    test("a message already in the reply stays there: nothing is taken back or sent again, it shows as handed, and the next one waits for a tap", async () => {
-      const t = chat(true);
-      try {
-        t.say("build it");
-        await t.until(() => t.turns() === 1);
-        t.tasks([helper("running")]);
-        effort(t, "high");
-        const first = t.say("in by itself");
-        await t.until(() => t.queued() === 0);
-        expect(t.steered).toEqual(["in by itself"]);
-        off(t);
-        await Bun.sleep(20);
-        expect(t.steered).toEqual(["in by itself"]);
-        expect(t.app.engine.liveTurn(t.app.engine.runningTurns(t.room.id)[0]).unread).toEqual([first.id]);
-        // The next waits behind the reply, with Send now.
-        t.say("after the switch");
-        await Bun.sleep(30);
-        expect(t.steered).toEqual(["in by itself"]);
-        expect(t.queued()).toBe(1);
-        expect(await t.sendNow()).toEqual({ sent: true });
-        expect(t.steered).toEqual(["in by itself", "after the switch"]);
-        await t.end();
-        expect(t.turns()).toBe(1);
-      } finally {
-        t.tasks([helper("completed")]);
-        await t.done();
-      }
-    });
-
-    test("a reply already answering around new settings runs on; the next message waits for the helpers, with Answer now", async () => {
-      const t = chat(true);
-      try {
-        t.say("Install the browser");
-        await t.until(() => t.turns() === 1);
-        t.tasks([helper("running")]);
-        await t.end();
-        effort(t, "high");
-        t.say("Carry on");
-        expect(t.turns()).toBe(2);
-        expect(arounds(t)).toBe(1);
-        off(t);
-        await Bun.sleep(20);
-        // Nothing happened to it.
-        expect(t.app.engine.runningTurns(t.room.id)).toHaveLength(1);
-        expect(t.drivers).toEqual({ made: 1, ended: 0 });
-        await t.end();
-        t.say("And now?");
-        await Bun.sleep(20);
-        expect(t.turns()).toBe(2);
-        expect(t.queued()).toBe(1);
-        expect(await t.sendNow()).toEqual({ sent: false, why: "helpers", held: { change: "settings", helpers: true } });
-        expect(await t.sendNow({ currentSettings: true })).toEqual({ sent: true });
-        await t.until(() => t.turns() === 3);
-        expect(arounds(t)).toBe(1);
-        await t.end();
-      } finally {
-        t.tasks([helper("completed")]);
-        await t.done();
-      }
-    });
-
-    test("what hadn't gone yet falls under it: a message waiting for the reply's end now waits for the helpers too", async () => {
-      const t = chat();
-      try {
-        t.say("build it");
-        await t.until(() => t.turns() === 1);
-        t.tasks([helper("running")]);
-        effort(t, "high");
-        t.say("also add tests");
-        const replying = t.now();
-        off(t);
-        // The reply goes on saying what it's doing.
-        expect(t.now()).toMatchObject({ status: replying.status, statusDetail: replying.statusDetail });
-        await t.end();
-        await Bun.sleep(20);
-        expect(t.turns()).toBe(1);
-        expect(t.queued()).toBe(1);
-        expect(t.now()).toMatchObject({ status: "working", statusDetail: "Finishing helpers before your new settings apply" });
-        t.tasks([helper("completed")]);
-        await t.until(() => t.turns() === 2);
-        expect(t.ran[1].driver).toBe(2);
-        await t.end();
-      } finally {
-        await t.done();
-      }
-    });
-
-    test("a message that was only waiting its turn says what holds it from now on: the bar is there, and nothing starts without its tap", async () => {
-      const dir = mkdtempSync(join(tmpdir(), "ct-send-now-flip-"));
-      dirs.push(dir);
-      const app = new App({ dbPath: ":memory:", config: { port: 0, host: "127.0.0.1", publicUrl: null, workspaceRoot: dir, maxHopsDefault: 5 } });
-      const deps = (app.engine as unknown as { deps: EngineDeps }).deps;
-      const ends: Record<string, ((r: TurnResult) => void)[]> = { claude: [], codex: [] };
-      let tasks: DriverContext["onTasks"];
-      deps.createDriver = (ctx) => {
-        if (ctx.member.handle === "claude") tasks = ctx.onTasks;
-        return {
-          provider: ctx.member.provider,
-          runTurn: () => new Promise<TurnResult>((res) => ends[ctx.member.handle].push(res)),
-          interrupt: async () => ends[ctx.member.handle].at(-1)?.({ ok: false, error: "stopped" }),
-          dispose: async () => {},
-        } satisfies AgentDriver;
-      };
-      deps.agentEnv = () => ({});
-      deps.resolveBin = () => "";
-      deps.endpointFor = () => null;
-      deps.turnNotice = () => null;
-      app.storage.check = async () => {};
-      const room: Room = app.chats.createGroup({ members: [{ provider: "claude" }, { provider: "codex" }], cwd: dir });
-      const claude = () => app.store.listMembers(room.id).find((m) => m.handle === "claude")!;
-      const say = (text: string) => app.engine.postHumanMessage(room.id, text, "Phone");
-      const queued = () => app.engine.queuedTurns(room.id).map((x) => app.store.getMember(x.memberId)!.handle);
-      const until = async (what: () => unknown) => {
-        for (const end = Date.now() + 5000; Date.now() < end; await Bun.sleep(5)) if (what()) return;
-        throw new Error("timed out waiting");
-      };
-      try {
-        say("@claude Install the browser");
-        await until(() => ends.claude.length === 1);
-        tasks?.([helper("running")]);
-        ends.claude.at(-1)!({ ok: true, text: "Installing." });
-        await Bun.sleep(10);
-        app.updateMember(claude().id, { config: { ...claude().config, effort: "high" } });
-        say("@codex look at this");
-        await until(() => ends.codex.length === 1);
-        // @claude's own Stop takes the turn its first message had behind @codex's reply.
-        say("@claude first this");
-        await app.engine.stop(room.id, claude().id);
-        expect(claude().status).toBe("idle");
-        // On: nothing holds this one, it only waits for @codex's reply to end.
-        say("@claude and this");
-        await Bun.sleep(10);
-        expect(queued()).toEqual(["claude"]);
-        expect(claude().status).toBe("queued");
-        app.setHubSettings({ messagesFlow: false });
-        expect(claude()).toMatchObject({ status: "working", statusDetail: "Finishing helpers before your new settings apply", held: { change: "settings", helpers: true } });
-        ends.codex.at(-1)!({ ok: true, text: "Looked." });
-        await Bun.sleep(20);
-        expect(ends.claude).toHaveLength(1);
-        expect(queued()).toEqual(["claude"]);
-        expect(await app.engine.sendNowWhy(room.id, claude().id, { currentSettings: true })).toEqual({ sent: true });
-        await until(() => ends.claude.length === 2);
-      } finally {
-        tasks?.([helper("completed")]);
-        for (const e of [...ends.claude, ...ends.codex]) e({ ok: false, error: "stopped" });
-        await app.shutdown();
-      }
-    });
-
-    test("a reply still starting, asked again in a moment: the next look finds the switch off, and nothing goes in", async () => {
-      const t = chat(false);
-      try {
-        t.say("build it");
-        await t.until(() => t.turns() === 1);
-        t.tasks([helper("running")]);
-        t.say("also add tests");
-        await Bun.sleep(20);
-        off(t);
-        t.knobs.takes = true;
-        await Bun.sleep(700); // past FLOW_RETRY_MS
-        expect(t.steered).toEqual([]);
-        expect(t.queued()).toBe(1);
-        await t.end();
-        await t.until(() => t.turns() === 2);
-        await t.end();
-      } finally {
-        t.tasks([helper("completed")]);
-        await t.done();
-      }
-    });
-
-    test("it stays off: another setting saved, or the same value saved again, releases nothing and tells no device", async () => {
-      const t = await helperAtWork(true);
-      try {
-        effort(t, "high");
-        t.say("Carry on");
-        await Bun.sleep(20);
-        const heard: HubInfo[] = [];
-        const stop = t.app.bus.on((e: ServerEvent) => {
-          if (e.t === "hub") heard.push(e.hub);
-        });
-        t.app.setHubSettings({ pauseNearLimit: true });
-        off(t);
-        await Bun.sleep(20);
-        stop();
-        expect(heard).toEqual([]);
-        expect(t.turns()).toBe(1);
-        expect(t.queued()).toBe(1);
-      } finally {
-        t.tasks([helper("completed")]);
-        await t.done();
-      }
-    });
-  });
-});
-
-describe("the switch itself: Settings → Keep going while helpers work", () => {
-  /** New settings waiting for its helpers and a message sent: whether that started a turn. */
+describe("the switch is gone (Settings → Keep going while helpers work, until 0.8)", () => {
+  /** New settings waiting for its helpers and a message sent: whether that started a turn at once, on the process as it is. */
   async function goesAround(t: ReturnType<typeof chat>) {
     t.say("Install the browser");
     await t.until(() => t.turns() === 1);
@@ -3541,11 +2100,10 @@ describe("the switch itself: Settings → Keep going while helpers work", () => 
     return t.turns() === 2;
   }
 
-  test("on by default: what a fresh hub says, and what it does", async () => {
+  test("what a hub says of itself: messages go in by themselves, always", async () => {
     const t = chat(true);
     try {
-      expect(t.app.hubSettings().messagesFlow).toBe(true);
-      expect(t.app.hubInfo().messagesFlow).toBe(true);
+      expect(t.app.hubInfo()).toMatchObject({ messagesFlow: true, flowsIn: true });
       expect(await goesAround(t)).toBe(true);
       await t.end();
     } finally {
@@ -3555,17 +2113,23 @@ describe("the switch itself: Settings → Keep going while helpers work", () => 
   });
 
   for (const [what, saved] of [
-    ["settings saved before the switch, with no value for it", '{"machineName":"Mac mini","pauseNearLimit":true}'],
-    ["a value that isn't false", '{"machineName":"Mac mini","pauseNearLimit":true,"messagesFlow":null}'],
+    ["settings saved before there was a switch", '{"machineName":"Mac mini","pauseNearLimit":true}'],
+    ["the switch saved off, before it went", '{"machineName":"Mac mini","pauseNearLimit":true,"messagesFlow":false}'],
     ["settings that can't be read", "{not json"],
   ] as const) {
-    test(`${what}: it's on, and it does what it says`, async () => {
+    test(`${what}: nothing is held for it, with helpers at work or without`, async () => {
       const t = chat(true);
       try {
         t.app.store.kvSet("hubSettings", saved);
-        expect(t.app.hubInfo().messagesFlow).toBe(true);
+        expect(t.app.hubInfo()).toMatchObject({ messagesFlow: true, flowsIn: true });
+        // New settings waiting for the helpers: the message starts at once on the process as it is.
         expect(await goesAround(t)).toBe(true);
+        // A reply running: the next one goes into it.
+        t.say("And the docs");
+        await t.until(() => t.queued() === 0);
+        expect(t.steered).toEqual(["And the docs"]);
         await t.end();
+        expect(t.turns()).toBe(2);
       } finally {
         t.tasks([helper("completed")]);
         await t.done();
@@ -3573,41 +2137,25 @@ describe("the switch itself: Settings → Keep going while helpers work", () => 
     });
   }
 
-  test("settings saved before the switch: saving something else keeps what they had, and tells no device anything", async () => {
+  test("an older app turns the switch off: nothing is held, no device is told anything, and the other settings keep their values", async () => {
     const t = chat(true);
     try {
-      t.app.store.kvSet("hubSettings", '{"machineName":"Mac mini","pauseNearLimit":true}');
+      t.app.setHubSettings({ machineName: "Mac mini", carryOnAfterLimit: false });
       const heard: ServerEvent[] = [];
       const stop = t.app.bus.on((e: ServerEvent) => {
         if (e.t === "hub") heard.push(e);
       });
-      t.app.setHubSettings({ carryOnAfterLimit: false });
+      expect(t.app.setHubSettings({ messagesFlow: false })).toMatchObject({ machineName: "Mac mini", carryOnAfterLimit: false });
+      t.app.setHubSettings({ pauseNearLimit: true });
       stop();
       expect(heard).toEqual([]);
-      expect(t.app.hubSettings()).toMatchObject({ machineName: "Mac mini", pauseNearLimit: true, carryOnAfterLimit: false, messagesFlow: true });
-    } finally {
-      await t.done();
-    }
-  });
-
-  test("saved: off stays off, what else is saved keeps its value, and only false turns it off", async () => {
-    const t = chat(true);
-    try {
-      t.app.setHubSettings({ machineName: "Mac mini", carryOnAfterLimit: false });
-      expect(t.app.setHubSettings({ messagesFlow: false })).toMatchObject({ machineName: "Mac mini", carryOnAfterLimit: false, messagesFlow: false });
-      expect(JSON.parse(t.app.store.kvGet("hubSettings")!).messagesFlow).toBe(false);
-      expect(t.app.hubInfo().messagesFlow).toBe(false);
-      // Saving something else leaves it off.
-      t.app.setHubSettings({ pauseNearLimit: true });
-      expect(t.app.hubSettings().messagesFlow).toBe(false);
-      expect(t.app.hubInfo().messagesFlow).toBe(false);
-      expect(await goesAround(t)).toBe(false);
-      // Absent from the request: unchanged. Anything but false: on, as an absent value is.
-      t.app.setHubSettings({});
-      expect(t.app.hubSettings().messagesFlow).toBe(false);
-      t.app.setHubSettings({ messagesFlow: null as unknown as boolean });
-      expect(t.app.hubSettings().messagesFlow).toBe(true);
-      await t.until(() => t.turns() === 2);
+      expect(t.app.hubSettings()).toMatchObject({ machineName: "Mac mini", carryOnAfterLimit: false, pauseNearLimit: true });
+      expect(t.app.hubInfo()).toMatchObject({ messagesFlow: true, flowsIn: true });
+      expect(await goesAround(t)).toBe(true);
+      await t.end();
+      // No reply running and nothing waiting: a message sent then starts its turn as ever.
+      t.say("And now?");
+      expect(t.turns()).toBe(3);
       await t.end();
     } finally {
       t.tasks([helper("completed")]);
@@ -3615,14 +2163,12 @@ describe("the switch itself: Settings → Keep going while helpers work", () => 
     }
   });
 
-  test("every open device hears a change at once, on its own socket, with no reload; a device that connects later is told as it does", async () => {
+  test("through the server: a device is told so as it connects, and an older app's switch gets an answer and changes nothing", async () => {
     const t = chat(true);
     const server = startServer(t.app);
     const sockets: WebSocket[] = [];
     try {
-      const pair = async (name: string) => (await t.app.auth.pair((await t.app.auth.createPairingCode()).code, name, "Web"))!;
-      const phone = await pair("Phone");
-      const laptop = await pair("Laptop");
+      const phone = (await t.app.auth.pair((await t.app.auth.createPairingCode()).code, "Phone", "Web"))!;
       const base = `127.0.0.1:${server.port}`;
       /** A device's connection, and everything it hears about the hub. */
       const open = async (token: string) => {
@@ -3636,29 +2182,16 @@ describe("the switch itself: Settings → Keep going while helpers work", () => 
         await t.until(() => heard.length === 1);
         return heard;
       };
-      const put = (token: string, body: unknown) => fetch(`http://${base}/api/settings/hub`, { method: "PUT", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify(body) });
-      const state = async (token: string) => ((await (await fetch(`http://${base}/api/state`, { headers: { authorization: `Bearer ${token}` } })).json()) as { hub: HubInfo }).hub;
+      const put = (body: unknown) => fetch(`http://${base}/api/settings/hub`, { method: "PUT", headers: { authorization: `Bearer ${phone.token}`, "content-type": "application/json" }, body: JSON.stringify(body) });
+      const state = async () => ((await (await fetch(`http://${base}/api/state`, { headers: { authorization: `Bearer ${phone.token}` } })).json()) as { hub: HubInfo }).hub;
       const onPhone = await open(phone.token);
-      const onLaptop = await open(laptop.token);
-      expect(onPhone[0].hub.messagesFlow).toBe(true);
-      // The switch on the phone: its own answer, and both devices' sockets.
-      expect(((await (await put(phone.token, { messagesFlow: false })).json()) as { messagesFlow: boolean }).messagesFlow).toBe(false);
-      await t.until(() => onPhone.length === 2 && onLaptop.length === 2);
-      expect(onPhone[1]).toMatchObject({ t: "hub", hub: { messagesFlow: false, name: t.app.machineName() } });
-      expect(onLaptop[1]).toMatchObject({ t: "hub", hub: { messagesFlow: false } });
-      // What a device asks for itself says the same.
-      expect((await state(laptop.token)).messagesFlow).toBe(false);
-      const late = await open(laptop.token);
-      expect(late[0]).toMatchObject({ t: "hello", hub: { messagesFlow: false } });
-      // Saving what's there already, or something else: nothing to hear.
-      await put(phone.token, { messagesFlow: false, pauseNearLimit: true });
+      expect(onPhone[0]).toMatchObject({ t: "hello", hub: { messagesFlow: true, flowsIn: true } });
+      expect((await put({ messagesFlow: false })).ok).toBe(true);
       await Bun.sleep(30);
-      expect(onLaptop).toHaveLength(2);
-      // And back, from the other device.
-      expect((await put(laptop.token, { messagesFlow: true })).ok).toBe(true);
-      await t.until(() => onPhone.length === 3 && onLaptop.length === 3 && late.length === 2);
-      expect(onPhone[2].hub.messagesFlow).toBe(true);
-      expect((await state(phone.token)).messagesFlow).toBe(true);
+      expect(onPhone).toHaveLength(1);
+      expect(await state()).toMatchObject({ messagesFlow: true, flowsIn: true });
+      const late = await open(phone.token);
+      expect(late[0]).toMatchObject({ t: "hello", hub: { messagesFlow: true, flowsIn: true } });
     } finally {
       for (const ws of sockets) ws.close();
       server.stop(true);

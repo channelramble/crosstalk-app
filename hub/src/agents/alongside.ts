@@ -7,9 +7,8 @@ import type { Provider, Room } from "@crosstalk/shared";
 // it: telling OpenCode or Crosstalk's own agent to start work in the background would be wrong, not only costly (they
 // can't, see below). hub/test/alongside.test.ts holds each agent to its text and each text to its size.
 //
-// It's the same with Settings → "Keep going while helpers work" off, on purpose: nothing here says how fast a message gets
-// to the agent. The person can still write while helpers run, and what reaches the agent is still answered now. Off only
-// means a message waits longer, or for a tap, before it does.
+// Nothing here says how fast a message gets to the agent, on purpose: the hub sees to that (a message goes into a running
+// reply by itself, Engine.flowIn), and what reaches the agent is answered now.
 
 /** The part about not holding the chat up. Only for an agent whose helpers and jobs can outlive its reply. */
 const KEEP_ANSWERING =
@@ -32,14 +31,14 @@ export const ALONGSIDE = {
   // The same, except that Codex starts no turn by itself: a helper's answer waits in its app-server for the chat's next
   // turn (codex.ts leftAnswers). Told to background long work it could end its reply there and do nothing more until the
   // person's next message ("run the suite, fix what fails, then commit" would stop at "started"; another chat's agent would
-  // get that as its answer). A message reaches a running Codex turn anyway (steer, by itself or with a tap), so it stays in
+  // get that as its answer). A message reaches a running Codex turn anyway (steer), so it stays in
   // its reply. And "I'll report back when it's done" would be untrue, so the person has to know when it does leave something
   // running.
   codex: `${KEEP_ANSWERING} ${HELPERS} Nothing wakes you when a helper or job ends: you get its result at the user's next message. So keep a multi-step request moving in your reply unless they asked to go on later, and say so when you end a reply with one running.`,
-  // Nothing of OpenCode's goes to the background (the plugin takes that off every call: opencode.ts chatPlugin) and it has
-  // no Send now, so messages wait for its reply. What's left: subagents can run at once, inside the reply.
+  // Nothing of OpenCode's goes to the background (the plugin takes that off every call: opencode.ts chatPlugin) and it
+  // takes no message mid-reply, so messages wait for its reply. What's left: subagents can run at once, inside the reply.
   opencode: "Subagents run inside your reply. Give each its own files, so they can't collide with each other, you or the user, who may be working here too.",
-  // No helpers, no jobs it hears back from, and no turn of its own. What's left: Send now reaches it between steps (builtin.ts).
+  // No helpers, no jobs it hears back from, and no turn of its own. What's left: a message reaches it between steps (builtin.ts).
   builtin: "A message from the user can reach you between steps, and may be new work: answer it now, then carry on with what's left. Their newest instruction wins.",
   // The hub gives these no standing instructions at all (a group chat's briefing aside), and starts them on no background
   // work it knows of; only an older room can still hold one (Chats.provider).

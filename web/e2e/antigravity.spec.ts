@@ -1,4 +1,4 @@
-import { test, expect, noHorizontalOverflow } from "./fixtures";
+import { test, expect, noHorizontalOverflow, settingsTab } from "./fixtures";
 
 test("the current chooser and settings offer supported chat agents even with legacy providers installed", async ({ page }) => {
   await page.route("**/api/state", async (route) => {
@@ -10,6 +10,7 @@ test("the current chooser and settings offer supported chat agents even with leg
   await expect(page.locator(".agent-picker .agent-card-name")).toHaveText(["Claude Code", "Codex"]);
   await noHorizontalOverflow(page);
   await page.getByRole("button", { name: "Settings", exact: true }).last().click();
+  await settingsTab(page, "Accounts");
   await expect(page.getByRole("region", { name: "Claude Code accounts", exact: true })).toBeVisible();
   await expect(page.getByRole("region", { name: "Codex accounts", exact: true })).toBeVisible();
   await expect(page.getByRole("region", { name: "Antigravity CLI accounts", exact: true })).toHaveCount(0);

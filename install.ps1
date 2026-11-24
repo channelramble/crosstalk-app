@@ -7,7 +7,8 @@
 #      after which you run the same line again)
 #   2. turns on systemd in Ubuntu, so the hub runs as a background service there
 #   3. installs Tailscale inside Ubuntu if it's missing (you sign in once, with the link it prints)
-#   4. installs the hub inside Ubuntu with the Mac/Linux one-liner (install.sh), which prints your pairing code
+#   4. installs the hub inside Ubuntu with the Mac/Linux one-liner (install.sh): a first install ends with a pairing
+#      code and its QR code for your phone, an update just says it's done
 #   5. keeps Ubuntu running while you're logged in to Windows (a scheduled task), so the hub stays reachable
 #   6. offers to stop the PC from sleeping while it's plugged in
 #
@@ -34,7 +35,7 @@ function Wsl([string[]]$WslArgs) {
 }
 function HasDistro { (Wsl @("--list", "--quiet")) -split "`r?`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ -eq $Distro } }
 
-Write-Host "Crosstalk: setting up the hub on this PC" -ForegroundColor White
+Write-Host "Crosstalk: setting it up on this PC" -ForegroundColor White
 
 $build = [Environment]::OSVersion.Version.Build
 if ($build -lt 19041) { Fail "WSL2 needs Windows 10 version 2004 or newer, or Windows 11. Update Windows, then run this again." }
@@ -91,19 +92,21 @@ if ($up -notmatch "up") {
 }
 Say "Tailscale ✓  (in the Tailscale admin console, turn on HTTPS certificates under DNS if you haven't)"
 
-# 4. The hub itself, with the Mac/Linux installer
-Step "4/6  The Crosstalk hub"
+# 4. The hub itself, with the Mac/Linux installer. It pairs a phone at the end of a first install only (it tells one by
+# the hub's database being there), so what this script says at its own end depends on the same thing.
+Step "4/6  Crosstalk"
+$first = (Wsl @("-d", $Distro, "--", "sh", "-c", "test -f ~/.crosstalk/crosstalk.db && echo installed || echo first")) -match "first"
 & wsl.exe -d $Distro -- bash -lc "curl -fsSL https://raw.githubusercontent.com/$Repo/main/install.sh | bash"
-if ($LASTEXITCODE -ne 0) { Fail "The hub didn't install inside Ubuntu (see above). Fix what it says, then run this again." }
+if ($LASTEXITCODE -ne 0) { Fail "Crosstalk didn't install inside Ubuntu (see above). Fix what it says, then run this again." }
 
 # 5. Keep Ubuntu running while you're logged in: WSL stops a distribution nothing is using, and the hub with it.
-Step "5/6  Keeping the hub running"
+Step "5/6  Keeping Crosstalk running"
 $action = New-ScheduledTaskAction -Execute "conhost.exe" -Argument "--headless wsl.exe -d $Distro --exec sleep infinity"
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
-Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings -Description "Keeps WSL running so the Crosstalk hub stays reachable." -Force | Out-Null
+Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings -Description "Keeps WSL running so Crosstalk stays reachable." -Force | Out-Null
 Start-ScheduledTask -TaskName $TaskName
-Say "Starts when you log in to Windows ✓  (the hub runs while you're logged in; turn on automatic sign-in for an unattended PC)"
+Say "Starts when you log in to Windows ✓  (Crosstalk runs while you're logged in; turn on automatic sign-in for an unattended PC)"
 
 # 6. Sleep
 Step "6/6  Sleep"
@@ -117,5 +120,13 @@ if ($env:CROSSTALK_KEEP_AWAKE -ne "no") {
 }
 
 Write-Host ""
-Write-Host "Done. Open the address printed above on your phone and enter the pairing code." -ForegroundColor Green
-Say "Lost the code? Run:  wsl -d $Distro -- ~/.local/bin/crosstalk-hub pair"
+if ($first) {
+  # What step 4 printed: with Tailscale connected, "Pair your phone", a pairing code and a QR code that carries it;
+  # without, a code for this PC's own browser and a line marked ! saying what the phone still needs.
+  Write-Host "Done. Now pair your phone with what step 4 printed above: scan the QR code with the phone's camera, or open the address under it on the phone and type the pairing code." -ForegroundColor Green
+  Say "No QR code there? Then your phone can't reach this PC yet: step 4 says why on a line marked !. Do what it says and run the same line again, then make a new code:  wsl -d $Distro -- ~/.local/bin/crosstalk-hub pair   and open the address step 4 prints on the phone."
+  Say "Lost the code? Run:  wsl -d $Distro -- ~/.local/bin/crosstalk-hub pair"
+} else {
+  Write-Host "Done. Crosstalk is up to date, and the devices you paired keep working." -ForegroundColor Green
+  Say "To pair another device, run:  wsl -d $Distro -- ~/.local/bin/crosstalk-hub pair   and open the address from step 4 on it."
+}

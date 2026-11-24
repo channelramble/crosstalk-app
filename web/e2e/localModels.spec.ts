@@ -60,7 +60,7 @@ async function hub(page: Page, servers: LocalModelServer[] | number = [OLLAMA(),
   };
   await page.route(home("/api/local-models"), (route) => {
     state.looks.push(new URL(route.request().url()).search);
-    if (typeof state.servers === "number") return route.fulfill({ status: state.servers, json: { error: state.servers === 404 ? "not found" : "The hub couldn't look" } });
+    if (typeof state.servers === "number") return route.fulfill({ status: state.servers, json: { error: state.servers === 404 ? "not found" : "Crosstalk couldn't look" } });
     return route.fulfill({ json: { servers: state.servers, scannedAt: Date.now() } });
   });
   await page.route(home("/api/local-models/switch"), async (route) => {
@@ -121,7 +121,7 @@ test("shows what's running with the memory it uses, each model's state, and why 
   await expect(ollama.locator(".mono")).toHaveText("127.0.0.1:11434");
   await expect(ollama.locator(".local-memory")).toContainText("Memory in use");
   await expect(ollama.locator(".local-memory-value")).toHaveText("19.4 GB");
-  await expect(ollama.getByRole("button", { name: "Add to AI services", exact: true })).toBeVisible();
+  await expect(ollama.getByRole("button", { name: "Add to Accounts", exact: true })).toBeVisible();
   // The model in memory comes first, with what it holds and when the server frees it.
   await expect(ollama.locator(".local-model-name")).toHaveText(["qwen3-coder:30b", "gemma3:12b", "llama3.2:3b"]);
   await expect(flip(ollama, "qwen3-coder:30b")).toBeChecked();
@@ -132,8 +132,8 @@ test("shows what's running with the memory it uses, each model's state, and why 
 
   // LM Studio is switched in its own app: its models show their state, the switches are off limits, and it says why once.
   const studio = card(page, LM_CARD);
-  await expect(studio.getByText("In AI services", { exact: true })).toBeVisible();
-  await expect(studio.getByRole("button", { name: "Add to AI services" })).toHaveCount(0);
+  await expect(studio.getByText("In Accounts", { exact: true })).toBeVisible();
+  await expect(studio.getByRole("button", { name: "Add to Accounts" })).toHaveCount(0);
   await expect(flip(studio, "qwen2.5-coder-7b")).toBeChecked();
   await expect(flip(studio, "qwen2.5-coder-7b")).toBeDisabled();
   await expect(flip(studio, "gemma-3-12b")).toBeDisabled();
@@ -143,7 +143,7 @@ test("shows what's running with the memory it uses, each model's state, and why 
   await shot(page, "01-running.png");
 
   // The "?" on memory.
-  await tip(ollama.getByRole("button", { name: "What does memory mean?", exact: true }), /^What the server is holding in .+'s memory right now\.$/);
+  await tip(ollama.getByRole("button", { name: "What does memory mean?", exact: true }), /^What it's holding in .+'s memory right now\.$/);
   await noHorizontalOverflow(page);
   await shot(page, "02-memory-help.png", ollama);
 });
@@ -239,8 +239,8 @@ test("nothing running says what to do, Rescan looks again, and a look that fails
 
   h.state.servers = 500;
   await rescan(page).click();
-  const alert = page.getByRole("alert").filter({ hasText: "Couldn't look for local models" });
-  await expect(alert).toContainText("Couldn't look for local models: The hub couldn't look. Press Rescan to try again.");
+  const alert = page.getByRole("alert").filter({ hasText: "Couldn't look for models on" });
+  await expect(alert).toContainText(/Couldn't look for models on .+: Crosstalk couldn't look\. Press Rescan to try again\./);
   await noHorizontalOverflow(page);
   await shot(page, "08-look-failed.png");
   h.state.servers = [];
@@ -249,12 +249,12 @@ test("nothing running says what to do, Rescan looks again, and a look that fails
   await expect(page.getByText("Nothing is running here.")).toBeVisible();
 });
 
-test("Add to AI services opens the same sheet with the server's address and name filled in and checked", async ({ page }) => {
+test("Add to Accounts opens the same sheet with the server's address and name filled in and checked", async ({ page }) => {
   const h = await hub(page);
   await settings(page);
-  await card(page, OLLAMA_CARD).getByRole("button", { name: "Add to AI services", exact: true }).click();
-  const dialog = page.getByRole("dialog", { name: "Add an AI service", exact: true });
-  await expect(dialog.getByLabel("Server address", { exact: true })).toHaveValue("http://127.0.0.1:11434");
+  await card(page, OLLAMA_CARD).getByRole("button", { name: "Add to Accounts", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Add a model on this machine", exact: true });
+  await expect(dialog.getByLabel("Address", { exact: true })).toHaveValue("http://127.0.0.1:11434");
   await expect(dialog.getByLabel("Name", { exact: true })).toHaveValue("Ollama (port 11434)");
   await expect(dialog.getByText("2 models found", { exact: true })).toBeVisible();
   expect(h.state.tests).toEqual([{ baseUrl: "http://127.0.0.1:11434" }]);
@@ -264,7 +264,7 @@ test("Add to AI services opens the same sheet with the server's address and name
   await expect(dialog).toHaveCount(0);
 });
 
-test("the image editor and the model pool have a line each that jumps to their section and says whether they're on", async ({ page }) => {
+test("the image editor has a line that jumps to its section and says whether it's on; without it, nothing is there", async ({ page }) => {
   await hub(page);
   // The image editor is set up on this machine and on (the test hub has none of its own).
   await page.route(home("/api/image-editor"), (route) => (route.request().method() === "GET" ? route.fulfill({ json: { installed: true, state: "ready", detail: null, failed: null, url: null, memoryMB: 2236, busy: false } }) : route.fallback()));
@@ -273,16 +273,18 @@ test("the image editor and the model pool have a line each that jumps to their s
   const editor = also.getByRole("button", { name: /^Go to Image editor/ });
   await expect(editor).toHaveAttribute("aria-label", "Go to Image editor: On · 2.2 GB of memory");
   await expect(editor).toContainText("On · 2.2 GB of memory");
-  // The model pool of the test hub is off.
-  const pool = also.getByRole("button", { name: /^Go to Model pool/ });
-  await expect(pool).toHaveAttribute("aria-label", "Go to Model pool: Off");
+  await expect(also.getByRole("button")).toHaveCount(1);
   await noHorizontalOverflow(page);
-  await shot(page, "10-image-editor-and-pool.png", also);
+  await shot(page, "10-image-editor-line.png", also);
   await editor.click();
   await expect(page.locator("#image-editor")).toBeInViewport();
-  await also.scrollIntoViewIfNeeded();
-  await pool.click();
-  await expect(page.locator("#model-pool")).toBeInViewport();
+});
+
+test("a machine without the image editor has no \"Also on this machine\"", async ({ page }) => {
+  await hub(page);
+  await settings(page);
+  await expect(page.getByRole("heading", { name: "Local models", exact: true }).first()).toBeVisible();
+  await expect(page.getByRole("region", { name: "Also on this machine", exact: true })).toHaveCount(0);
 });
 
 test("a model that is loading finishes by itself, and a server that doesn't say what it has loaded has no switch", async ({ page }) => {
@@ -315,12 +317,12 @@ test("an older hub has no Local models: nothing is shown", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   // The tab it would be in opens all the same; the section itself just isn't there.
   await page.goto("/#/settings/local-models");
-  await expect(page.getByRole("tab", { name: "Models", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("region", { name: "Your own models", exact: true })).toBeVisible();
   await expect.poll(() => h.state.looks.length).toBeGreaterThanOrEqual(1);
   await expect(page.getByRole("heading", { name: "Local models", exact: true })).toHaveCount(0);
   await expect(page.locator(".local-bar")).toHaveCount(0);
   await settingsTab(page, "Agents");
-  await expect(page.getByRole("heading", { name: "AI services", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Add an account", exact: true })).toBeVisible();
 });
 
 for (const width of [320, 390]) {
@@ -329,6 +331,8 @@ for (const width of [320, 390]) {
     long.label = "Ollama with a rather long server name (port 11434)";
     long.models[0].id = "hf.co/unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF:UD-Q4_K_XL-with-a-long-tag";
     const h = await hub(page, [long, LM_STUDIO(), MLX]);
+    // With the image editor set up here, so its line under "Also on this machine" is measured too.
+    await page.route(home("/api/image-editor"), (route) => (route.request().method() === "GET" ? route.fulfill({ json: { installed: true, state: "ready", detail: null, failed: null, url: null, memoryMB: 2236, busy: false } }) : route.fallback()));
     await settings(page, width);
     const first = page.locator(".local-server").first();
     h.state.fail = { status: 502, error: "Ollama couldn't load hf.co/unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF:UD-Q4_K_XL-with-a-long-tag: model requires more system memory (28.4 GiB) than is available (9.1 GiB)." };

@@ -1,0 +1,699 @@
+/*
+ * Themes (Settings → This device → Theme; theme.ts works the colours out, themeDevice.ts puts them on the page).
+ *
+ * A theme is CSS variables on the page's root, so almost nothing is needed here: styles.css already draws everything
+ * from them. What is here is what a variable can't say, each rule keyed on an attribute only a theme sets, so the look
+ * the app comes with (OLED black: no attribute at all) never reaches any of it:
+ * - [data-scheme="light"]: a light page (form controls, scroll bars, softer dims).
+ * - [data-backdrop]: a gradient or a picture behind the app, as ONE fixed layer, and the bars and sheets over it.
+ * - [data-glass]: see-through panels with a light edge. Blur (backdrop-filter) is on a handful of layers only: the top
+ *   bar, the chat list, the message box, sheets, notices. Never on a card or a message: a long chat scrolls as it always
+ *   did, and cards get their look from a tint and an edge.
+ * - [data-round]: squarer or rounder corners.  - [data-bold]: stronger lines (Sunlight).
+ * Nothing moves here: the picture's fade is in motion.css with every other transition.
+ */
+
+/* ------------------------------------------------------------ light */
+
+:root[data-scheme="light"] {
+  color-scheme: light;
+}
+:root[data-scheme="light"] .drawer-scrim {
+  background: rgba(20, 20, 35, 0.32);
+}
+:root[data-scheme="light"] .chat-sidebar.drawer {
+  box-shadow: 8px 0 40px rgba(20, 20, 35, 0.18);
+}
+:root[data-scheme="light"] .overlay::before {
+  background: rgba(20, 20, 35, 0.26);
+}
+/* A white knob on a pale track needs its own edge. */
+:root[data-scheme="light"] .switch span::after {
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3), 0 0 0 0.5px rgba(0, 0, 0, 0.12);
+}
+:root[data-scheme="light"] .effort-range::-webkit-slider-thumb {
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35), 0 0 0 0.5px rgba(0, 0, 0, 0.14);
+}
+/* Small menus lift off a light page with a shadow, where a dark one uses a lighter fill. */
+:root[data-scheme="light"]:not([data-backdrop]) :is(.ctl-pop, .mention-pop, .csb-new-menu, .dialog, .toast) {
+  background: var(--bg);
+}
+
+/* ------------------------------------------------------------ stronger lines (Sunlight) */
+
+:root[data-bold] :is(.card, .list-group, .btn:not(.primary):not(.ghost), .input, .select, .textarea, .composer, .choice-card, .q-option, .agent-card) {
+  border-width: 1px;
+  border-color: var(--sep-strong);
+}
+:root[data-bold] .topbar {
+  border-bottom-width: 1px;
+  border-bottom-color: var(--sep-strong);
+}
+
+/* ------------------------------------------------------------ a backdrop: one fixed layer behind the app */
+
+/*
+ * The gradient or the picture, with the veil that keeps words readable over it. Fixed, behind everything, and as tall
+ * as the screen has been (themeDevice.ts), so it's painted once: scrolling a chat, or the keyboard coming up, repaints
+ * none of it. A blurred picture hangs past the edges, which a blur would otherwise fade out.
+ */
+:root[data-backdrop] body::before {
+  content: "";
+  position: fixed;
+  z-index: -1;
+  top: calc(var(--backdrop-blur, 0px) * -2);
+  left: calc(var(--backdrop-blur, 0px) * -2);
+  right: calc(var(--backdrop-blur, 0px) * -2);
+  height: calc(var(--backdrop-height, 100vh) / var(--zoom, 1) + var(--backdrop-blur, 0px) * 4);
+  background-image: var(--backdrop);
+  background-size: 100% 100%, var(--backdrop-size, cover);
+  background-position: center, var(--backdrop-pos, center);
+  background-repeat: no-repeat;
+  pointer-events: none;
+}
+:root[data-backdrop="picture"] body::before {
+  filter: blur(var(--backdrop-blur, 0px));
+}
+/* Until the picture is read from the device, the page is its average colour (--bg); then it fades in (motion.css). */
+:root[data-backdrop="picture"]:not([data-picture]) body::before {
+  opacity: 0;
+}
+
+/* The page lets the backdrop through. */
+:root[data-backdrop] .main,
+:root[data-backdrop] .app.mobile::before,
+:root[data-backdrop] .screen-live:fullscreen {
+  background: transparent;
+}
+:root[data-backdrop] .composer-wrap {
+  background: none;
+}
+:root[data-backdrop] .chat-sidebar {
+  --csb-bg: transparent;
+}
+
+/* The bars: a tint of the page, blurring what's behind when the theme asks. */
+:root[data-backdrop] .app .topbar,
+:root[data-backdrop] .app.mobile .topbar,
+:root[data-backdrop] .settings-tabs,
+:root[data-backdrop] .chat-sidebar {
+  background: var(--glass-shine), var(--chrome);
+  -webkit-backdrop-filter: var(--glass-filter);
+  backdrop-filter: var(--glass-filter);
+}
+:root[data-backdrop] .app .topbar.tinted,
+:root[data-backdrop] .app.mobile .topbar.tinted {
+  background:
+    radial-gradient(70% 220% at 0% 0%, color-mix(in srgb, var(--c) 22%, transparent), transparent 70%),
+    var(--chrome);
+}
+:root[data-backdrop] .composer {
+  background: var(--glass-shine), var(--chrome);
+  -webkit-backdrop-filter: var(--glass-filter);
+  backdrop-filter: var(--glass-filter);
+  box-shadow: var(--glass-edge), var(--glass-shadow);
+}
+
+/* What opens over the page: sheets, notices, the chats drawer, the jump button. */
+:root[data-backdrop] .dialog,
+:root[data-backdrop] .toast,
+:root[data-backdrop] .chat-sidebar.drawer {
+  background: var(--glass-shine), var(--pop);
+  -webkit-backdrop-filter: var(--glass-filter);
+  backdrop-filter: var(--glass-filter);
+}
+:root[data-backdrop] .dialog,
+:root[data-backdrop] .toast {
+  box-shadow: var(--shadow-pop), var(--glass-edge);
+}
+/* The sheet's own colour under it while it settles (motion.css), in the sheet's colour here too. */
+:root[data-backdrop] .app.mobile .dialog {
+  box-shadow: var(--shadow-pop), var(--glass-edge), 0 40px 0 var(--pop);
+}
+/* Small menus open inside a bar, where a blur can't reach what's behind the bar: nearly solid instead. */
+:root[data-backdrop] :is(.ctl-pop, .mention-pop, .csb-new-menu, .jump-latest-btn) {
+  background: var(--menu);
+}
+@media (hover: hover) {
+  :root[data-backdrop] .jump-latest-btn:hover {
+    background: var(--menu);
+    border-color: var(--edge-hover);
+  }
+}
+/* A chat row's ⋯ comes up over the row's end: it covers the words under it. */
+:root[data-backdrop] .csb-row .csb-row-more {
+  background: var(--menu);
+}
+/* The open chat's row is tinted in its agent's colour: its second line takes the stronger of the two quiet colours. */
+:root[data-theme] .csb-chat.active .csb-chat-sub:not(.is-needs):not(.is-error) {
+  color: var(--text-2);
+}
+/* Over a backdrop that tint is over colour already: the second line, and the name of the screen you're on in the list's
+   own bar (its icon keeps the accent), take the words' colour. */
+:root[data-theme][data-backdrop] .csb-chat.active .csb-chat-sub:not(.is-needs):not(.is-error) {
+  color: var(--text);
+}
+:root[data-backdrop] .csb-tab.active {
+  color: var(--text);
+}
+:root[data-backdrop] .csb-tab.active .csb-tab-icon {
+  color: var(--accent);
+}
+/* What a field says while it's empty: the theme's own small-words colour, readable on its panels. */
+:root[data-theme] ::placeholder {
+  color: var(--text-3);
+  opacity: 1;
+}
+/* Tinted with the accent over whatever is behind, rather than over the page colour. */
+:root[data-backdrop] :is(.send-now, .read-now) {
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface));
+}
+/* A code block is one see-through panel, not two on top of each other (its box, then its lines). */
+:root[data-glass] .md .codeblock pre {
+  background: none;
+}
+/* A cut-off answer fades by a mask: there's no solid colour under it to fade into. */
+:root[data-glass] .ask-answer.cut::after {
+  display: none;
+}
+:root[data-glass] .ask-answer.cut {
+  -webkit-mask-image: linear-gradient(to bottom, #000 60%, transparent);
+  mask-image: linear-gradient(to bottom, #000 60%, transparent);
+}
+
+/* ------------------------------------------------------------ glass: a light edge and a soft shine on panels */
+
+:root[data-glass] .card:not(.tinted) {
+  background-image: var(--glass-shine), linear-gradient(180deg, var(--card-top), var(--card-bottom));
+}
+:root[data-glass] .list-group {
+  background-image: var(--glass-shine);
+}
+:root[data-glass] :is(.card:not(.tinted), .list-group) {
+  box-shadow: var(--glass-edge), var(--glass-shadow);
+}
+:root[data-glass] :is(.card.tinted, .agent-card, .agent-hero, .choice-card, .q-option, .msg.human .bubble, .btn:not(.ghost):not(.primary), .input, .select, .textarea) {
+  box-shadow: var(--glass-edge);
+}
+
+/* ------------------------------------------------------------ corners */
+
+:root[data-round] :is(.btn, .input, .select, .textarea, .choice-card, .q-option, .csb-new, .seg, .stepper .btn) {
+  border-radius: var(--r-ctl);
+}
+:root[data-round] .seg button {
+  border-radius: max(0px, calc(var(--r-ctl) - 2px));
+}
+:root[data-round] .btn.small {
+  border-radius: calc(var(--r-ctl) * 0.72);
+}
+:root[data-round] .btn.large {
+  border-radius: calc(var(--r-ctl) * 1.4);
+}
+:root[data-round] .dialog {
+  border-radius: var(--r-pop);
+}
+:root[data-round] .app.mobile .dialog {
+  border-radius: var(--r-pop) var(--r-pop) 0 0;
+}
+:root[data-round] :is(.composer, .agent-hero) {
+  border-radius: var(--r-box);
+}
+:root[data-round] .msg.human .bubble {
+  border-radius: var(--r-bubble) var(--r-bubble) min(6px, var(--r-bubble)) var(--r-bubble);
+}
+:root[data-round] :is(.toast, .ctl-pop, .mention-pop, .csb-new-menu, .activity, .send-now, .read-now, .md .codeblock, .term-box) {
+  border-radius: var(--r-chip);
+}
+/* The send button and the thumb of a switch stay round: they're circles, not corners. */
+
+/* ------------------------------------------------------------ Settings → This device → Theme */
+
+.theme-card > .help {
+  margin-bottom: 4px;
+}
+.theme-group-name {
+  margin: 14px 0 6px;
+  font-size: 11.5px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+.theme-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(92px, 1fr));
+  gap: 8px;
+}
+/* With room to spare (a computer, an unfolded phone), the previews are bigger rather than more to a row. */
+@media (min-width: 700px) {
+  .theme-grid {
+    grid-template-columns: repeat(auto-fill, minmax(128px, 1fr));
+    gap: 10px;
+  }
+}
+.theme-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: 5px 5px 7px;
+  border: 1.5px solid transparent;
+  border-radius: 14px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+@media (hover: hover) {
+  .theme-tile:hover {
+    background: color-mix(in srgb, var(--text) 6%, transparent);
+  }
+}
+.theme-tile.on {
+  border-color: var(--accent);
+  background: var(--accent-2);
+}
+.theme-tile:focus-visible,
+.theme-start:focus-visible,
+.theme-swatch:focus-visible,
+.theme-swatch:has(input:focus-visible),
+.theme-choose:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.theme-tile {
+  position: relative;
+}
+/* The one in use: a tick in the corner of its preview, in the app's accent. */
+.theme-tile-check {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--accent-text);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+}
+.theme-tile-name {
+  min-width: 0;
+  padding: 0 3px;
+  font-size: 13px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A look drawn small: every colour here is the previewed theme's own (set on .tp), not the one in use. */
+.tp {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  aspect-ratio: 4 / 3;
+  padding-bottom: 5px;
+  overflow: hidden;
+  border-radius: 10px;
+  border: 0.5px solid var(--sep-strong);
+  background: var(--pv-page);
+  background-size: 100% 100%, var(--pv-size);
+  background-position: center, var(--pv-pos);
+  background-repeat: no-repeat;
+}
+.tp i {
+  display: block;
+  flex: none;
+}
+.tp-line {
+  width: 38%;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--text);
+}
+.tp-bar {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+  height: 14px;
+  padding: 0 6px;
+  background: var(--pv-bar);
+  border-bottom: 0.5px solid var(--sep);
+}
+.tp-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 2.5px;
+  background: var(--accent);
+}
+.tp-reply {
+  display: grid;
+  grid-template-columns: 34% 22%;
+  gap: 3px 4px;
+  padding: 1px 7px 0;
+}
+.tp-reply i {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--text);
+}
+.tp-reply i:first-child {
+  grid-column: 1 / 3;
+  width: 100%;
+}
+.tp-reply i:nth-child(2) {
+  background: var(--text-2);
+}
+/* A link in the reply: the accent. */
+.tp-reply i:last-child {
+  background: var(--accent);
+}
+.tp-you {
+  align-self: flex-end;
+  flex: none;
+  width: 42%;
+  height: 11px;
+  margin-right: 7px;
+  border-radius: 6px 6px 2px 6px;
+  background: var(--human-bubble);
+  box-shadow: var(--pv-edge);
+}
+.tp-box {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex: none;
+  margin: auto 7px 0;
+  padding: 3px 4px 3px 6px;
+  border-radius: 7px;
+  border: 0.5px solid var(--sep-strong);
+  background: var(--surface);
+  box-shadow: var(--pv-edge);
+}
+.tp-box .tp-line {
+  width: 34%;
+  background: var(--text-3);
+}
+.tp-send {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--text);
+}
+
+.theme-from {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 0.5px solid var(--sep);
+}
+.theme-from > .help {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+.theme-reset {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+
+/* Your own theme. */
+.theme-part {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 0.5px solid var(--sep);
+}
+.theme-part > h3 {
+  margin: 0 0 10px;
+  font-size: 11.5px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+.theme-part > .help {
+  margin-top: 8px;
+}
+.theme-field {
+  margin-top: 12px;
+}
+.theme-label,
+.theme-range-head label {
+  font-size: 13.5px;
+  font-weight: 600;
+}
+.theme-label {
+  margin-bottom: 4px;
+}
+.theme-seg {
+  display: flex;
+  flex-wrap: nowrap;
+  width: 100%;
+}
+.theme-seg button {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 36px;
+  padding: 5px 6px;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+@media (pointer: coarse) {
+  .theme-seg button {
+    min-height: 44px;
+  }
+}
+
+/* Colours: 30 px dots in 44 px taps. */
+.theme-swatches {
+  display: flex;
+  flex-wrap: wrap;
+  margin: 0 -7px;
+}
+.theme-swatch {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: var(--text-2);
+  cursor: pointer;
+}
+.theme-swatch i {
+  display: block;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 1px solid var(--sep-strong);
+}
+.theme-swatch.on i {
+  box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent);
+}
+/* Any colour: the browser's own picker, under a dot that shows every hue until one is picked. */
+.theme-swatch.any i {
+  background: conic-gradient(#ff5a5f, #ffd60a, #3ec468, #38bdf8, #6a5cff, #ff6fb5, #ff5a5f);
+}
+.theme-swatch.stop i {
+  border-radius: 10px;
+}
+.theme-swatch input[type="color"] {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.theme-swatch.add {
+  width: 30px;
+  height: 30px;
+  margin: 7px;
+  border: 1px dashed var(--sep-strong);
+  border-radius: 10px;
+}
+/* The dashed square is 30 px; its tap is the 44 px around it. */
+.theme-swatch.add::before {
+  content: "";
+  position: absolute;
+  inset: -7px;
+}
+
+.theme-starts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0 -4px;
+}
+.theme-start {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  width: 68px;
+  min-height: 44px;
+  padding: 4px;
+  border: 1.5px solid transparent;
+  border-radius: 10px;
+  background: none;
+  color: var(--text-2);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.theme-start i {
+  display: block;
+  width: 100%;
+  height: 32px;
+  border-radius: 7px;
+  border: 0.5px solid var(--sep-strong);
+}
+.theme-start.on {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+/* Sliders: a 44 px tap, a 6 px track filled to where it's at (--fill, 0 to 1), a white thumb. */
+.theme-range {
+  margin-top: 12px;
+}
+.theme-range-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+.theme-range-head output {
+  font-size: 12.5px;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+.theme-range input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  display: block;
+  width: 100%;
+  height: 44px;
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+}
+.theme-range input[type="range"]:focus {
+  outline: none;
+}
+.theme-range input[type="range"]::-webkit-slider-runnable-track {
+  height: 6px;
+  border-radius: 3px;
+  background: linear-gradient(90deg, var(--accent) calc(var(--fill, 0) * 100%), var(--surface-3) calc(var(--fill, 0) * 100%));
+}
+.theme-range input[type="range"]::-moz-range-track {
+  height: 6px;
+  border-radius: 3px;
+  background: linear-gradient(90deg, var(--accent) calc(var(--fill, 0) * 100%), var(--surface-3) calc(var(--fill, 0) * 100%));
+}
+.theme-range input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 26px;
+  height: 26px;
+  margin-top: -10px;
+  border: 0;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 5px rgba(0, 0, 0, 0.45), 0 0 0 0.5px rgba(0, 0, 0, 0.14);
+}
+.theme-range input[type="range"]::-moz-range-thumb {
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 5px rgba(0, 0, 0, 0.45), 0 0 0 0.5px rgba(0, 0, 0, 0.14);
+}
+.theme-range input[type="range"]:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 3px var(--bg), 0 0 0 5px var(--accent);
+}
+.theme-range input[type="range"]:focus-visible::-moz-range-thumb {
+  box-shadow: 0 0 0 3px var(--bg), 0 0 0 5px var(--accent);
+}
+.theme-range-ends {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: -8px;
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+
+/* The picture. */
+.theme-choose {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  margin-top: 12px;
+  padding: 20px 14px;
+  border: 1px dashed var(--sep-strong);
+  border-radius: 14px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  text-align: center;
+  cursor: pointer;
+}
+.theme-choose .help {
+  font-weight: 400;
+}
+.theme-picture {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 12px;
+}
+.theme-picture-thumb {
+  flex: none;
+  width: 96px;
+  height: 72px;
+  border-radius: 10px;
+  border: 0.5px solid var(--sep-strong);
+  background-size: cover;
+  background-position: center;
+}
+.theme-picture-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 0;
+}
+.theme-editor-foot {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 0.5px solid var(--sep);
+}
+@media (pointer: coarse) {
+  .theme-from .btn,
+  .theme-reset .btn,
+  .theme-editor-foot .btn,
+  .theme-picture-actions .btn {
+    min-height: 44px;
+  }
+}

@@ -1,4 +1,4 @@
-import { limitWaitWords, type Activity, type Member } from "@crosstalk/shared";
+import { MEMORY_WAIT, limitWaitWords, type Activity, type Member } from "@crosstalk/shared";
 
 /** A chat's status line: what the agent is doing in a few plain words, and a second line when there's more to say. */
 export interface StatusWords {
@@ -54,12 +54,12 @@ function retryWords(detail: string, provider: Member["provider"]): string | null
 /** Details the agents send that mean more than their state, in plain words (older hubs' wording too). */
 const PLAIN: [RegExp, string][] = [
   [/^Starting (Claude Code|Codex)$/, "Starting $1"],
-  [/^Compacting( the conversation)?$/i, "Compacting the conversation"],
+  [/^Compacting( the conversation)?$/i, "Summarizing the earlier messages"],
   [/^Finishing helpers before (applying settings|your new settings apply)$/, "Finishing helpers before your new settings apply"],
   // What waits, when it can't be answered around (an account switch, tighter permissions: shared heldWords).
   [/^Finishing helpers before (your (?:account switch|permission change) applies|your changes apply)$/, "Finishing helpers before $1"],
   [/^Reading your message$/, "Reading your message"],
-  [/^Copying the conversation$/, "Copying the conversation"],
+  [/^Copying the conversation$/, "Copying the chat"],
 ];
 
 /** How long, roughly, in minutes: "6 min". */
@@ -78,7 +78,8 @@ export function statusWords(member: Pick<Member, "status" | "statusDetail" | "pr
   // Out of messages until its limit resets: said from the wait itself, so the time is this device's own clock and not
   // the hub's (the hub's sentence stands in for an older hub). Nothing to do, so it isn't the attention style.
   if (member.status === "waiting") return { text: member.wait ? limitWaitWords(member.wait, now) : detail || "Waiting for its usage limit to reset", note: null, attention: false };
-  if (member.status === "queued") return { text: "Starting…", note: null, attention: false };
+  // Held back because the machine is nearly out of memory (the hub's memory guard): it says so rather than "Starting…".
+  if (member.status === "queued") return { text: detail === MEMORY_WAIT ? MEMORY_WAIT : "Starting…", note: null, attention: false };
   const retry = detail ? retryWords(detail, member.provider) : null;
   if (retry) return { text: retry, note: null, attention: true };
   for (const [re, words] of PLAIN) if (re.test(detail)) return { text: detail.replace(re, words), note: null, attention: false };

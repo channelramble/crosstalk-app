@@ -2,8 +2,9 @@ import type { Page, WebSocketRoute } from "@playwright/test";
 import type { SetupChecklist, SetupItem } from "@crosstalk/shared";
 import { test, expect, noHorizontalOverflow } from "./fixtures";
 
-// Settings → Set up with an AI agent (views/AgentSetupSection.tsx). The hub's checklist is played here (the test hub
-// runs on a real Mac, whose setup mustn't matter), and Add for me's terminal too: nothing runs on the machine.
+// Settings → Machines → Advanced → Set up with an AI agent (views/AgentSetupSection.tsx). The hub's checklist is
+// played here (the test hub runs on a real Mac, whose setup mustn't matter), and Add for me's terminal too: nothing
+// runs on the machine. The commands and the prompt are behind "Do it by hand"; first comes one button.
 
 const BIN = "/Users/me/.local/bin/crosstalk-hub";
 const CLAUDE = `claude mcp add --scope user crosstalk-setup -- ${BIN} setup-mcp`;
@@ -78,13 +79,25 @@ async function catchCopies(page: Page) {
 }
 const copies = (page: Page) => page.evaluate(() => (window as unknown as { copied: string[] }).copied);
 
+/** Opens "Do it by hand": the commands, Add for me and the prompt are inside it. */
+async function byHand(page: Page) {
+  const fold = page.locator(".agent-setup details.as-byhand");
+  if ((await fold.getAttribute("open")) === null) await fold.locator("summary").click();
+  await expect(fold.getByText("Then tell it", { exact: true })).toBeVisible();
+}
+
 test("Settings starts with what's left to set up, and copies each agent's command and the prompt exactly", async ({ page }) => {
   await catchCopies(page);
   await hub(page, { get: () => LEFT });
-  await page.goto("/#/settings");
+  await page.goto("/#/settings/agent-setup");
   const section = page.locator(".agent-setup");
   await expect(page.getByRole("heading", { name: "Set up with an AI agent" })).toBeVisible();
   await expect(section.getByRole("status")).toHaveText("3 of 6 done · 2 need you · 1 to do");
+  // No command is on screen until it's asked for: one button first, the commands behind "Do it by hand".
+  await expect(section.getByRole("button", { name: "Let Claude Code finish setup", exact: true })).toBeVisible();
+  await expect(section.locator("details.as-byhand")).not.toHaveAttribute("open", "");
+  await expect(section.getByText(CLAUDE, { exact: true })).toBeHidden();
+  await byHand(page);
   await expect(section).toContainText(CLAUDE);
   await expect(section).toContainText(CODEX);
   await expect(section).toContainText(PROMPT);
@@ -107,7 +120,7 @@ test("Settings starts with what's left to set up, and copies each agent's comman
 test("a row opens to its fix: the command to copy, Go there for a Settings section, a web page to open", async ({ page }) => {
   await catchCopies(page);
   await hub(page, { get: () => LEFT });
-  await page.goto("/#/settings");
+  await page.goto("/#/settings/agent-setup");
   const section = page.locator(".agent-setup");
   // A row's button (its Copy button, once open, names the item too).
   const row = (title: string) => section.locator(".as-row-btn", { hasText: title });
@@ -131,14 +144,14 @@ test("a row opens to its fix: the command to copy, Go there for a Settings secti
   // Go there takes you to the section, in its own tab (Devices): last, as the checklist isn't in that one.
   await devices.click();
   await section.getByRole("button", { name: "Go there" }).click();
-  await expect(page.getByRole("tab", { name: "Devices", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("region", { name: "This device", exact: true })).toBeVisible();
   await expect(page.locator("#devices")).toBeInViewport();
 });
 
 test("Check again asks the hub (and the agents) again", async ({ page }) => {
   let now = LEFT;
   const seen = await hub(page, { get: () => now, recheck: () => (now = ALL_DONE) });
-  await page.goto("/#/settings");
+  await page.goto("/#/settings/agent-setup");
   const section = page.locator(".agent-setup");
   await expect(section.getByRole("status")).toHaveText("3 of 6 done · 2 need you · 1 to do");
   await section.getByRole("button", { name: "Check again" }).click();
@@ -148,7 +161,7 @@ test("Check again asks the hub (and the agents) again", async ({ page }) => {
 
 test("with everything needed done it's one line, and the list opens when asked", async ({ page }) => {
   await hub(page, { get: () => ALL_DONE });
-  await page.goto("/#/settings");
+  await page.goto("/#/settings/agent-setup");
   const section = page.locator(".agent-setup");
   await expect(section.getByRole("status")).toContainText("Everything needed is set up on");
   await expect(section).not.toContainText(CLAUDE);
@@ -160,7 +173,7 @@ test("with everything needed done it's one line, and the list opens when asked",
 
 test("an older hub says to update it; a check that failed says why, with Try again", async ({ page }) => {
   await hub(page, { get: () => ({ status: 404, error: "not found" }) });
-  await page.goto("/#/settings");
+  await page.goto("/#/settings/agent-setup");
   await expect(page.locator(".agent-setup")).toContainText("Update Crosstalk on");
   await expect(page.locator(".agent-setup")).toContainText("to see what's left to set up there.");
   await page.unrouteAll();
@@ -186,7 +199,7 @@ test("an older hub's message goes by itself once that hub is back, updated", asy
       if (JSON.parse(String(data)).t === "ping") ws.send(JSON.stringify({ t: "pong" }));
     });
   });
-  await page.goto("/#/settings");
+  await page.goto("/#/settings/agent-setup");
   const section = page.locator(".agent-setup");
   await expect(section).toContainText("Update Crosstalk on");
   await expect.poll(() => page.evaluate(async (path) => (await import(path)).useStore.getState().status, "/src/store.ts")).toBe("open");
@@ -203,8 +216,9 @@ test("an older hub's message goes by itself once that hub is back, updated", asy
 test("Add for me runs the agent's own command in a terminal on the machine, for installed agents only", async ({ page }) => {
   const seen = await hub(page, { get: () => LEFT });
   page.on("dialog", (d) => void d.accept());
-  await page.goto("/#/settings");
+  await page.goto("/#/settings/agent-setup");
   const section = page.locator(".agent-setup");
+  await byHand(page);
   // Codex isn't installed there: only Claude Code has the button.
   await expect(section.getByRole("button", { name: "Add for me" })).toHaveCount(1);
   await section.getByRole("button", { name: "Add for me" }).click();
@@ -225,8 +239,9 @@ test("an agent that already had the setup tools reads as done, with the prompt t
   let end = { exitCode: 1, output: "MCP server crosstalk-setup already exists in user config\r\n" };
   await hub(page, { get: () => LEFT, pty: () => end });
   page.on("dialog", (d) => void d.accept());
-  await page.goto("/#/settings");
+  await page.goto("/#/settings/agent-setup");
   const section = page.locator(".agent-setup");
+  await byHand(page);
   await section.getByRole("button", { name: "Add for me" }).click();
   const dialog = page.getByRole("dialog", { name: "Adding setup tools to Claude Code" });
   // What it refused over is a name in its config, which is all it compared: that is what the dialog says.
@@ -268,9 +283,46 @@ test("nothing is wider than the screen at 320 or 390 px, however long the comman
   await hub(page, { get: () => wide });
   for (const width of [320, 390]) {
     await page.setViewportSize({ width, height: 800 });
-    await page.goto("/#/settings");
+    await page.goto("/#/settings/agent-setup");
+    await byHand(page);
     await expect(page.locator(".agent-setup")).toContainText(long);
     await page.locator(".agent-setup .as-row-btn", { hasText: "HTTPS address" }).click();
     await noHorizontalOverflow(page);
   }
+});
+
+test("Let Claude Code finish setup adds the setup tools and starts a chat with the prompt; a command that fails says so", async ({ page }) => {
+  let end: { exitCode: number | null; output: string } = { exitCode: 1, output: "Error: EACCES: permission denied\r\n" };
+  const seen = await hub(page, { get: () => LEFT, pty: () => end });
+  const made: { body: Record<string, unknown>; first?: string }[] = [];
+  await page.route("**/api/chats", async (r) => {
+    if (r.request().method() !== "POST") return r.fallback();
+    made.push({ body: r.request().postDataJSON() as Record<string, unknown> });
+    await r.fulfill({ json: { id: "room_setup", name: "Finish setting up", chat: { provider: "claude" }, createdAt: Date.now(), updatedAt: Date.now() } });
+  });
+  await page.route("**/api/rooms/room_setup/messages", async (r) => {
+    if (r.request().method() !== "POST") return r.fallback();
+    made[made.length - 1].first = (r.request().postDataJSON() as { text: string }).text;
+    await r.fulfill({ json: { id: "m1" } });
+  });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/#/settings/agent-setup");
+  const section = page.locator(".agent-setup");
+  const finish = section.getByRole("button", { name: "Let Claude Code finish setup", exact: true });
+  expect((await finish.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+  await noHorizontalOverflow(page);
+  // The agent's own command failed: said in words, with the way on, and no chat is started.
+  await finish.click();
+  await expect(section.getByRole("alert")).toContainText("Claude Code couldn't add the setup tools");
+  await expect(section.getByRole("alert")).toContainText("Do it by hand");
+  expect(made).toEqual([]);
+  // It works (already there counts too): a chat with Claude Code starts on the prompt.
+  end = { exitCode: 0, output: "Added stdio MCP server crosstalk-setup\r\n" };
+  await finish.click();
+  await expect.poll(() => made.length).toBe(1);
+  expect(made[0].body).toMatchObject({ provider: "claude", account: "default" });
+  await expect.poll(() => made[0].first).toBe(`${PROMPT} If you don't have those tools, run ${BIN} setup --json instead, and read http://127.0.0.1:7420/setup.md.`);
+  expect(seen.filter((x) => x === "connect claude").length).toBe(2);
+  // And the chat opens.
+  await expect(page).toHaveURL(/#\/room\/room_setup$/);
 });

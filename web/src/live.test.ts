@@ -31,9 +31,10 @@ function setup(timing: ConstructorParameters<typeof Live>[3] = { heartbeatMs: 20
   const statuses: string[] = [];
   const events: unknown[] = [];
   const resumed: number[] = [];
-  const live = new Live({ baseUrl: "", token: "test", deviceName: "test" }, (e) => events.push(e), (s) => statuses.push(s), timing, (away) => resumed.push(away));
+  const woke: number[] = [];
+  const live = new Live({ baseUrl: "", token: "test", deviceName: "test" }, (e) => events.push(e), (s) => statuses.push(s), timing, (away) => resumed.push(away), (away) => woke.push(away));
   lives.push(live);
-  return { live, statuses, events, resumed, socket: Socket.instances[0] };
+  return { live, statuses, events, resumed, woke, socket: Socket.instances[0] };
 }
 /** The page goes to the background (another app, the phone locked) and, `ms` later, comes back. */
 async function away(ms: number) {
@@ -132,6 +133,25 @@ test("a pong on wake changes nothing", async () => {
   await away(5);
   socket.message({ t: "pong" });
   expect(resumed).toHaveLength(2);
+});
+
+test("back from the background, the app hears how long it was away at once: before the socket has answered, or been found dead", async () => {
+  const { socket, resumed, woke } = setup({ heartbeatMs: 10_000, timeoutMs: 5_000, wakeMs: 30, connectMs: 5_000 });
+  socket.open();
+  await away(25);
+  // No pong yet, so nothing says whether the socket lived: the app is told all the same.
+  expect(woke).toHaveLength(1);
+  expect(woke[0]).toBeGreaterThanOrEqual(20);
+  expect(resumed).toEqual([]);
+  socket.message({ t: "pong" });
+  expect(resumed).toHaveLength(1);
+  // A socket that died while away: told too, before the new one is up.
+  socket.close();
+  await away(10);
+  expect(woke).toHaveLength(2);
+  // The network coming back while the page is in front isn't coming back from anywhere.
+  window.dispatchEvent(new Event("online"));
+  expect(woke).toHaveLength(2);
 });
 
 test("reconnectNow skips the backoff", async () => {

@@ -367,7 +367,6 @@ export async function offlineChecklist(reason: Offline, self: string[], asker: A
     mac: undefined,
     machines: null,
     machineVersions: {},
-    pool: null,
   });
 }
 
@@ -390,7 +389,7 @@ export async function checklistNow(self: string[], asker: Asker = "cli", fresh =
 // ---- words ----
 
 const MARK: Record<SetupState, string> = { done: "✓", missing: "!", user: "•", unknown: "?" };
-const GROUP: Record<SetupGroup, string> = { hub: "Crosstalk", network: "Network", devices: "Devices", agents: "Agents", services: "AI services", mac: "This Mac", machines: "Machines", pool: "Model pool" };
+const GROUP: Record<SetupGroup, string> = { hub: "Crosstalk", network: "Network", devices: "Devices", agents: "Agents", services: "AI services", mac: "This Mac", machines: "Machines" };
 
 /** "9 of 11 done · 1 to do · 1 needs you". */
 export function summaryLine(c: SetupChecklist): string {

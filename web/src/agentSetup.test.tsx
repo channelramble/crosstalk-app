@@ -43,7 +43,7 @@ const SAMPLE = list([
   item("service", "done"),
   item("version", "missing"),
   item("https", "unknown"),
-  item("devices", "user", { title: "Paired devices", fix: { text: "Make a code.", command: `${BIN} pair 15`, screen: "Settings → Devices → Pair a new device", target: "devices" } }),
+  item("devices", "user", { title: "Paired devices", fix: { text: "Make a code.", command: `${BIN} pair 15`, screen: "Settings → This device → Paired devices → Pair a new device", target: "devices" } }),
   item("agent.claude", "done", { group: "agents", title: "Claude Code" }),
   item("agent.codex", "missing", { group: "agents", title: "Codex", optional: true }),
   item("mac.autologin", "user", { group: "mac", title: "Starts again after a restart", fix: { text: "Turn on automatic login.", command: "/usr/bin/sudo /usr/sbin/sysadminctl -autologin set -userName me -password -", password: true, target: "this-mac" } }),

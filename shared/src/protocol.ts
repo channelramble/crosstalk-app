@@ -1,6 +1,8 @@
 // Types shared by the hub and every client. The hub is the source of truth;
 // clients mirror its state from REST snapshots plus WebSocket events.
 
+import { settingsPath, settingsSection } from "./settingsPages";
+
 export type Provider = "claude" | "codex" | "muse" | "gemini" | "antigravity" | "builtin" | "opencode" | "mock";
 
 export const PROVIDERS: Provider[] = ["claude", "codex", "muse", "antigravity", "gemini", "builtin", "opencode", "mock"];
@@ -126,7 +128,7 @@ export interface Upload {
 export interface Room {
   id: string;
   name: string;
-  cwd: string; // working directory on the hub machine
+  cwd: string; // working directory on the machine
   mode: RoomMode;
   leadMemberId: string | null;
   maxHops: number; // agent-to-agent hand-offs allowed per human message
@@ -185,7 +187,7 @@ export const isServiceOnlyAgent = (p: unknown): p is ServiceOnlyAgent => (SERVIC
  */
 export const NO_REWIND_AGENTS = ["opencode"] as const;
 export const isNoRewindAgent = (p: unknown): boolean => (NO_REWIND_AGENTS as readonly unknown[]).includes(p);
-/** One-agent chats' agents that read a message sent with "Send now" at their next step, and can't be made to sooner. */
+/** One-agent chats' agents that read a message that went into their reply at their next step, and can't be made to sooner. */
 export const NO_READ_NOW_AGENTS = ["builtin"] as const;
 export const isNoReadNowAgent = (p: unknown): boolean => (NO_READ_NOW_AGENTS as readonly unknown[]).includes(p);
 
@@ -208,7 +210,7 @@ export function serviceCompactPoint(provider: unknown, window: number | null | u
   return window > 16_000 ? Math.min(at, window - 16_000) : null;
 }
 
-/** Where a chat started: in this app, or in one of the agents' own apps on the hub machine. */
+/** Where a chat started: in this app, or in one of the agents' own apps on the machine. */
 export type ChatOrigin = "web" | "claude-app" | "claude-cli" | "codex-app";
 
 export interface ChatInfo {
@@ -223,7 +225,7 @@ export interface ChatInfo {
 }
 
 /**
- * A conversation that lives in an agent's own app on the hub machine: a Claude Code session (desktop app or
+ * A conversation that lives in an agent's own app on the machine: a Claude Code session (desktop app or
  * terminal) or a Codex thread (Codex app, CLI or IDE). The app can continue it.
  */
 export interface LocalSession {
@@ -257,62 +259,62 @@ export function permissionInfo(provider: Provider, mode: PermissionMode): Permis
   if (provider === "codex") {
     switch (mode) {
       case "ask":
-        return { label, short: "Read-only", tone: "", help: "Can read the project but can't change any files. Asks you before doing anything more." };
+        return { label, short: "Read-only", tone: "", help: "Can read the chat's folder but can't change any files. Asks you before doing anything more." };
       case "edits":
-        return { label, short: "Can edit", tone: "green", help: "Can edit files in the project folder. Asks you before running most commands." };
+        return { label, short: "Can edit", tone: "green", help: "Can edit files in the chat's folder. Asks you before running most commands." };
       case "auto":
-        return { label, short: "Can edit & run", tone: "green", help: "Can edit files and run commands inside the project folder. Asks you before going outside it." };
+        return { label, short: "Can edit & run", tone: "green", help: "Can edit files and run commands inside the chat's folder. Asks you before going outside it." };
       case "full":
-        return { label, short: "Full access", tone: "red", help: "No sandbox and no questions: can change anything on the hub machine. Only for throwaway setups." };
+        return { label, short: "Full access", tone: "red", help: "No sandbox and no questions: can change anything on the machine. Only for throwaway setups." };
     }
   }
   if (provider === "antigravity") {
     // Antigravity CLI can't send its permission prompts to Crosstalk, so these describe what it actually does.
     switch (mode) {
       case "ask":
-        return { label, short: "Read-only", tone: "", help: "Can read files in the room's folder, but not edit, run commands or read elsewhere: Antigravity can't ask you for permission in Crosstalk. Good for reviewing." };
+        return { label, short: "Read-only", tone: "", help: "Can read files in the chat's folder, but not edit, run commands or read elsewhere: Antigravity can't ask you for permission in Crosstalk. Good for reviewing." };
       case "edits":
       case "auto":
-        return { label, short: "Can edit", tone: "green", help: "Edits files in the room's folder on its own, but can't run commands (not even ls) or read elsewhere: Antigravity can't ask you for permission in Crosstalk." };
+        return { label, short: "Can edit", tone: "green", help: "Edits files in the chat's folder on its own, but can't run commands (not even ls) or read elsewhere: Antigravity can't ask you for permission in Crosstalk." };
       case "full":
-        return { label, short: "Full access", tone: "red", help: "Nothing asks and nothing is checked: can edit files and run any command on the hub machine. Only for throwaway setups." };
+        return { label, short: "Full access", tone: "red", help: "Nothing asks and nothing is checked: can edit files and run any command on the machine. Only for throwaway setups." };
     }
   }
   if (provider === "builtin") {
     // What the hub's own agent asks about (hub/src/agents/builtin.ts asks). Reads have no folder limit.
     switch (mode) {
       case "ask":
-        return { label, short: "Asks first", tone: "", help: "Can read any file on the hub machine. Asks you before file edits, commands and the browser, except ones you've already allowed." };
+        return { label, short: "Asks first", tone: "", help: "Can read any file on the machine. Asks you before file edits, commands and the browser, except ones you've already allowed." };
       case "edits":
       case "auto":
-        return { label, short: mode === "auto" ? "Auto" : "Can edit", tone: "green", help: "Edits files on its own, and can read any file on the hub machine. Asks you before commands and the browser, except ones you've already allowed." };
+        return { label, short: mode === "auto" ? "Auto" : "Can edit", tone: "green", help: "Edits files on its own, and can read any file on the machine. Asks you before commands and the browser, except ones you've already allowed." };
       case "full":
-        return { label, short: "Full access", tone: "red", help: "Nothing asks and nothing is checked: can run any command on the hub machine. Only for throwaway setups." };
+        return { label, short: "Full access", tone: "red", help: "Nothing asks and nothing is checked: can run any command on the machine. Only for throwaway setups." };
     }
   }
   if (provider === "opencode") {
     // The rules the hub writes for its chats (hub/src/agents/opencode.ts permissionRules).
     switch (mode) {
       case "ask":
-        return { label, short: "Asks first", tone: "", help: "Can read the project. Asks you before reading elsewhere, and before file edits, commands, web fetches and the browser, except ones you've already allowed." };
+        return { label, short: "Asks first", tone: "", help: "Can read the chat's folder. Asks you before reading elsewhere, and before file edits, commands, web fetches and the browser, except ones you've already allowed." };
       case "edits":
-        return { label, short: "Can edit", tone: "green", help: "Edits files in the project on its own. Asks you before anything outside it, and before commands, web fetches and the browser." };
+        return { label, short: "Can edit", tone: "green", help: "Edits files in the chat's folder on its own. Asks you before anything outside it, and before commands, web fetches and the browser." };
       case "auto":
-        return { label, short: "Auto", tone: "green", help: "Edits files in the project and runs simple read commands (ls, cat, grep, git status, git diff, git log) on its own. Asks you before anything outside it, and before other commands, web fetches and the browser." };
+        return { label, short: "Auto", tone: "green", help: "Edits files in the chat's folder and runs simple read commands (ls, cat, grep, git status, git diff, git log) on its own. Asks you before anything outside it, and before other commands, web fetches and the browser." };
       case "full":
-        return { label, short: "Full access", tone: "red", help: "Nothing asks and nothing is checked: can run any command on the hub machine. Only for throwaway setups." };
+        return { label, short: "Full access", tone: "red", help: "Nothing asks and nothing is checked: can run any command on the machine. Only for throwaway setups." };
     }
   }
   if (provider === "claude") {
     switch (mode) {
       case "ask":
-        return { label, short: "Asks first", tone: "", help: "Can read the project. Asks you before file edits and commands, except ones you've already allowed." };
+        return { label, short: "Asks first", tone: "", help: "Can read the chat's folder. Asks you before file edits and commands, except ones you've already allowed." };
       case "edits":
         return { label, short: "Can edit", tone: "green", help: "Edits files on its own. Asks you before running commands." };
       case "auto":
         return { label, short: "Auto", tone: "green", help: "Works on its own. A built-in safety check reviews each action and stops ones that look risky, but it can miss things." };
       case "full":
-        return { label, short: "Full access", tone: "red", help: "Nothing asks and nothing is checked: can run any command on the hub machine. Only for throwaway setups." };
+        return { label, short: "Full access", tone: "red", help: "Nothing asks and nothing is checked: can run any command on the machine. Only for throwaway setups." };
     }
   }
   const generic = PERMISSION_MODES.find((p) => p.id === mode)?.help ?? "";
@@ -359,13 +361,13 @@ export interface Member {
 /**
  * Settings changed while an agent was busy wait for its process to be replaced (engine.ts memberChanged): once its reply
  * ends and, while its background helpers run (`helpers`), once they finish. `change` says what waits. "settings" is a new
- * model, effort or fast mode (or looser permissions): the process as it is may answer around it, and while its helpers
- * work your messages go on by themselves (HubInfo.messagesFlow; with that off, or on an older hub, they wait for the
- * helpers, and Send now and Answer now send one sooner). "account" (a switch, or a fresh session for one), "permissions"
- * (tighter ones) and "other" (its folder, its tools, a copy to continue in…) never: a message waits for them, helpers and
- * all, with HubInfo.messagesFlow on or off.
+ * model, effort or fast mode (or looser permissions): the process as it is may answer around it, and your messages go
+ * on by themselves (HubInfo.flowsIn; a hub before 0.8 does that only while its helpers work, and one with
+ * HubInfo.messagesFlow off or absent holds them for the helpers, where Send now and Answer now send one sooner).
+ * "account" (a switch, or a fresh session for one), "permissions" (tighter ones) and "other" (its folder, its tools, a
+ * copy to continue in…) never: a message waits for them, helpers and all, on every hub.
  * `owed`: the agent's process is about to answer something by itself first (engine.ts owedTurn): its helpers' "report",
- * or a "message" Send now handed its last reply as that ended. Under "settings" it answers that in a reply of its own,
+ * or a "message" that went into its last reply as that ended. Under "settings" it answers that in a reply of its own,
  * with the settings it started with; under the others that reply is stopped before it does anything, and the agent
  * starts again with the new settings and carries on from it (an account switch's fresh session can't: the chat says
  * so). Absent when nothing is owed, and from hubs of 0.6.6 or older.
@@ -527,7 +529,7 @@ export interface Turn {
   startedAt: number | null;
   endedAt: number | null;
   /**
-   * A chat's running reply: the messages "Send now" handed to it that the agent hasn't read yet (it reads them once the
+   * A chat's running reply: the messages that went into it that the agent hasn't read yet (it reads them once the
    * step it's on ends), and whether "Read it now" is stopping that step. Set by the hub while the reply runs.
    */
   unread?: string[] | null;
@@ -828,12 +830,13 @@ export function limitQueuedWords(wait: Pick<LimitWait, "kind" | "resetsAt">, now
 }
 
 /**
- * Why "Send now" (POST /api/rooms/:id/send-now) didn't send your waiting message into the agent's reply:
+ * Why "Send now" (POST /api/rooms/:id/send-now) didn't send your waiting message into the agent's reply. (A hub with
+ * HubInfo.flowsIn puts it there by itself as it comes in, so there the answer is mostly "answering", or what holds it.)
  * - "limit": no reply runs: it waits for a usage limit to reset (`wait`), and the reply that carries on reads it first.
  * - "helpers": no reply runs: what you changed (`held`: an account switch, tighter permissions…) waits for the agent's
- *   helpers to finish, and your message with it. A hub with HubInfo.messagesFlow off, or without it, says this under
- *   "settings" too, where sending again with `currentSettings` answers it now, with the settings the agent started with;
- *   with it on the hub has answered it already, and ignores `currentSettings`.
+ *   helpers to finish, and your message with it. A hub before 0.8 with HubInfo.messagesFlow off, or without it, says
+ *   this under "settings" too, where sending again with `currentSettings` answers it now, with the settings the agent
+ *   started with; any other hub has answered it already, and ignores `currentSettings`.
  * - "settings": a reply runs, but what waits behind it (`held`: an account switch, tighter permissions…) mustn't be
  *   answered around: your message goes once that reply (and its helpers) are done, on the new settings.
  * - "answering": the reply that's running has your message already.
@@ -841,7 +844,7 @@ export function limitQueuedWords(wait: Pick<LimitWait, "kind" | "resetsAt">, now
  * - "ended": the reply ended as it was handed over: your message starts the next one.
  * - "notYet": the reply is running but can't take a message this moment (it's still starting): try again shortly.
  * - "ownTurn": no reply runs, but the agent is about to answer by itself what it owes (`held.owed`: its helpers' report,
- *   or a message Send now handed its last reply), with the settings it started with, while a new model or the like waits
+ *   or a message that went into its last reply), with the settings it started with, while a new model or the like waits
  *   (`held`): your message can go into that reply once it starts, else it waits for it and goes on the new settings.
  *   Only around "settings": under an account switch or tighter permissions it's "helpers". Newer than 0.6.6.
  * - "unsupported": this agent can't take a message in the middle of this reply (or any); it reads it once the reply ends.
@@ -1135,11 +1138,21 @@ export interface HubInfo {
   name?: string;
   /**
    * While an agent's helpers work, this hub delivers your messages by itself, whatever settings wait around them
-   * (engine.ts flowIn, heldForSettings), so the app shows no Send now or Answer now then. Follows HubSettings.messagesFlow
-   * ("hub" events say when it changes). False, or absent from older hubs: they hold those messages until the helpers
-   * finish, and only those buttons can send them sooner.
+   * (engine.ts flowIn, heldForSettings), so the app shows no Send now or Answer now then. Always true since 0.8 (see
+   * flowsIn). Before that it followed HubSettings.messagesFlow ("hub" events said when it changed); false, or absent from
+   * older hubs: they hold those messages until the helpers finish, and only those buttons can send them sooner.
    */
   messagesFlow?: boolean;
+  /** A new build of Crosstalk is in place on this machine and starts when its chats are quiet (hub/src/update.ts). */
+  update?: HubUpdate | null;
+  /**
+   * A message sent while an agent works goes into its running reply by itself, whether or not its helpers are at work
+   * (engine.ts flowIn): the app then shows one line under the message and one button, Interrupt, and no Send now or
+   * Answer now. Absent from hubs before 0.8, which do that only while helpers work (messagesFlow).
+   */
+  flowsIn?: boolean;
+  /** This machine's screen can be seen from the app (`ready`), and its agents may drive it (`agents`). Absent from older hubs. */
+  screen?: { ready: boolean; agents: boolean };
 }
 
 /**
@@ -1174,6 +1187,85 @@ export interface MachineInviteStatus {
   status: "waiting" | "done" | "failed" | "expired";
   machine?: MachineInfo;
   error?: string;
+}
+
+// ---- An update that applies itself (hub/src/update.ts) ----
+//
+// A new build put in place of the running hub starts by itself once nothing has been working for two minutes; until
+// then HubInfo.update says so on every device. POST /api/update/restart starts it at once (people's devices only).
+
+export interface HubUpdate {
+  /** The version that will start. */
+  version: string;
+  /** Since when it has been in place. */
+  since: number;
+  /** How many chats are working, which is what it waits for (0: it starts within two minutes). */
+  working: number;
+  /** Up to three of their names. */
+  chats: string[];
+  /** It's restarting now: the app will lose the machine for a few seconds. */
+  restarting: boolean;
+}
+
+/** What the app says about an update that's waiting, in one line. */
+export function updateWords(u: Pick<HubUpdate, "version" | "working" | "restarting">): string {
+  if (u.restarting) return `Restarting to update to ${u.version}…`;
+  if (!u.working) return `Update ${u.version} is ready. It starts in a moment.`;
+  return `Update ${u.version} is ready. It starts when ${u.working === 1 ? "the chat that's working is" : `the ${u.working} chats that are working are`} done.`;
+}
+
+// ---- The hub machine's screen (hub/src/screen) ----
+//
+// Seen live from the app and driven by the agents, through the machine's own screen sharing (macOS's Screen Sharing on
+// 127.0.0.1; any VNC server on Linux), so the hub needs no permission of its own and a click from here counts as a
+// person's. People's devices only.
+//   GET  /api/screen            -> ScreenStatus (from the last try)
+//   POST /api/screen/check      -> ScreenStatus (tries to sign in now)
+//   PUT  /api/screen            { password?: string | null; username?: string; agents?: boolean } -> ScreenStatus
+//   GET  /api/screen/windows    -> { windows: ScreenWindow[] }
+//   WS   /api/screen/ws         the live view: RFB (what VNC speaks) with the hub already signed in, so the app's
+//                               viewer connects as to a server with no password. Binary frames both ways.
+// HubInfo.screen says whether a hub's screen can be seen; a `hub` event follows a change.
+
+export interface ScreenStatus {
+  /** The hub machine's system: "darwin", "linux". The app words the setup steps by it. */
+  platform: string;
+  /** A password has been given to Crosstalk (it is never sent back). */
+  hasPassword: boolean;
+  /** The Mac account it signs in with, when not a VNC password. */
+  username: string;
+  /** On a Mac: the account Crosstalk runs as there, the one whose desktop is on its screen (what to sign in as). */
+  account?: string;
+  /**
+   * macOS gave Crosstalk a login screen of its own instead of the desktop that's on the Mac's screen. It does that to
+   * a sign-in that isn't the account at the screen: the VNC-only password, or another account.
+   */
+  separate?: boolean;
+  /** Agents may look at and drive the screen. */
+  agents: boolean;
+  ready: boolean;
+  /** "off": nothing shares the screen yet. "auth": the password is missing or wrong. "problem": anything else. */
+  state: "unknown" | "ready" | "off" | "auth" | "problem";
+  /** Why it isn't ready, in words to show as they are. */
+  problem: string | null;
+  width: number;
+  height: number;
+  /** Devices watching right now. */
+  viewers: number;
+}
+
+/** A window on the machine's screen, front to back. */
+export interface ScreenWindow {
+  id: number;
+  app: string;
+  /** Empty where the system doesn't give it. */
+  title: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  /** It belongs to something this hub's agents run (or to the browser made for agents). */
+  agent: boolean;
 }
 
 // ---- Bookmarks (hub/src/bookmarks.ts) ----
@@ -1226,8 +1318,6 @@ export interface StateSnapshot {
   macDialogs?: MacDialog[];
   /** Ways to start a chat (Settings → Templates), in the person's order (absent from older hubs). */
   templates?: PromptTemplate[];
-  /** The model pool as a model to chat with (absent from hubs older than that). */
-  pool?: PoolOffer;
   /** How the machine's memory is doing (absent from older hubs). */
   memory?: MachineMemory;
   /** Agent accounts found signed out after a reply failed on its sign-in (absent from older hubs). */
@@ -1236,6 +1326,19 @@ export interface StateSnapshot {
   signInSessions?: SignInSession[];
   /** The messages kept in Bookmarks, with when (absent from older hubs). */
   bookmarked?: Record<string, number>;
+  /**
+   * For the chat list, about chats this device hasn't opened: since when each agent's running reply has run (by member
+   * id, with the reply's turn), and the background work of each agent that has a helper at work now (by member id).
+   * "turn" and "tasks" events keep both current after that. Absent from older hubs.
+   */
+  replyStarts?: Record<string, ReplyStart>;
+  tasks?: Record<string, BackgroundTask[]>;
+}
+
+/** Since when an agent's running reply has run (StateSnapshot.replyStarts). */
+export interface ReplyStart {
+  turnId: string;
+  at: number;
 }
 
 // ---- Login flows (guided setup) ----
@@ -1360,7 +1463,7 @@ export function agentHasSignIn(p: Provider): boolean {
  * /api/accounts) all answer 409 "not_signin" with it, and the sign-in sheet then offers Open AI services.
  */
 export function noSignInWords(p: Provider): string {
-  return `${p === "builtin" ? "Crosstalk's own agent" : PROVIDER_INFO[p]?.name ?? "This agent"} has no sign-in: it runs on an AI service's key. Check that key in Settings → AI services.`;
+  return `${p === "builtin" ? "Crosstalk's own agent" : PROVIDER_INFO[p]?.name ?? "This agent"} has no sign-in: it runs on an account's key. Check that key in ${settingsPath("ai-services")}.`;
 }
 export const NO_SIGN_IN_WORDS = noSignInWords("builtin");
 
@@ -1372,17 +1475,17 @@ export const NO_SIGN_IN_WORDS = noSignInWords("builtin");
  */
 export function serviceKeyWords(service: string, missing = false): string {
   return missing
-    ? `${service} needs a key — add it in Settings → AI services, then tap Try again.`
-    : `${service} refused the key — check it in Settings → AI services, then tap Try again.`;
+    ? `${service} needs a key — add it in ${settingsPath("ai-services")}, then tap Try again.`
+    : `${service} refused the key — check it in ${settingsPath("ai-services")}, then tap Try again.`;
 }
 
 /**
  * Whether a reply's error is serviceKeyWords': its way out is the service's key in Settings → AI services. A hub before
  * 0.6.7 words it "NanoGPT refused the key. Check it in Settings → AI services, then try again.", and a phone reading one
- * of those chats knows that too.
+ * of those chats knows that too; so does one written before Settings → AI services became Settings → Accounts.
  */
 export function isServiceKeyRefusal(error: string | null | undefined): boolean {
-  return / (?:refused the key(?: —|\.) [Cc]heck|needs a key — add) it in Settings → AI services\b/.test(error ?? "");
+  return / (?:refused the key(?: —|\.) [Cc]heck|needs a key — add) it in Settings → (?:AI services|Accounts)\b/.test(error ?? "");
 }
 
 /**
@@ -1392,7 +1495,7 @@ export function isServiceKeyRefusal(error: string | null | undefined): boolean {
  * future caller from ever telling the person it's "signed out".
  */
 function keyInsteadOfSignIn(x: { accountLabel?: string | null }): string {
-  return serviceKeyWords(x.accountLabel || "Its AI service");
+  return serviceKeyWords(x.accountLabel || "Its account");
 }
 
 /**
@@ -1401,7 +1504,15 @@ function keyInsteadOfSignIn(x: { accountLabel?: string | null }): string {
  * chat on that agent shows. Never a terminal. Only for an agent that has a sign-in (keyInsteadOfSignIn otherwise).
  */
 function signInAgain(provider: Provider): string {
-  return (CHAT_PROVIDERS as readonly Provider[]).includes(provider) ? `sign in to it again (Settings → Agents → ${PROVIDER_INFO[provider]?.name ?? "the agent"} → Sign in)` : "sign in to it again with Sign in in the chat";
+  return (CHAT_PROVIDERS as readonly Provider[]).includes(provider) ? `sign in to it again (${agentSettingsPath(provider, "Sign in")})` : "sign in to it again with Sign in in the chat";
+}
+
+/**
+ * Where an agent's own part of Settings is, in words: its section under Accounts when it has one (Claude Code, Codex,
+ * OpenCode: "Settings → Accounts → Codex"), else Accounts and then its name. `then` names something on it ("Sign in").
+ */
+export function agentSettingsPath(provider: Provider, ...then: string[]): string {
+  return settingsSection(`agent-${provider}`) ? settingsPath(`agent-${provider}`, ...then) : settingsPath("ai-services", PROVIDER_INFO[provider]?.name ?? "the agent", ...then);
 }
 
 /** A reply stopped because its agent is signed out (SignInNeed.words). */
@@ -1481,6 +1592,42 @@ export interface BackgroundTask {
   effort?: string | null;
   contextTokens?: number | null;
   contextWindow?: number | null;
+  /** kind "crosstalk_helper" (a helper Crosstalk runs on another account, hub/src/helpers.ts): that account, as the person knows it ("Claude API key"). */
+  account?: string | null;
+  /** The same helper's cost once it's known (null: no price known), and how sure that is. */
+  costUsd?: number | null;
+  costBasis?: CostBasis | null;
+}
+
+/** The kind of a helper that Crosstalk itself runs on another account (BackgroundTask.kind). */
+export const CROSSTALK_HELPER = "crosstalk_helper";
+
+/**
+ * Who does helper work for a chat's agent, when it isn't the agent's own helpers: another account of any agent on the
+ * machine (the same agent on an API key, another agent, a service, one of your own models). Kept per chat in
+ * `member.config.helpersOn` (absent: the agent's own helpers), and as the default for new chats in `HubSettings.helpers`.
+ */
+export interface HelpersOn {
+  provider: Provider;
+  account: string;
+  /** The model helpers run on; null or absent: that account's default. */
+  model?: string | null;
+  effort?: string | null;
+  /** The agent may use its own helpers when this account can't run one. Absent: yes. */
+  fallback?: boolean;
+}
+
+/** A chat agent's `config.helpersOn`, when it is a well-formed choice. */
+export function helpersOf(config: Record<string, unknown> | undefined | null): HelpersOn | null {
+  const h = config?.helpersOn as Partial<HelpersOn> | undefined;
+  if (!h || typeof h !== "object" || typeof h.provider !== "string" || typeof h.account !== "string" || !h.account) return null;
+  return {
+    provider: h.provider as Provider,
+    account: h.account,
+    model: typeof h.model === "string" && h.model ? h.model : null,
+    effort: typeof h.effort === "string" && h.effort ? h.effort : null,
+    fallback: h.fallback !== false,
+  };
 }
 
 /**
@@ -1493,7 +1640,7 @@ export function helperAtWork(t: Pick<BackgroundTask, "status" | "kind" | "backgr
 
 export type ServerEvent =
   | { t: "hello"; device: Device; hub: HubInfo }
-  /** What this hub says of itself changed while devices are connected (HubInfo.messagesFlow): they go by this from now on. */
+  /** What this hub says of itself changed while devices are connected (HubInfo.messagesFlow, on hubs before 0.8): they go by this from now on. */
   | { t: "hub"; hub: HubInfo }
   | { t: "room"; room: Room }
   | { t: "room.deleted"; roomId: string }
@@ -1520,10 +1667,6 @@ export type ServerEvent =
   | { t: "provider"; status: ProviderStatus }
   /** An agent's model list changed: a model came or went, or what a model can hold did. */
   | { t: "models"; catalog: ModelCatalog }
-  /** The model pool changed: its settings, a machine's state, a download's progress, the server's state. */
-  | { t: "pool"; pool: PoolView }
-  /** What the pool is as a model to chat with changed (its state, its model, the machines): every screen that starts a chat follows this. */
-  | { t: "poolOffer"; offer: PoolOffer }
   /** The AI image editor was switched on or off, or its state changed. */
   | { t: "imageEditor"; status: ImageEditorStatus }
   /** On a Mac hub: a privacy dialog went up on the Mac's screen, or was answered, or dismissed. */
@@ -1585,201 +1728,6 @@ export function slugHandle(s: string): string {
     .replace(/^-+|-+$/g, "")
     .slice(0, 32);
   return /^[a-z]/.test(h) ? h : `a-${h}`.slice(0, 32);
-}
-
-// ---- Model pool: one local model split across machines with llama.cpp's RPC backend (docs/MODEL-POOL.md) ----
-
-/** Which llama.cpp build a machine runs. */
-export type PoolBackend = "metal" | "vulkan" | "cuda" | "cpu";
-
-/** A GPU (or other accelerator) llama.cpp found on a machine, as `llama-server --list-devices` reports it. */
-export interface PoolDevice {
-  /** llama.cpp's name for it on that machine: MTL0, Vulkan0, CUDA0… */
-  name: string;
-  /** e.g. "Apple M4" or "AMD Radeon RX 7900 XTX (RADV NAVI31)". */
-  description: string;
-  totalMiB: number;
-  freeMiB: number;
-}
-
-/** A machine in the pool, as set up. */
-export interface PoolMachine {
-  /** "self" (this hub), a linked hub's id (h_…), or "pc_<id>" for another computer added by its address. */
-  id: string;
-  kind: "self" | "hub" | "computer";
-  name: string;
-  /** The Tailscale IPv4 the other machines reach it at (hubs report their own; for a computer, what was picked or typed). */
-  address: string | null;
-  os: "macos" | "linux" | "windows" | null;
-  backend: PoolBackend | null;
-  /** Its GPU takes part (a machine can stay in the list and be left out). */
-  enabled: boolean;
-  /** Port of its helper (ggml-rpc-server). */
-  rpcPort: number;
-}
-
-/** What Crosstalk last learned about a machine in the pool. */
-export interface PoolMachineState {
-  id: string;
-  devices: PoolDevice[];
-  /** Round trip over Tailscale from this hub, and whether it goes direct or through a relay. */
-  link: { ms: number | null; direct: boolean | null } | null;
-  state: "unknown" | "offline" | "ready" | "installing" | "running" | "error";
-  /** In plain words: what it's doing, or what's wrong and what to do. */
-  detail: string | null;
-  checkedAt: number;
-}
-
-/** A model on Hugging Face: one GGUF file, or a split model's parts. */
-export interface PoolModel {
-  repo: string;
-  /** The GGUF file, or a split model's parts in order (…-00001-of-00002.gguf, …). */
-  files: string[];
-  /** e.g. "Q4_K_M", read from the file name. */
-  quant: string | null;
-  sizeBytes: number;
-  /** Downloading it needs the user's Hugging Face token (after accepting its terms on the website). */
-  gated: boolean;
-}
-
-/** A Hugging Face repo's GGUF choices (GET /api/pool/models?repo=…). */
-export interface PoolModelChoices {
-  repo: string;
-  gated: boolean;
-  models: PoolModel[];
-}
-
-export interface PoolConfig {
-  /** The llama.cpp build every machine runs, e.g. "b11669": they must all match exactly. */
-  build: string;
-  machines: PoolMachine[];
-  /** The machine that holds the model and answers chats: "self" or a linked hub's id. */
-  mainId: string;
-  model: PoolModel | null;
-  /** Tokens of context the server is started with (never more than the model holds: the status says what it gave). */
-  contextSize: number;
-  /** The model's name in chats. */
-  alias: string;
-  /** The server's port on the main machine. */
-  port: number;
-  /** Started again when the hub starts, if it was running when the hub stopped. */
-  autostart: boolean;
-}
-
-export type PoolState = "off" | "preparing" | "downloading" | "starting" | "running" | "stopping" | "error";
-
-export interface PoolStatus {
-  state: PoolState;
-  /** What it's doing, or what went wrong and what to do, in plain words. */
-  detail: string | null;
-  /** The model's download to the main machine, while it runs. */
-  download: { file: string; doneBytes: number; totalBytes: number; bytesPerSec: number | null } | null;
-  /** Where chats reach it, once it runs. */
-  endpoint: { baseUrl: string; model: string; contextWindow: number | null } | null;
-  /** The custom-model accounts it's offered as, by agent (account ids). */
-  accounts: Partial<Record<Provider, string>>;
-  startedAt: number | null;
-  /** Measured speed in tokens per second, once there's been a reply. */
-  speed: { prompt: number | null; generation: number | null } | null;
-  /** The newest lines of the main machine's server output. */
-  log: string[];
-}
-
-/** The room the model needs against what the machines taking part have. */
-export interface PoolFit {
-  needMiB: number;
-  haveMiB: number;
-  fits: boolean;
-  /** e.g. "Fits the RX 7900 XTX alone: leave the others out to run it at full speed." */
-  note: string | null;
-}
-
-/** A model file on a machine ("owner/repo/file"), downloaded or still downloading (`partial`). */
-export interface PoolModelFile {
-  file: string;
-  bytes: number;
-  partial: boolean;
-}
-
-/** Everything the Model pool screen shows (GET /api/pool, and the "pool" event). */
-export interface PoolView {
-  config: PoolConfig;
-  machines: PoolMachineState[];
-  status: PoolStatus;
-  fit: PoolFit | null;
-  /** A Hugging Face token is saved (the token itself never leaves the hub). */
-  hasHfToken: boolean;
-  /**
-   * The model files on the main machine as it last said, finished or not, so ones no longer used can be removed.
-   * Missing from hubs older than this list; null until the main machine was asked.
-   */
-  mainFiles?: PoolModelFile[] | null;
-}
-
-/**
- * The model pool as one model you can chat with: what every screen that starts a chat needs, whatever state the pool
- * is in (hub/src/pool/pool.ts chatOffer; the words and what a tap does are in web/src/poolChat.ts). It comes with the
- * state snapshot and again as a "poolOffer" event, so the New chat menu never has to ask for the whole PoolView.
- */
-export interface PoolOffer {
-  /** What it's called in chats and in the menu (the custom-model accounts' name, "Model pool"). */
-  label: string;
-  /** The pool's state now, as Settings → Model pool shows it. */
-  state: PoolState;
-  /** What it's doing, or what's wrong and what to do, in plain words (PoolStatus.detail). */
-  detail: string | null;
-  /** A model is chosen and a machine can run it: the pool can be started. */
-  setUp: boolean;
-  /** Chats can reach it now: it runs and its server answered. */
-  ready: boolean;
-  /** The model chats run on (the alias llama-server serves), null before a model is chosen. */
-  model: string | null;
-  /** The model's own name, from its repo ("Qwen3.8-27B"), for the line under the entry. */
-  modelName: string | null;
-  /** The machines lending a GPU, the main machine first: "across 3 machines" is counted from these. */
-  machines: string[];
-  /** Machines it needs that didn't answer when they were last checked. */
-  missing: string[];
-  /** Its custom-model accounts by agent: a chat on one of them is a chat on the pool, running or not. */
-  accounts: Partial<Record<Provider, string>>;
-}
-
-/**
- * Who a pool machine's helper or server runs for: the hub whose pool started it (its id and name) and which start.
- * Another hub's pool can't take it over while that hub still asks about it.
- */
-export interface PoolOwner {
-  hub: string;
-  name: string;
-  run: string;
-}
-
-/** What a hub reports about itself as a pool machine (GET /api/pool/node), for the hub that runs the pool. */
-export interface PoolNodeInfo {
-  hubId: string;
-  name: string;
-  os: "macos" | "linux" | "windows";
-  arch: string;
-  /** Its Tailscale IPv4, if Tailscale is up. */
-  address: string | null;
-  /** Builds installed, e.g. ["b11669-vulkan"]. */
-  installed: string[];
-  /** An install or model download in progress. */
-  busy: { what: "install" | "download"; file?: string; doneBytes?: number; totalBytes?: number } | null;
-  devices: PoolDevice[];
-  /** `owner`: whose pool it runs for (missing from hubs older than that). */
-  helper: { running: boolean; port: number | null; detail: string | null; owner?: PoolOwner | null };
-  server: { running: boolean; port: number | null; healthy: boolean; detail: string | null; log: string[]; owner?: PoolOwner | null };
-  /** Model files already on it (repo/file), so a download can be skipped. */
-  models: string[];
-  /** Every model file on it with its size, unfinished downloads too (missing from hubs older than this list). */
-  files?: PoolModelFile[];
-  freeDiskBytes: number | null;
-  /**
-   * The last install, download or GPU check that failed in the background, in plain words with what to do next
-   * (cleared when it's tried again). Missing from hubs older than the model pool.
-   */
-  lastError?: { what: "install" | "download" | "devices"; detail: string; at: number } | null;
 }
 
 /** A privacy dialog waiting on a Mac hub's screen (macOS asks there, and only someone there can answer it). */
@@ -1903,6 +1851,11 @@ export interface TeamworkSettings {
   skipAbovePercent: number;
   /** Model and effort the helper answers with: light ones keep questions cheap. Empty means the agent's default. */
   helper: Partial<Record<Provider, { model: string | null; effort: string | null }>>;
+  /**
+   * The accounts agents may ask (never the asking chat's own). Absent: the other one of Claude Code and Codex, on its
+   * main sign-in, as before this could be chosen.
+   */
+  who?: { provider: Provider; account: string }[];
 }
 
 /** Keeping the hub's disk from filling up (Settings → Storage). */
@@ -1944,15 +1897,24 @@ export interface HubSettings {
    */
   carryOnAfterLimit?: boolean;
   /**
-   * "Keep going while helpers work": while an agent's helpers work, your messages go straight to it, around new settings
-   * that wait for those helpers, and they apply when the helpers finish (engine.ts flowIn, heldForSettings). Off: such a
-   * message waits for the helpers so the new settings apply first, and Send now or Answer now send one sooner. An account
-   * switch, tighter permissions or a new folder hold it either way. This machine's own: it doesn't reach linked machines,
-   * each has its own. HubInfo.messagesFlow follows it. Absent: on.
+   * "Keep going while helpers work", on hubs before 0.8: while an agent's helpers work, your messages go straight to it,
+   * around new settings that wait for those helpers, and they apply when the helpers finish. Off: such a message waits
+   * for the helpers so the new settings apply first, and Send now or Answer now send one sooner. Since 0.8 a message
+   * always goes to a working agent by itself (HubInfo.flowsIn): the hub keeps what's saved here and nothing goes by it.
    */
   messagesFlow?: boolean;
+  /**
+   * "Free memory by itself": when this machine is about to run out of memory, Crosstalk ends idle agent processes,
+   * holds new replies, asks the agent that is filling it to close pages, and stops that reply if it keeps growing
+   * (hub/src/memory.ts). Off: it only tells you. Absent: on.
+   */
+  memoryAct?: boolean;
   teamwork: TeamworkSettings;
+  /** Who does helper work in new chats (Settings → Agents together); null or absent: each agent's own helpers. */
+  helpers?: HelpersOn | null;
   storage: StorageSettings;
+  /** Settings → Machines → Screen (hub/src/screen): whether agents may use the screen, and the account it signs in with. */
+  screen?: { agents: boolean; username: string };
 }
 
 /** The hub's disk at a glance: shown as a warning when space is low. */
@@ -2027,7 +1989,7 @@ export const FACTORY_TEAMWORK: TeamworkSettings = {
 
 export const FACTORY_STORAGE: StorageSettings = { autoClean: true, lowSpaceGb: 15 };
 
-export const FACTORY_HUB_SETTINGS: HubSettings = { machineName: "", agentsAcrossChats: false, pauseNearLimit: false, carryOnAfterLimit: true, messagesFlow: true, teamwork: FACTORY_TEAMWORK, storage: FACTORY_STORAGE };
+export const FACTORY_HUB_SETTINGS: HubSettings = { machineName: "", agentsAcrossChats: false, pauseNearLimit: false, carryOnAfterLimit: true, messagesFlow: true, memoryAct: true, teamwork: FACTORY_TEAMWORK, storage: FACTORY_STORAGE };
 
 export const FACTORY_DEFAULTS: RoomDefaults = { mode: "review", agents: [], maxHops: 5, rounds: 1, parallel: false, agent: {} };
 
@@ -2096,6 +2058,22 @@ export interface EndpointProbe {
   contextWindow: number | null;
   /** What kind of server answered, when it could tell (e.g. "llama.cpp", "LM Studio", "Ollama"). */
   server: string | null;
+}
+
+/**
+ * An account as a person would name the thing that does helper work on it: "Claude Code" or "Codex" for the agent's own
+ * sign-in, "Claude Code (Work)" for another sign-in, "Claude API key" (with its name when the agent has several), and a
+ * service's or own model's own name ("DeepSeek"). `all`: the machine's accounts, to tell whether a name is needed.
+ */
+export function helperAccountLabel(a: Pick<AgentAccount, "provider" | "id" | "label" | "kind">, all: readonly Pick<AgentAccount, "provider" | "kind">[] = []): string {
+  const agent = PROVIDER_INFO[a.provider]?.name ?? a.provider;
+  if (a.kind === "endpoint") return a.label || agent;
+  if (a.kind === "apikey") {
+    const maker = a.provider === "claude" ? "Claude" : a.provider === "codex" ? "OpenAI" : agent;
+    const several = all.filter((x) => x.provider === a.provider && x.kind === "apikey").length > 1;
+    return `${maker} API key${several && a.label ? ` (${a.label})` : ""}`;
+  }
+  return a.id === DEFAULT_ACCOUNT || !a.label ? agent : `${agent} (${a.label})`;
 }
 
 /** Which account a room member uses ("default" when not set). */
@@ -2199,8 +2177,8 @@ export interface AskModel extends ModelOption {
   typicalCostUsd: number | null;
 }
 
-/** Newer than 0.6.1: why a target's model can't be picked: the model pool runs one model at a time; another machine needs a Crosstalk update first. */
-export type AskFixedModel = "pool" | "update";
+/** Newer than 0.6.1: why a target's model can't be picked: another machine needs a Crosstalk update first. */
+export type AskFixedModel = "update";
 
 /** Newer than 0.6.1: a model and effort picked for a target (null: its default). */
 export interface AskPick {
@@ -2776,8 +2754,8 @@ export function capacity(m: LocalMachine): { bytes: number; on: "gpu" | "memory"
 }
 
 /**
- * Which memory a heavy thing draws on. "gpu" is llama.cpp and the model pool's server, which live inside Metal's
- * working set (or a card's VRAM). "ram" is the image editor: ComfyUI is not llama.cpp, it is not held to Metal's
+ * Which memory a heavy thing draws on. "gpu" is llama.cpp, which lives inside Metal's working set (or a card's
+ * VRAM). "ram" is the image editor: ComfyUI is not llama.cpp, it is not held to Metal's
  * working set, and holding it to one is how a machine that runs it fine refused to start it (measured on a
  * 16 GB Mac: 12.48 GiB resident, against a working-set ceiling of 10.67 GiB).
  */
@@ -2848,11 +2826,19 @@ export function fitOf(need: number, m: LocalMachine, machine: string, taken = 0)
 export type MemoryBand = "fine" | "busy" | "tight" | "full" | "unknown";
 
 /** Where in Settings a heavy thing is switched off; null when it is the person's own to quit. */
-export type MemorySection = "image-editor" | "local-models" | "model-pool";
+export type MemorySection = "image-editor" | "local-models";
+
+/**
+ * What kind of thing holds the memory, beyond the model servers and the image editor (which have none):
+ *  - "agent": one agent's processes, everything it started included ("Claude Code in Shopping");
+ *  - "browser": the agents' browser (BrowserOS neo, and any headless browser an agent started);
+ *  - "other": a program the person runs themselves. It is named and never touched.
+ */
+export type MemoryHolderKind = "agent" | "browser" | "other";
 
 /** A heavy thing running on the hub's machine. */
 export interface MemoryHolder {
-  /** Short and plain: "the image editor", "llama.cpp on port 8080". */
+  /** Short and plain: "the image editor", "llama.cpp on port 8080", "Claude Code in Shopping", "the agents' browser". */
   what: string;
   /** Crosstalk started it, so Settings can turn it off. False for the person's own, which Crosstalk never ends. */
   ours: boolean;
@@ -2860,6 +2846,12 @@ export interface MemoryHolder {
   bytes: number | null;
   /** Where it is switched off, when Crosstalk can; null when the person quits it themselves. */
   section: MemorySection | null;
+  /** Absent for a model server or the image editor (and from older hubs, which only know those). */
+  kind?: MemoryHolderKind;
+  /** The chat an agent's processes work for, or the chat whose agent is using the browser; absent when there is none. */
+  roomId?: string;
+  /** That chat's name. */
+  chat?: string;
 }
 
 /** Something that would free memory, for the phone to offer: at most two are ever shown. */
@@ -2876,7 +2868,10 @@ export interface MachineMemory {
   /** Why the band is "unknown", in plain words; null when it is known. */
   blind: string | null;
   ramBytes: number;
-  /** What the heavy things below hold together; null when none of them could be measured. */
+  /**
+   * What the model servers and the image editor below hold together; null when none of them could be measured. Agents,
+   * their browser and the person's own programs aren't in it: this is what the next model has to fit beside.
+   */
   takenBytes: number | null;
   /** Swap pages moved per second, averaged over the last two looks; null where swap can't be read. */
   swapPagesPerSec: number | null;
@@ -2885,7 +2880,15 @@ export interface MachineMemory {
   holders: MemoryHolder[];
   /** When it was last read. */
   at: number;
+  /**
+   * "Free memory by itself" (HubSettings.memoryAct) is on, so Crosstalk does more than tell: see `MEMORY_WAIT` and
+   * hub/src/memory.ts. Absent from older hubs, which never act.
+   */
+  acts?: boolean;
 }
+
+/** A member's status detail while its reply waits for the machine to have memory again (status "queued"). */
+export const MEMORY_WAIT = "Waiting for memory";
 
 /**
  * The bands, as the share of memory that is neither wired nor compressed.
@@ -2913,7 +2916,7 @@ export const THRASH_PAGE_BYTES = 16 * 1024;
  * The same line as a rate of bytes, which is what it always was: about 31 MB/s. A page is not one size everywhere --
  * Linux counts `pswpin`/`pswpout` in 4 KiB pages, so 2,000 of those a second is 8 MB/s, a rate a Linux hub with any
  * steady swap or zswap traffic reaches while perfectly responsive. Taking the Mac's page count there would refuse
- * every model, editor and pool start on it.
+ * every model and editor start on it.
  */
 export const THRASH_BYTES_PER_SEC = THRASH_PAGES_PER_SEC * THRASH_PAGE_BYTES;
 
@@ -2956,11 +2959,19 @@ export const biggestHolder = (m: MachineMemory): MemoryHolder | null => m.holder
 /** "the image editor (17.0 GB)" */
 export const holderText = (h: MemoryHolder) => `${h.what}${h.bytes === null ? "" : ` (${bytesText(h.bytes)})`}`;
 
-/** What to do about a holder, in plain words: Crosstalk's own can be turned off from the phone; the person's own can't. */
+/**
+ * What to do about a holder, in plain words: Crosstalk's own can be turned off from the phone; the person's own can't.
+ * An agent's reply is stopped in its chat, and the agents' browser gets its pages closed (quitting it would sign nothing
+ * out, but it isn't needed to get the memory back).
+ */
 export const holderWay = (h: MemoryHolder): MemoryWay =>
-  h.ours && h.section
-    ? { text: `Turn ${h.what} off`, section: h.section }
-    : { text: `Quit ${h.what} on this machine`, section: null };
+  h.kind === "agent"
+    ? { text: `Stop ${h.what}`, section: null }
+    : h.kind === "browser"
+      ? { text: `Close pages in ${h.what}`, section: null }
+      : h.ours && h.section
+        ? { text: `Turn ${h.what} off`, section: h.section }
+        : { text: `Quit ${h.what} on this machine`, section: null };
 
 /** The one or two things that would help most, biggest first. */
 export const memoryWays = (m: MachineMemory): MemoryWay[] => m.holders.slice(0, 2).map(holderWay);
@@ -2990,37 +3001,107 @@ export function memoryLine(m: MachineMemory, machine: string): string {
  * gone that starting anything would make everything on it crawl. `needBytes` is null when what it needs can't be
  * worked out beforehand (Ollama loads a model only when a chat asks for one).
  */
-export function memoryRefusal(o: { what: string; needBytes: number | null; freeBytes: number; machine: string; holders: MemoryHolder[]; why: "space" | "pressure"; canForce?: boolean }): string {
+export function memoryRefusal(o: { what: string; needBytes: number | null; freeBytes: number; machine: string; holders: MemoryHolder[]; why: "space" | "pressure" }): string {
   const big = o.holders.find((h) => h.bytes !== null) ?? o.holders[0] ?? null;
   const free = o.freeBytes > 0 ? `${bytesText(o.freeBytes)} is free` : "nothing is free";
   const room =
     o.why === "space" && o.needBytes !== null
       ? `${o.what} needs about ${bytesText(o.needBytes)} and ${free} on ${o.machine}.`
       : `${o.machine} is nearly out of memory (${free}), so starting ${o.what} now would make everything on it slow.`;
-  // Only promise "start it anyway" where a screen really offers that tap. The model pool has no such control, and an
-  // error that names a way out a person can't take is worse than one that tells them what to do instead.
-  if (!big) return `${room} Close what you don't need on ${o.machine}, ${o.canForce === false ? `then start ${o.what} again` : "or start it anyway"}.`;
+  if (!big) return `${room} Close what you don't need on ${o.machine}, or start it anyway.`;
   const way = big.ours && big.section ? "turn it off in Settings" : `quit it on ${o.machine}`;
-  const anyway = o.canForce === false ? `then start ${o.what} again` : `or start ${o.what} anyway`;
-  return `${room} ${holderText(big)} is holding the rest: ${way}, ${anyway}.`;
+  return `${room} ${holderText(big)} is holding the rest: ${way}, or start ${o.what} anyway.`;
 }
 
-/** The push notification when the machine runs out while things are running. */
+/** Said where Crosstalk only tells ("Free memory by itself" is off, or an older hub). */
+export const MEMORY_STOPS_NOTHING = "Crosstalk stops nothing by itself.";
+
+const memoryTitle = (m: MachineMemory, machine: string) => (m.band === "full" ? `${machine} is out of memory` : `${machine} is nearly out of memory`);
+
+/**
+ * The push notification when the machine runs out while things are running. With "Free memory by itself" on
+ * (`MachineMemory.acts`) it no longer ends by saying Crosstalk stops nothing: it may.
+ */
 export function memoryNotice(m: MachineMemory, machine: string): { title: string; body: string } {
   const ways = memoryWays(m);
   const what = ways.length ? ` ${ways.map((w) => w.text).join(", or ")}.` : "";
-  return {
-    title: m.band === "full" ? `${machine} is out of memory` : `${machine} is nearly out of memory`,
-    body: `${memoryLine(m, machine)}${what} Crosstalk stops nothing by itself.`,
-  };
+  return { title: memoryTitle(m, machine), body: `${memoryLine(m, machine)}${what}${m.acts ? "" : ` ${MEMORY_STOPS_NOTHING}`}` };
 }
+
+/** An agent's reply that is filling the machine: who, in which chat, and through what. */
+export interface MemoryCulprit {
+  /** The agent as the chat names it: "Claude Code", or "@claude" in a group chat. */
+  agent: string;
+  chat: string;
+  /** What is growing: the agents' browser while this agent uses it, or the agent's own processes. */
+  holder: Pick<MemoryHolder, "what" | "bytes" | "kind">;
+}
+
+/** "The agents' browser in Shopping holds 6.2 GB." (an agent's own processes already name their chat) */
+export function culpritLine(c: MemoryCulprit): string {
+  const what = c.holder.kind === "browser" ? `${c.holder.what} in ${c.chat}` : c.holder.what;
+  const said = `${what.charAt(0).toUpperCase()}${what.slice(1)}`;
+  return c.holder.bytes === null ? `${said} is filling the memory.` : `${said} holds ${bytesText(c.holder.bytes)}.`;
+}
+
+/** What an agent is told, in the middle of its reply, when its browser is what fills the machine. It reads it at its next step. */
+export const MEMORY_STEER = "This machine is nearly out of memory. Close every browser tab you opened and work one page at a time.";
+
+/** The same when it is the agent's own processes (a build, a test run, programs it left running) and not a browser. */
+export const MEMORY_STEER_OWN = "This machine is nearly out of memory, and what you are running holds most of it. End the commands and programs you no longer need, and run one thing at a time.";
+
+/** Which of the two an agent is told. */
+export const memorySteer = (c: MemoryCulprit) => (c.holder.kind === "browser" ? MEMORY_STEER : MEMORY_STEER_OWN);
+
+/**
+ * The notification when an agent's reply is what fills the machine. `did` is what Crosstalk did about it: it asked
+ * the agent to close pages ("asked"), couldn't put a message into that agent's reply ("watching"), or does nothing by
+ * itself because "Free memory by itself" is off ("told").
+ */
+export function memoryCulpritNotice(m: MachineMemory, machine: string, c: MemoryCulprit, did: "asked" | "watching" | "told"): { title: string; body: string } {
+  const next =
+    did === "asked"
+      ? `Crosstalk asked ${c.agent} to ${c.holder.kind === "browser" ? "close pages" : "end what it doesn't need"} and will stop that reply if it keeps growing.`
+      : did === "watching"
+        ? "Crosstalk will stop that reply if it keeps growing."
+        : `Stop that reply to free it. ${MEMORY_STOPS_NOTHING}`;
+  return { title: memoryTitle(m, machine), body: `${culpritLine(c)} ${next}` };
+}
+
+/** The line in the chat when its agent was asked to close pages (the same moment as the notification above). */
+export const memoryAskedLine = (machine: string, c: MemoryCulprit, asked: boolean) =>
+  `${machine} is nearly out of memory. ${asked ? `Crosstalk asked ${c.agent} to ${c.holder.kind === "browser" ? "close the pages it opened" : "end what it doesn't need"}, and` : "Crosstalk"} will stop this reply if it keeps growing.`;
+
+/** The line in the chat, and the notification, once Crosstalk stopped the reply that was filling the machine. */
+export function memoryStoppedLine(machine: string, c: MemoryCulprit): string {
+  const held = c.holder.bytes === null ? "" : c.holder.kind === "browser" ? ` (its browser held ${bytesText(c.holder.bytes)})` : ` (it held ${bytesText(c.holder.bytes)})`;
+  return `Stopped ${c.agent}: ${machine} was about to freeze${held}. Tap Try again when you're ready.`;
+}
+
+/** What the stopped reply itself says (the chat's line above says the rest). */
+export const memoryStopError = (machine: string) => `Crosstalk stopped this reply: ${machine} was about to freeze.`;
+
+/**
+ * The line in a chat after the machine went down out of memory while its agent was the one filling it: the reply isn't
+ * started again by itself, because it is what froze the machine. `when` is already words ("2:41 AM", "11:50 PM yesterday").
+ */
+export const memoryNoResumeLine = (machine: string, when: string) => `${machine} ran out of memory at ${when} while this was running. Tap Try again to carry on.`;
+
+/**
+ * One line of an agent's briefing on a machine with little memory, where a browser with many pages open is the
+ * quickest way to run out; null on a bigger one. 16 GB and below: the size the bands were measured on.
+ */
+export const memoryBriefing = (ramBytes: number): string | null =>
+  ramBytes > 0 && ramBytes <= 16 * FIT_GiB
+    ? "- This machine has little memory. When you use a browser, close each tab as soon as you're done with it and keep to a few pages at a time."
+    : null;
 
 /** Where downloads go: a folder the person can see and change (an external drive too, when it's plugged in and writable). */
 export interface LocalFolder {
   path: string;
   /** As people write it: ~/.crosstalk/models. */
   shown: string;
-  /** Crosstalk's own models folder, which the model pool uses too. */
+  /** Crosstalk's own models folder. */
   isDefault: boolean;
   /** The drive's name when it's on another drive than this machine's own ("Untitled"). */
   drive: string | null;
@@ -3047,6 +3128,25 @@ export interface LocalModelFile {
   contextLength: number | null;
 }
 
+/** A model on Hugging Face: one GGUF file, or a split model's parts. */
+export interface HfModel {
+  repo: string;
+  /** The GGUF file, or a split model's parts in order (…-00001-of-00002.gguf, …). */
+  files: string[];
+  /** e.g. "Q4_K_M", read from the file name. */
+  quant: string | null;
+  sizeBytes: number;
+  /** Downloading it needs the user's Hugging Face token (after accepting its terms on the website). */
+  gated: boolean;
+}
+
+/** A Hugging Face repo's GGUF models, smallest first. */
+export interface HfModelChoices {
+  repo: string;
+  gated: boolean;
+  models: HfModel[];
+}
+
 /** A download, running or stopped part way (one per model). Finished ones become `LocalModelFile`s (or Ollama models). */
 export interface LocalDownload {
   id: string;
@@ -3054,7 +3154,7 @@ export interface LocalDownload {
   /** What people read: the repo's model name and quant, or Ollama's model name. */
   name: string;
   /** Hugging Face: the model as its repo lists it. */
-  model: PoolModel | null;
+  model: HfModel | null;
   /** Ollama: the model's name and the server it's pulled into. */
   ollama: { model: string; serverId: string } | null;
   state: "downloading" | "stopped" | "failed";
@@ -3074,13 +3174,13 @@ export interface LocalDownload {
 }
 
 /** POST /api/local-models/downloads: a Hugging Face model (its GGUF files), or a model Ollama pulls into a server on this machine. */
-export type LocalDownloadStart = { source: "huggingface"; model: PoolModel } | { source: "ollama"; serverId: string; model: string };
+export type LocalDownloadStart = { source: "huggingface"; model: HfModel } | { source: "ollama"; serverId: string; model: string };
 
 /** A program on this machine that runs a model server. */
 export interface LocalProgram {
   kind: "ollama" | "llamacpp";
   path: string;
-  /** Where it came from, in plain words: "Homebrew", "the Ollama app", "the model pool's llama.cpp b11669". */
+  /** Where it came from, in plain words: "Homebrew", "the Ollama app", "Crosstalk's llama.cpp b11669". */
   from: string;
 }
 
@@ -3121,7 +3221,7 @@ export interface LocalLibrary {
   downloads: LocalDownload[];
   programs: LocalProgram[];
   started: LocalStarted[];
-  /** A Hugging Face token is saved on the hub (the model pool's: PUT /api/pool/hf-token). It never leaves the hub. */
+  /** A Hugging Face token is saved on the hub (PUT /api/local-models/hf-token). It never leaves the hub. */
   hasHfToken: boolean;
   /** What every download leaves free on its disk (the hub's reserve). */
   reserveBytes: number;
@@ -3140,7 +3240,7 @@ export interface LocalSearchHit {
 }
 
 /** GET /api/local-models/files?repo=: a repo's GGUF models with what the verdict needs from their header. */
-export interface LocalRepoFiles extends PoolModelChoices {
+export interface LocalRepoFiles extends HfModelChoices {
   kvBytesPerToken: number | null;
   contextLength: number | null;
 }
@@ -3178,7 +3278,7 @@ export interface SetupFix {
   url?: string;
 }
 
-export type SetupGroup = "hub" | "network" | "devices" | "agents" | "services" | "mac" | "machines" | "pool";
+export type SetupGroup = "hub" | "network" | "devices" | "agents" | "services" | "mac" | "machines";
 
 export interface SetupItem {
   /** Stable ("service", "https", "agent.claude", "mac.autologin"…): read items by id. */
@@ -3345,6 +3445,8 @@ export interface NewGroupMember {
   effort?: string | null;
   permissionMode?: PermissionMode;
   helperModel?: string | null;
+  /** Who does its helper work; missing: the machine's default for new chats; null: its own helpers. */
+  helpers?: HelpersOn | null;
   /** Its @name in the chat (made unique by the hub); missing: the agent's own (claude, codex) or its account's name. */
   handle?: string;
 }
@@ -3352,10 +3454,19 @@ export interface NewGroupMember {
 /** A new group chat (POST /api/chats/group). */
 export interface NewGroupChat {
   members: NewGroupMember[];
-  /** Who answers a message that @mentions nobody: the lead, or everyone in turn. */
-  answers: "lead" | "turns";
+  /**
+   * How they work together on a message that @mentions nobody: the lead answers, everyone answers in turn, or the lead
+   * builds and the next agent reviews ("review": hubs up to 0.8.1 take only the first two).
+   */
+  answers: GroupAnswers;
   /** Which of `members` leads (its index; missing: the first). */
   lead?: number;
+  /** The most review rounds, 1 to 25 (one is the lead's work, then its review); missing: what Settings says. */
+  rounds?: number;
+  /** Agents may work at the same time; missing: what Settings says. */
+  parallel?: boolean;
   name?: string;
   cwd?: string;
 }
+
+export * from "./settingsPages";

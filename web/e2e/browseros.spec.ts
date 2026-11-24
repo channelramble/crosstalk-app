@@ -80,7 +80,7 @@ const copies = (page: Page) => page.evaluate(() => (window as unknown as { copie
  */
 async function openList(page: Page) {
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto("/#/settings");
+  await page.goto("/#/settings/agent-setup");
   const section = page.locator(".agent-setup");
   await expect(section.getByRole("status")).toContainText("Everything needed is set up");
   await section.getByRole("button", { name: "Show the list" }).click();

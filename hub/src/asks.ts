@@ -13,6 +13,8 @@
 import { platform } from "node:os";
 import type { Database } from "bun:sqlite";
 import {
+  agentSettingsPath,
+  settingsPath,
   CHAT_PROVIDERS,
   DEFAULT_ACCOUNT,
   PROVIDER_INFO,
@@ -65,7 +67,7 @@ import {
 import { ASK_QUESTION, agentLabel, askBriefing, askable, copiedMessages } from "./duplicate";
 import { HttpError } from "./engine/engine";
 import { hubCall } from "./machines";
-import { ONE_SHOT_GRACE_MS, ONE_SHOT_MS, runOneShot, type OneShotResult, type OneShotUsage } from "./oneshot";
+import { ONE_SHOT_GRACE_MS, ONE_SHOT_MS, onThisMachine, oneShotCost, runOneShot, type OneShotResult, type OneShotUsage } from "./oneshot";
 import { peerRoute, route, type Route } from "./routes";
 import { newId } from "./util/ids";
 import { logger } from "./util/log";
@@ -221,16 +223,6 @@ export function askHandle(provider: ChatProvider, account: string, label: string
 type ChatAccount = AgentAccount & { provider: ChatProvider };
 const isChatAccount = (a: AgentAccount): a is ChatAccount => (CHAT_PROVIDERS as readonly string[]).includes(a.provider);
 
-/** A model server on this very machine: what's asked of it never leaves. */
-function onThisMachine(baseUrl: string): boolean {
-  try {
-    const host = new URL(baseUrl).hostname;
-    return host === "localhost" || host === "[::1]" || /^127\./.test(host);
-  } catch {
-    return false;
-  }
-}
-
 const notInstalled = (provider: ChatProvider) => `${PROVIDER_INFO[provider].name} isn't installed on this machine. Install it, then ask again.`;
 
 /** A limit as the sheet words it: "$250", "$12.50", "$1,500". */
@@ -338,7 +330,7 @@ export class Asks {
     const { app } = this;
     const name = agentLabel(app, a.provider, a.id);
     if (!app.providers.which(a.provider)) return { why: "Not installed", say: notInstalled(a.provider), code: "not_signed_in" };
-    if (a.signedIn === false) return { why: "Not signed in", say: `${name} isn't signed in. Sign in under Settings → AI services, then ask again.`, code: "not_signed_in" };
+    if (a.signedIn === false) return { why: "Not signed in", say: `${name} isn't signed in. Sign in under ${agentSettingsPath(a.provider)}, then ask again.`, code: "not_signed_in" };
     const limit = app.spend.checkBudget(a.provider, a.id);
     if (limit) {
       // The sheet's row is short ("Over its $250 limit"); a refusal says the spend module's whole sentence.
@@ -517,7 +509,7 @@ export class Asks {
   async targetsFor(roomId: string, opts: { refresh?: boolean; machines?: boolean; models?: boolean } = {}): Promise<AskTargets> {
     const { app } = this;
     const room = app.store.getRoom(roomId);
-    if (!room) throw new HttpError(404, "room not found");
+    if (!room) throw new HttpError(404, "That chat isn't here any more.");
     if (!room.chat) throw new HttpError(400, "Ask others works in chats.");
     // A group chat's agents are in it already: the others are offered.
     const choices = await this.choices(app.store.listMembers(roomId), { models: opts.models, remembered: true });
@@ -540,8 +532,8 @@ export class Asks {
   /**
    * A row another machine listed, as this machine's sheet and @ popup show it: named with where it runs, its typical costs
    * counted from this machine's own asks of it, and on the person's last pick for it here while that machine still lists that
-   * model. `withModels`: the sheet wants its models for the picker, or why it can't have them (a model pool runs one model; a
-   * Crosstalk there of 0.6.1 or older sends none, and takes no pick).
+   * model. `withModels`: the sheet wants its models for the picker, or why it can't have them (a Crosstalk there of
+   * 0.6.1 or older sends none, and takes no pick).
    */
   private remoteChoice(r: AskChoice, l: PeerListing, handle: string, picks: Record<string, KeptPick>, withModels: boolean): AskChoice {
     let target: AskTarget = { ...r.target, machine: l.id };
@@ -550,7 +542,7 @@ export class Asks {
     const models = r.models && typical ? r.models.map((m) => ({ ...m, typicalCostUsd: typical.get(m.id) ?? m.typicalCostUsd })) : undefined;
     // What a pick of its default stands for: the model that machine would use (its row's), else the one its list marks.
     const fallback = models && ((r.target.model ? listedAs(models, r.target.model) : undefined) ?? models.find((m) => m.isDefault));
-    const remembered = models && !r.fixedModel ? fitPick(this.pickOf(picks, target), models, fallback) : null;
+    const remembered = models ? fitPick(this.pickOf(picks, target), models, fallback) : null;
     let { label, paid } = r;
     let typicalCostUsd = this.typical(target) ?? r.typicalCostUsd;
     const entry = remembered && models ? (remembered.model ? listedAs(models, remembered.model) : fallback) : undefined;
@@ -575,7 +567,7 @@ export class Asks {
       ...(remembered && entry ? { remembered } : {}),
     };
     if (withModels && r.available) {
-      const fixed: AskFixedModel | null = r.fixedModel ?? (models ? null : "update");
+      const fixed: AskFixedModel | null = models ? null : "update";
       if (fixed) row.fixedModel = fixed;
       else row.models = models;
     }
@@ -620,12 +612,10 @@ export class Asks {
         const catalog = listing ? await this.catalogOf(a) : null;
         // A list a pick can be held against (and the sheet offers): the agent's own answer, or a model server's saved list.
         const models = catalog && (catalog.live || a.kind === "endpoint") ? catalog.models : [];
-        // The model pool runs the one model it was started with: there's no other to pick (pool/pool.ts).
-        const pool = this.app.pool.servesMember({ provider: a.provider, config: { account: a.id } });
         // The person's last pick for it, while its list still has that model (and that model still takes that effort). Not for
         // the chat's own agent: whether it's offered at all stays as it was, so "@codex" in a Codex chat still means what it did.
         const mine = own.some((o) => o.provider === a.provider && memberAccount(o) === a.id);
-        const remembered = pool || mine ? null : fitPick(this.pickOf(picks, { provider: a.provider, account: a.id }), models, models.find((m) => m.isDefault));
+        const remembered = mine ? null : fitPick(this.pickOf(picks, { provider: a.provider, account: a.id }), models, models.find((m) => m.isDefault));
         const picked = listing ? await this.pick(a, remembered ?? {}, { catalog }) : null;
         // The chat's own agent isn't offered, unless another model of it would answer.
         if (own.some((o) => o.provider === a.provider && memberAccount(o) === a.id && (!picked || !o.model || o.model === picked.model || o.model === picked.full))) return null;
@@ -649,10 +639,7 @@ export class Asks {
           ...(remembered && picked ? { remembered } : {}),
         };
         // The sheet's model picker: only a row that can be asked has one.
-        if (opts.models && !why) {
-          if (pool) row.fixedModel = "pool";
-          else row.models = this.offered(a, models, local, flat);
-        }
+        if (opts.models && !why) row.models = this.offered(a, models, local, flat);
         return row;
       }),
     );
@@ -676,7 +663,7 @@ export class Asks {
     if (t.model != null && !(typeof t.model === "string" && MODEL.test(t.model))) throw new HttpError(400, "That model name doesn't look right.");
     if (t.effort != null && !(typeof t.effort === "string" && EFFORT.test(t.effort))) throw new HttpError(400, "That effort level doesn't look right.");
     const picked = await this.pick(a, { model: t.model, effort: t.effort });
-    if (!picked) throw new HttpError(409, `${agentLabel(this.app, a.provider, a.id)} has no default model to ask. Check its sign-in under Settings → AI services, then try again.`, "model_choice");
+    if (!picked) throw new HttpError(409, `${agentLabel(this.app, a.provider, a.id)} has no default model to ask. Check its account under ${agentSettingsPath(a.provider)}, then try again.`, "model_choice");
     const target: AskTarget = { provider: a.provider, account: a.id, model: picked.model, effort: picked.effort };
     return { target, label: this.labelOf(a, picked.label), local: a.kind === "endpoint" && onThisMachine(a.endpoint?.baseUrl ?? "") };
   }
@@ -684,8 +671,8 @@ export class Asks {
   /** One target on another linked machine, checked as far as this machine can (that machine checks the rest when it answers). */
   private async resolveRemote(t: AskTarget): Promise<{ target: AskTarget; label: string; local: false }> {
     const link = this.app.machines.linkOf(String(t.machine));
-    if (!link) throw new HttpError(404, "That machine isn't linked with this one any more. Check Settings → Machines, then ask again.");
-    if (link.agents !== "two-way") throw new HttpError(409, `${capital(theMachine(link.name))} isn't connected for this yet. Check Settings → Machines, then ask again.`);
+    if (!link) throw new HttpError(404, `That machine isn't linked with this one any more. Check ${settingsPath("machines")}, then ask again.`);
+    if (link.agents !== "two-way") throw new HttpError(409, `${capital(theMachine(link.name))} isn't connected for this yet. Check ${settingsPath("machines")}, then ask again.`);
     if (!(CHAT_PROVIDERS as readonly string[]).includes(t.provider)) throw new HttpError(400, "You can ask Claude Code or Codex.");
     if (t.account != null && !(typeof t.account === "string" && ACCOUNT.test(t.account))) throw new HttpError(400, "That account name doesn't look right.");
     if (t.model != null && !(typeof t.model === "string" && MODEL.test(t.model))) throw new HttpError(400, "That model name doesn't look right.");
@@ -817,7 +804,7 @@ export class Asks {
   private async executeRemote(ask: Ask, abort: AbortController, systemNote: string) {
     const { target } = ask;
     const link = this.app.machines.linkOf(target.machine!);
-    if (!link || link.agents !== "two-way") return this.finish(ask, gave(), `${link ? capital(theMachine(link.name)) : "That machine"} isn't connected for this any more. Check Settings → Machines, then Try again.`, { cost: null });
+    if (!link || link.agents !== "two-way") return this.finish(ask, gave(), `${link ? capital(theMachine(link.name)) : "That machine"} isn't connected for this any more. Check ${settingsPath("machines")}, then Try again.`, { cost: null });
     let data: unknown;
     try {
       // The other hub stops at the time cap itself; this call waits a little longer than that, then gives up.
@@ -840,22 +827,7 @@ export class Asks {
 
   /** What the question cost, and how sure that is. */
   private costOf(t: Pick<AskTarget, "provider" | "account" | "model">, local: boolean, u: OneShotUsage): AskCost {
-    const { provider, account, model } = t;
-    const saved = this.app.providers.accounts().find((a) => a.provider === provider && a.id === account);
-    const kind = saved?.kind ?? "signin";
-    const tokens = { inputTokens: u.inputTokens, outputTokens: u.outputTokens };
-    if (local) return { ...tokens, costUsd: 0, basis: "free" };
-    // A key on one flat fee for the month, so this question added nothing to it: the ledger keeps the same figure (spend.ts).
-    if (kind === "endpoint" && this.app.services.flatRate(provider, account, saved?.endpoint?.baseUrl)) return { ...tokens, costUsd: 0, basis: "plan" };
-    const none = !u.inputTokens && !u.outputTokens && u.costUsd === null;
-    // A fresh Claude Code process's own figure is exact, except on a model server (it would price the name it sees as Anthropic's).
-    const priced = none
-      ? { costUsd: null, basis: "unknown" as CostBasis }
-      : provider === "claude" && kind !== "endpoint" && u.costUsd !== null
-        ? { costUsd: u.costUsd, basis: "exact" as CostBasis }
-        : this.app.spend.priceReply({ provider, account, model, inputTokens: u.inputTokens, outputTokens: u.outputTokens, cachedTokens: u.cachedInputTokens });
-    // A plan sign-in isn't billed: its figure is what the use would cost.
-    return { ...tokens, costUsd: priced.costUsd, basis: kind === "signin" ? "plan" : priced.basis };
+    return oneShotCost(this.app, t, u, local);
   }
 
   /**
@@ -1034,7 +1006,7 @@ export function askRoutes(app: App): Route[] {
       return machines ? found : found.choices;
     }),
     route("GET", "/api/rooms/:id/asks", ({ params }) => {
-      if (!app.store.getRoom(params.id)) throw new HttpError(404, "room not found");
+      if (!app.store.getRoom(params.id)) throw new HttpError(404, "That chat isn't here any more.");
       return app.asks.list(params.id);
     }),
     route("POST", "/api/asks", async ({ body }) => {

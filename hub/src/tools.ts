@@ -32,7 +32,7 @@ export async function githubStatus(app: App): Promise<GitHubStatus> {
 export function githubLogin(app: App) {
   const env = app.providers.agentEnv();
   const gh = Bun.which("gh", { PATH: env.PATH });
-  if (!gh) throw new Error(`GitHub CLI (gh) isn't installed on the hub. Install it with your package manager, e.g. ${installHint("gh", "gh")}.`);
+  if (!gh) throw new Error(`GitHub CLI (gh) isn't installed on the machine. Install it with your package manager, e.g. ${installHint("gh", "gh")}.`);
   const pty = app.pty.spawn(["bash", "-lc", `"${gh}" auth login --hostname github.com --git-protocol https --web && "${gh}" auth setup-git && echo && echo "GitHub is connected. You can close this window."`], {
     title: "GitHub sign-in",
     purpose: "login",

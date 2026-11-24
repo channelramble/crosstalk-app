@@ -7,6 +7,7 @@
 //   chats), never a terminal, approvals, settings or pairing, and each is tied to the hub it belongs to.
 // A Linux machine can be set up from here with one command that installs the hub and links it.
 
+import { settingsPath } from "@crosstalk/shared";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { Device, MachineAgentLink, MachineInfo, MachineInvite, MachineInviteStatus } from "@crosstalk/shared";
@@ -44,10 +45,6 @@ export interface MachinesDeps {
   devicesOfHub: (hubId: string) => Device[];
   /** Where Linux builds of the hub are kept for the one-command setup. */
   distDir?: string;
-  /** A machine is about to be unlinked from here: what uses it lets go first, while this hub can still sign in there. */
-  beforeUnlink?: (id: string) => Promise<void>;
-  /** The linked machines changed (one was linked, unlinked or renamed). */
-  changed?: () => void;
 }
 
 interface Link extends MachineInfo {
@@ -217,7 +214,6 @@ export class Machines {
 
   private saveLinks(links: Link[]) {
     this.deps.kvSet("machines.links", JSON.stringify(links));
-    this.deps.changed?.();
   }
 
   private getLink(id: string): Link | null {
@@ -263,7 +259,7 @@ export class Machines {
 
   /** A refused sign-in is no longer a usable two-way link. */
   signedOut(id: string) {
-    this.updateLink(id, { agents: "signed-out", error: "This machine no longer accepts this hub's sign-in: link it again.", retryAt: null });
+    this.updateLink(id, { agents: "signed-out", error: "This machine no longer accepts the link: link it again.", retryAt: null });
   }
 
   private bindInbound(hubId: string, deviceId: string) {
@@ -356,7 +352,7 @@ export class Machines {
 
   /** The person's tap: make a link two-way now (when agents may reach other chats). */
   connect(id: string): MachineInfo {
-    if (!this.deps.agentsOn()) throw new HttpError(409, "Turn on “Let agents reach your other chats” first (Settings → Teamwork).");
+    if (!this.deps.agentsOn()) throw new HttpError(409, `Turn on “Let agents reach your other chats” first (${settingsPath("together")}).`);
     const l = this.getLink(id);
     if (!l) throw new HttpError(404, "That machine isn't linked with this one");
     if (l.scope !== "full") throw new HttpError(400, "Connect it from the machine it was linked from.");
@@ -400,7 +396,7 @@ export class Machines {
       info = await hubCall<{ hub: PeerHub }>(l.url, "/api/machines/peer", { token: l.token, timeoutMs: 5_000, raw: true });
     } catch (e) {
       const err = e as HttpError;
-      if (err.status === 401) return fail("signed-out", `${l.name} no longer accepts this machine's sign-in: link it again.`, false);
+      if (err.status === 401) return fail("signed-out", `${l.name} no longer accepts this machine: link it again.`, false);
       if (err.status === 404) return fail("needs-update", `${l.name} runs an older Crosstalk: update it.`, false);
       return fail("failed", err.message, true);
     }
@@ -412,7 +408,7 @@ export class Machines {
       res = await hubCall(l.url, "/api/machines/peer", { method: "POST", token: l.token, body: { kind: "back", url: self.url, code, hub: { id: self.id, name: self.name } }, timeoutMs: 60_000, raw: true });
     } catch (e) {
       const err = e as HttpError;
-      if (err.status === 401) return fail("signed-out", `${l.name} no longer accepts this machine's sign-in: link it again.`, false);
+      if (err.status === 401) return fail("signed-out", `${l.name} no longer accepts this machine: link it again.`, false);
       if (err.status === 404) return fail("needs-update", `${l.name} runs an older Crosstalk: update it.`, false);
       return fail("failed", err.message, true);
     }
@@ -471,13 +467,13 @@ export class Machines {
       if (caller.scope === "peer") throw new HttpError(403, "Only the machine that linked this one can introduce others.", "peer_scope");
       if (caller.hubId && hubId === caller.hubId) throw new HttpError(400, "That's the machine asking");
     } else if (caller.hubId && caller.hubId !== hubId) {
-      throw new HttpError(403, "This sign-in belongs to another machine.", "peer_scope");
+      throw new HttpError(403, "This came from a linked machine, which can't do that.", "peer_scope");
     }
     return this.once(`peer:${kind}:${hubId}`, async () => {
       const existing = this.getLink(hubId);
       if (existing && existing.agents === "removing") throw new HttpError(409, "That machine is being unlinked.");
       if (kind === "back" && existing?.inboundDeviceId && existing.inboundDeviceId !== caller.id && caller.scope === "peer" && this.deps.getDevice(existing.inboundDeviceId)) {
-        throw new HttpError(409, "That machine is already connected here through another sign-in.");
+        throw new HttpError(409, "That machine is already linked here.");
       }
       // A known machine at a new address: only that machine itself may say so (its sign-in here).
       if (existing && existing.url !== url && !(kind === "back" && existing.scope === "peer" && existing.inboundDeviceId === caller.id)) throw new HttpError(409, "That machine is linked at another address.");
@@ -633,8 +629,6 @@ export class Machines {
     const link = this.getLink(id);
     if (!link) throw new HttpError(404, "That machine isn't linked with this one");
     const introducedTo = new Set(this.intros().flatMap((i) => i.a === id ? [i.b] : i.b === id ? [i.a] : []));
-    // The model pool ends what it runs there while this hub's sign-in still works (it's capped: an unlink never waits long).
-    if (link.agents !== "removing") await this.deps.beforeUnlink?.(id).catch(() => {});
     this.updateLink(id, { agents: "removing" });
     if (link.inboundDeviceId) this.deps.revokeDevice(link.inboundDeviceId);
     for (const d of this.deps.devicesOfHub(id)) this.deps.revokeDevice(d.id);
@@ -672,7 +666,7 @@ export class Machines {
   peerRemove(caller: Device, id: string) {
     const link = this.getLink(id);
     const bound = (link && link.inboundDeviceId === caller.id) || caller.hubId === id;
-    if (!bound) throw new HttpError(403, "This sign-in can't unlink that machine.", "peer_scope");
+    if (!bound) throw new HttpError(403, "Only that machine itself, or one of your own devices, can unlink it.", "peer_scope");
     if (link && link.agents !== "removing") {
       this.saveLinks(this.links().filter((l) => l.id !== id));
       this.deps.kvSet("machines.forwards", JSON.stringify(this.forwards().filter((f) => !f.url.startsWith(link.url))));
@@ -792,8 +786,8 @@ export class Machines {
 
   private openInvite(token: string): Invite {
     const i = this.invites.get(token);
-    if (!i || i.expiresAt < Date.now()) throw new HttpError(401, "This setup command has expired. Make a new one in Crosstalk: Settings → Machines.");
-    if (i.status === "done") throw new HttpError(401, "This setup command was already used. Make a new one in Crosstalk: Settings → Machines.");
+    if (!i || i.expiresAt < Date.now()) throw new HttpError(401, `This setup command has expired. Make a new one in Crosstalk: ${settingsPath("machines", "Set up a Linux machine")}.`);
+    if (i.status === "done") throw new HttpError(401, `This setup command was already used. Make a new one in Crosstalk: ${settingsPath("machines", "Set up a Linux machine")}.`);
     return i;
   }
 
@@ -802,7 +796,7 @@ export class Machines {
     this.openInvite(token);
     if (arch !== "x64" && arch !== "arm64") throw new HttpError(404, "Unsupported CPU");
     const path = join(this.distDir, `crosstalk-hub-linux-${arch}`);
-    if (!existsSync(path)) throw new HttpError(404, `This hub has no Linux (${arch}) build to hand out yet.`);
+    if (!existsSync(path)) throw new HttpError(404, `This machine has no Linux (${arch}) build of Crosstalk to hand out yet.`);
     return path;
   }
 
@@ -852,12 +846,15 @@ main() {
   }
   TMP="$(mktemp -d)"
   trap 'rm -rf "$TMP"' EXIT
-  echo "Downloading the Crosstalk hub…"
+  echo "Downloading Crosstalk…"
   ask "Couldn't download the hub" "$TMP/crosstalk-hub-linux-$ARCH" "$HUB/api/machines/install/$TOKEN/crosstalk-hub-linux-$ARCH"
   ask "Couldn't download the installer" "$TMP/install.sh" "$HUB/api/machines/install/$TOKEN/install.sh"
   chmod +x "$TMP/crosstalk-hub-linux-$ARCH"
-  if [ -r /dev/tty ]; then bash "$TMP/install.sh" "$TMP/crosstalk-hub-linux-$ARCH" </dev/tty; else bash "$TMP/install.sh" "$TMP/crosstalk-hub-linux-$ARCH" </dev/null; fi
-  DNS="$(tailscale status --json 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["Self"]["DNSName"].rstrip("."))' 2>/dev/null || true)"
+  # The installer's questions (sudo's password) come from the terminal, since this script is what's on the pipe. Whether
+  # there is one is found by opening it: /dev/tty is there and readable without one too (ssh running just this command).
+  if (exec </dev/tty) 2>/dev/null; then bash "$TMP/install.sh" "$TMP/crosstalk-hub-linux-$ARCH" </dev/tty; else bash "$TMP/install.sh" "$TMP/crosstalk-hub-linux-$ARCH" </dev/null; fi
+  # Read without python, as the installer reads it: a bare Linux server may have none.
+  DNS="$(tailscale status --json 2>/dev/null | tr -d '\\n' | sed -n 's/.*"Self"[^{]*{[^}]*"DNSName"[^"]*"\\([^"]*\\)".*/\\1/p' | sed 's/\\.$//' || true)"
   [ -n "$DNS" ] || { echo "Couldn't find this machine's Tailscale name."; exit 1; }
   for _ in $(seq 1 30); do curl -fsS -o /dev/null "https://$DNS/api/health" 2>/dev/null && break; sleep 2; done
   CODE="$("$HOME/.local/bin/crosstalk-hub" pair 30 | sed -n 's/^Pairing code: \\([A-Za-z0-9-]*\\).*/\\1/p')"
@@ -866,7 +863,7 @@ main() {
     --data "{\\"url\\":\\"https://$DNS\\",\\"code\\":\\"$CODE\\"}"
   echo
   echo "  Done. This machine now shows up in Crosstalk."
-  echo "  Next: sign the agents in on this machine (Settings → AI services, with this machine picked at the top)."
+  echo "  Next: sign the agents in on this machine (${settingsPath("ai-services")}, with this machine picked at the top)."
 }
 main "$@"
 `;
@@ -899,7 +896,7 @@ main "$@"
       // The app shows the reason with what to do there; the command prints it with what to do on the machine.
       Object.assign(invite, { status: spent ? "failed" : "waiting", error: reason });
       if (spent) invite.expiresAt = 0;
-      const next = spent ? "This command was tried 3 times, so it no longer works: make a new one in Crosstalk (Settings → Machines)." : "Fix that, then run the same command again.";
+      const next = spent ? `This command was tried 3 times, so it no longer works: make a new one in Crosstalk (${settingsPath("machines", "Set up a Linux machine")}).` : "Fix that, then run the same command again.";
       throw new HttpError(e instanceof HttpError ? e.status : 500, `${reason.replace(/[.\s]*$/, ".")} ${next}`, e instanceof HttpError ? e.code : undefined);
     } finally {
       invite.claiming = false;

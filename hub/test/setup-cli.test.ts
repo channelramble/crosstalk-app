@@ -20,11 +20,18 @@ let server: ReturnType<typeof startServer>;
 let base: string;
 let key: string;
 
+// The checklist speaks of the system it runs on (a LaunchAgent on a Mac, a systemd user service on Linux), so the
+// service played here is that system's, and the words expected are the ones for it.
+const MAC = process.platform === "darwin";
+const SERVICE = MAC
+  ? ({ runningUnder: "launchd", label: "com.crosstalk.hub", file: "/Users/me/Library/LaunchAgents/com.crosstalk.hub.plist", fileExists: true } as const)
+  : ({ runningUnder: "systemd", label: "crosstalk-hub.service", file: "/home/me/.config/systemd/user/crosstalk-hub.service", fileExists: true, linger: true } as const);
+
 beforeAll(() => {
   app = new App({ dbPath: ":memory:", config: { port: 0, host: "127.0.0.1", publicUrl: "https://mini.tail1.ts.net", workspaceRoot: dir, maxHopsDefault: 6 } });
   // What this machine would say, played: the test never looks at its real service, Tailscale or log.
   app.setup.probes = {
-    service: async () => ({ runningUnder: "launchd", label: "com.crosstalk.hub", file: "/Users/me/Library/LaunchAgents/com.crosstalk.hub.plist", fileExists: true }),
+    service: async () => ({ ...SERVICE }),
     tailscale: async () => ({ cli: "tailscale", tried: ["cli"], from: "cli", state: "Running", dnsName: "mini.tail1.ts.net", certs: true, keyExpiry: null, serve: { target: null, funnel: false } }),
     staged: async () => null,
     idleRestart: () => null,
@@ -45,11 +52,11 @@ afterAll(async () => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-/** Runs the CLI as a person or agent would, pointed at the test hub (never this Mac's service: a label that isn't there). */
+/** Runs the CLI as a person or agent would, pointed at the test hub (never this machine's service: a label, and on Linux a unit, that isn't there). */
 async function cli(args: string[], env: Record<string, string> = {}) {
   const proc = Bun.spawn(["bun", MAIN, "setup", ...args], {
     // Codex's sandbox variables only where a test sets them (these tests may run inside one).
-    env: { ...process.env, CODEX_SANDBOX: "", CODEX_SANDBOX_NETWORK_DISABLED: "", CROSSTALK_HUB_SOCKET: app.internalSocket, CROSSTALK_SETUP_KEY: key, CROSSTALK_PORT: "9", CROSSTALK_HOST: "127.0.0.1", CROSSTALK_LABEL: "com.crosstalk.test-none", ...env },
+    env: { ...process.env, CODEX_SANDBOX: "", CODEX_SANDBOX_NETWORK_DISABLED: "", CROSSTALK_HUB_SOCKET: app.internalSocket, CROSSTALK_SETUP_KEY: key, CROSSTALK_PORT: "9", CROSSTALK_HOST: "127.0.0.1", CROSSTALK_LABEL: "com.crosstalk.test-none", CROSSTALK_UNIT: "crosstalk-test-none", ...env },
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -64,7 +71,7 @@ test("setup --json is the running hub's checklist, as documented", async () => {
   expect(r.code).toBe(0);
   const c = JSON.parse(r.out) as SetupChecklist;
   expect(c.schema).toBe(1);
-  expect(c.hub).toMatchObject({ running: true, version: HUB_VERSION, url: "https://mini.tail1.ts.net", service: "launchd", update: null });
+  expect(c.hub).toMatchObject({ running: true, version: HUB_VERSION, url: "https://mini.tail1.ts.net", service: SERVICE.runningUnder, update: null });
   expect(c.items.map((i) => i.id)).toEqual(["service", "version", "tailscale", "https", "public-url", "devices", "push", "agent.claude", "agent.codex", "services", "machines"]);
   expect(item(c, "service")?.state).toBe("done");
   expect(item(c, "https")).toMatchObject({ state: "missing", fix: { command: expect.stringContaining("tailscale serve --bg --https=443 http://127.0.0.1:") } });
@@ -85,11 +92,11 @@ test("setup prints it in words: marks, what to do with each command whole, and h
   const r = await cli([]);
   expect(r.code).toBe(0);
   expect(r.out).toMatch(new RegExp(`^Crosstalk setup on .+ \\(${HUB_VERSION.replace(/\./g, "\\.")}\\)\\n\\d+ of \\d+ done`));
-  expect(r.out).toContain("✓ Runs as a service: Runs as a LaunchAgent (com.crosstalk.hub)");
+  expect(r.out).toContain(MAC ? "✓ Runs as a service: Runs as a LaunchAgent (com.crosstalk.hub)" : "✓ Runs as a service: Runs as a systemd user service (crosstalk-hub)");
   expect(r.out).toContain("! HTTPS address: tailscale serve is off");
   expect(r.out).toMatch(/\n {6}\$ tailscale serve --bg --https=443 http:\/\/127\.0\.0\.1:\d+\n/);
   expect(r.out).toContain("• Codex: Codex 0.160.0 is installed but not signed in.");
-  expect(r.out).toContain("In the app: Settings → AI services → Codex → Sign in");
+  expect(r.out).toContain("In the app: Settings → Accounts → Codex → Sign in");
   expect(r.out).toContain("(asks for your password: run it yourself)");
   expect(r.out).toContain('Then tell it: "Use the crosstalk-setup tools to finish setting up Crosstalk on this machine; ask me before anything that needs my password."');
   // Nobody's email, though the hub knows the sign-in's.
@@ -105,6 +112,7 @@ test("with no hub answering, it prints what it can tell by itself, and makes not
   expect(c.hub.running).toBe(false);
   expect(c.items.map((i) => i.id)).toEqual(["service", "version", "tailscale", "https", "public-url", "devices", "push", "agent.claude", "agent.codex"]);
   if (process.platform === "darwin") expect(item(c, "service")).toMatchObject({ state: "missing", detail: "Crosstalk isn't installed as a service here.", fix: { command: "./install-macos.sh" } });
+  if (process.platform === "linux") expect(item(c, "service")).toMatchObject({ state: "missing", detail: "Crosstalk isn't installed as a service here.", fix: { command: "./install.sh" } });
   for (const i of c.items.slice(2)) expect(i).toMatchObject({ state: "unknown", detail: "Start Crosstalk first, then check again." });
   expect(existsSync(home)).toBe(false);
   // A socket left behind by a hub that stopped reads the same.
@@ -166,7 +174,7 @@ test("a sandbox that blocks the socket but allows localhost: the same checks, re
 
 test("over the hub's own address, a key that isn't the hub's gets the same answer as over the socket", async () => {
   const wrong = { CROSSTALK_SETUP_KEY: "0".repeat(64) };
-  const words = "Crosstalk didn't accept this program's setup key: check that CROSSTALK_HOME is the hub's.";
+  const words = "Crosstalk didn't accept this program's setup key: check that CROSSTALK_HOME is the one Crosstalk's service has.";
   const local = JSON.parse((await cli(["--json"], { ...wrong, CROSSTALK_HUB_SOCKET: join(dir, "not-there.sock"), CROSSTALK_PORT: String(server.port) })).out) as SetupChecklist;
   expect(item(local, "devices")?.detail).toBe(words);
   expect(item(local, "agent.claude")?.state).toBe("unknown");
@@ -286,7 +294,7 @@ test("with no way in, a hub whose service runs is blocked, not stopped: the sand
 test("a key that isn't the hub's gets nothing from it", async () => {
   const r = await cli(["--json"], { CROSSTALK_SETUP_KEY: "0".repeat(64) });
   const c = JSON.parse(r.out) as SetupChecklist;
-  expect(item(c, "devices")?.detail).toBe("Crosstalk didn't accept this program's setup key: check that CROSSTALK_HOME is the hub's.");
+  expect(item(c, "devices")?.detail).toBe("Crosstalk didn't accept this program's setup key: check that CROSSTALK_HOME is the one Crosstalk's service has.");
   expect(c.items.some((i) => i.id === "agent.claude" && i.state !== "unknown")).toBe(false);
   // A member's key isn't the setup key either.
   const room = app.createRoom({ name: "Keys", mode: "direct" });
@@ -505,7 +513,7 @@ test("a hub that stops in the middle of its answer: the command comes back inste
   const hub = await diesMidAnswer(HUB_VERSION);
   try {
     const proc = Bun.spawn(["bun", MAIN, "setup", "--json"], {
-      env: { ...process.env, CODEX_SANDBOX: "", CODEX_SANDBOX_NETWORK_DISABLED: "", CROSSTALK_HUB_SOCKET: join(dir, "not-there.sock"), CROSSTALK_SETUP_KEY: key, CROSSTALK_PORT: String(hub.port), CROSSTALK_HOST: "127.0.0.1", CROSSTALK_LABEL: "com.crosstalk.test-none" },
+      env: { ...process.env, CODEX_SANDBOX: "", CODEX_SANDBOX_NETWORK_DISABLED: "", CROSSTALK_HUB_SOCKET: join(dir, "not-there.sock"), CROSSTALK_SETUP_KEY: key, CROSSTALK_PORT: String(hub.port), CROSSTALK_HOST: "127.0.0.1", CROSSTALK_LABEL: "com.crosstalk.test-none", CROSSTALK_UNIT: "crosstalk-test-none" },
       stdout: "pipe",
       stderr: "pipe",
     });

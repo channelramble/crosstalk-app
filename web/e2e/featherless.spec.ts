@@ -1,6 +1,6 @@
 import type { Page, Route } from "@playwright/test";
 import type { CatalogModel, CatalogSearch, ServicePlan, ServiceTestResult } from "@crosstalk/shared";
-import { test, expect, noHorizontalOverflow } from "./fixtures";
+import { test, expect, noHorizontalOverflow, addAnotherService } from "./fixtures";
 
 // Adding Featherless and finding a model in its catalogue, on a phone screen (390px), and what the app says about its
 // plans: its $25 Chat plan's terms don't allow agents or API use, and agents need its Developer plan, paid per token
@@ -38,11 +38,11 @@ const CHECKED: ServiceTestResult = {
  */
 const CHAT_PLAN: ServicePlan = { id: "feather_pro_plus", name: "Feather Premium", kind: "chat", maxContext: 32_768, concurrency: 4, checkedAt: Date.now() };
 const DEVELOPER_PLAN: ServicePlan = { id: "feather_request_pricing", name: "Request Pricing", kind: "credits", maxContext: null, concurrency: 100, checkedAt: Date.now() };
-const TERMS = "Agents need Featherless's Developer plan. It's paid per token from monthly credits, so set a spending limit in Settings → Costs. The $25 Chat plan doesn't allow agents or API use: Featherless can cancel an account used that way without a refund.";
+const TERMS = "Agents need Featherless's Developer plan. It's paid per token from monthly credits, so set a spending limit in Settings → Usage & costs → Costs. The $25 Chat plan doesn't allow agents or API use: Featherless can cancel an account used that way without a refund.";
 const CHAT_WARNING = "This key is on Featherless's Chat plan, which doesn't allow agents or API use: using it here could get your account cancelled without a refund. Switch to the Developer plan first (paid per token, so set a spending limit).";
-const DEVELOPER_LINE = "This key is on Featherless's Developer plan, which allows agents. Each reply is paid per token from your credits, so set a spending limit in Settings → Costs.";
+const DEVELOPER_LINE = "This key is on Featherless's Developer plan, which allows agents. Each reply is paid per token from your credits, so set a spending limit in Settings → Usage & costs → Costs.";
 /** What the hub says in a chat whose agent runs on a key it read as on the Chat plan (hub/src/featherless.ts chatNotice). */
-const CHAT_NOTE = "Featherless says this key is on its Chat plan, which doesn't allow agents or API use: Featherless can cancel an account used that way without a refund. Agents need its Developer plan: paid per token, so set a spending limit in Settings → Costs. See https://featherless.ai/pricing.";
+const CHAT_NOTE = "Featherless says this key is on its Chat plan, which doesn't allow agents or API use: Featherless can cancel an account used that way without a refund. Agents need its Developer plan: paid per token, so set a spending limit in Settings → Usage & costs → Costs. See https://featherless.ai/pricing.";
 /** A Featherless account as the hub lists it once it's added. */
 const FEATHER_ACCOUNT = account({ id: "feather1", label: "Featherless", kind: "endpoint", account: null, plan: "Custom model", endpoint: { baseUrl: "https://api.featherless.ai", models: [PICK], contextWindow: 32_768, hasKey: true, protocol: "chat", contexts: { [PICK]: 32_768 } } });
 
@@ -112,17 +112,17 @@ async function hub(page: Page) {
 
 const settings = async (page: Page) => {
   await phone(page);
-  await page.goto("/#/settings");
-  await expect(page.getByRole("heading", { name: "AI services", exact: true })).toBeVisible();
+  await page.goto("/#/settings/accounts");
+  await expect(page.getByRole("button", { name: "Add an account", exact: true })).toBeVisible();
 };
-const sheet = (page: Page) => page.getByRole("dialog", { name: "Add an AI service", exact: true });
+const sheet = (page: Page) => page.getByRole("dialog", { name: /^Add (another service|a model on this machine)$/ });
 /** Scrolls so the element starts at the top of the screen (a phone screenshot of just what's being shown). */
 const atTop = (target: ReturnType<Page["getByRole"]>) => target.evaluate((el) => el.scrollIntoView({ block: "start" }));
 
 test("Featherless: its plan in plain words, a key, and a model found by searching its catalogue", async ({ page }) => {
   const h = await hub(page);
   await settings(page);
-  await page.getByRole("button", { name: "Add an AI service", exact: true }).click();
+  await addAnotherService(page);
   const dialog = sheet(page);
   await expect(dialog.getByRole("button", { name: /^Featherless/ })).toContainText("Agents need its Developer plan, paid per token.");
   await dialog.getByRole("button", { name: /^Featherless/ }).click();
@@ -197,7 +197,7 @@ test("Featherless: its plan in plain words, a key, and a model found by searchin
   await expect(dialog).toHaveCount(0);
   await expect(page.getByText("Added. Pick it as the account in a new Codex chat.", { exact: true })).toBeVisible();
   const added = page.getByRole("group", { name: "Codex · Featherless", exact: true });
-  await expect(added.getByText("Codex · Custom model · api.featherless.ai · chat adapter", { exact: true })).toBeVisible();
+  await expect(added.getByText("api.featherless.ai · runs with Codex", { exact: true })).toBeVisible();
   // A hub that can't say which plan the key is on still says what agents need, on the row.
   await expect(added.getByText("Agents need Featherless's Developer plan, paid per token. Its Chat plan doesn't allow them. See featherless.ai/pricing.", { exact: true })).toBeVisible();
 });
@@ -206,7 +206,7 @@ test("a key on the Chat plan: the check says plainly that plan doesn't allow age
   const h = await hub(page);
   h.checked = { ...CHECKED, plan: CHAT_PLAN };
   await settings(page);
-  await page.getByRole("button", { name: "Add an AI service", exact: true }).click();
+  await addAnotherService(page);
   const dialog = sheet(page);
   await dialog.getByRole("button", { name: /^Featherless/ }).click();
   await dialog.getByLabel("API key", { exact: true }).fill("rc_featherless_key");
@@ -234,7 +234,7 @@ test("a key on the Developer plan: allowed, paid per token, priced per model, an
   h.checked = { ...CHECKED, plan: DEVELOPER_PLAN };
   h.catalog = (q) => ({ name: "featherless", q, models: [model({ id: "Qwen/Qwen3-235B-A22B", modelClass: "qwen3moe-235b", params: 235, contextWindow: 262_144, concurrency: 4, price: { input: 0.8, output: 3.4, cached: null } })], matched: 1, total: TOTAL });
   await settings(page);
-  await page.getByRole("button", { name: "Add an AI service", exact: true }).click();
+  await addAnotherService(page);
   const dialog = sheet(page);
   await dialog.getByRole("button", { name: /^Featherless/ }).click();
   await dialog.getByLabel("API key", { exact: true }).fill("rc_featherless_key");
@@ -280,9 +280,9 @@ test("a Featherless account's row says which plan its key is on: the Chat plan w
   await expect(added.getByText(CHAT_WARNING)).toHaveCount(0);
   await noHorizontalOverflow(page);
   await page.screenshot({ ...shot("f10-featherless-row-developer.png"), animations: "disabled" });
-  // Paid per token: the way to a limit is right there, and it lands on Costs.
+  // Paid per token: the limit is set right there, on the account's own row.
   await added.getByRole("button", { name: "Set a spending limit", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Costs", exact: true })).toBeInViewport();
+  await expect(page.getByRole("dialog", { name: "Set a spending limit", exact: true })).toBeVisible();
 });
 
 test("in a chat on such a key, Crosstalk's note says what the plan allows and links Featherless's plans", async ({ page, request, token }) => {
@@ -314,7 +314,7 @@ test("in a chat on such a key, Crosstalk's note says what the plan allows and li
 test("a model that can't run tools is still yours to pick, and a 256K model is saved at the plan's 32K", async ({ page }) => {
   const h = await hub(page);
   await settings(page);
-  await page.getByRole("button", { name: "Add an AI service", exact: true }).click();
+  await addAnotherService(page);
   const dialog = sheet(page);
   await dialog.getByRole("button", { name: /^Featherless/ }).click();
   await dialog.getByLabel("API key", { exact: true }).fill("rc_featherless_key");
@@ -348,7 +348,7 @@ test("a model that can't run tools is still yours to pick, and a 256K model is s
 test("a search that nothing matches, and one the hub can't run, both say what to do next", async ({ page }) => {
   const h = await hub(page);
   await settings(page);
-  await page.getByRole("button", { name: "Add an AI service", exact: true }).click();
+  await addAnotherService(page);
   const dialog = sheet(page);
   await dialog.getByRole("button", { name: /^Featherless/ }).click();
   await dialog.getByLabel("API key", { exact: true }).fill("rc_featherless_key");
@@ -385,7 +385,7 @@ test("a check that couldn't read the catalogue still offers the search, not 22,4
   // The hub's answer when Featherless's list didn't come back: still a catalogue service, with nothing counted.
   h.checked = { ...CHECKED, authOk: null, catalog: { name: "featherless", total: 0 }, problems: ["Featherless's model list answered with error 500. Try again in a minute. Crosstalk needs its model list to find a model for you."] };
   await settings(page);
-  await page.getByRole("button", { name: "Add an AI service", exact: true }).click();
+  await addAnotherService(page);
   const dialog = sheet(page);
   await dialog.getByRole("button", { name: /^Featherless/ }).click();
   await dialog.getByLabel("API key", { exact: true }).fill("rc_featherless_key");

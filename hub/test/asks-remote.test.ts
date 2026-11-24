@@ -88,11 +88,11 @@ afterAll(() => {
   for (const d of dirs) rmSync(d, { recursive: true, force: true });
   // Back to what providers/all.ts registers.
   registerDriver("claude", (ctx) => {
-    if (!ctx.bin) throw new Error("Claude Code isn't installed on the hub. Install it under Agents & sign-ins.");
+    if (!ctx.bin) throw new Error("Claude Code isn't installed on the machine. Install it under Agents & sign-ins.");
     return new ClaudeDriver(ctx, ctx.bin);
   });
   registerDriver("codex", (ctx) => {
-    if (!ctx.bin) throw new Error("Codex isn't installed on the hub. Install it under Agents & sign-ins.");
+    if (!ctx.bin) throw new Error("Codex isn't installed on the machine. Install it under Agents & sign-ins.");
     return new CodexDriver(ctx, ctx.bin);
   });
 });
@@ -470,7 +470,7 @@ describe("asking a model on another machine", () => {
     expect(await ask({ ...row.target, account: "default", model: "opus" })).toMatchObject({ label: "Claude Code · opus · on the PC" });
   });
 
-  test("with no question typed, B is asked the usual one; the model B would use by default is B's, and a plan sign-in's figure is notional", async () => {
+  test("with no question typed, B is asked the usual one; the model B would use by default is B's, and a account on a plan's figure is notional", async () => {
     const { a, b } = await pair();
     const c = a.chat("codex");
     const msg = a.say(c, "human", "Fix it");
@@ -918,11 +918,11 @@ describe("what a failed call says", () => {
   test("each way a linked machine can fail is a sentence with a way out", () => {
     expect(peerProblem(err(502, "Couldn't reach 127.0.0.1:7777: refused", "unreachable"), "PC", url)).toBe("The PC didn't answer. Check it's on, then Try again.");
     expect(peerProblem(err(403, "127.0.0.1:7777: Turn on Agents across chats on PC in Settings, then ask again.", "off"), "PC", url)).toBe("Agents across chats is off on the PC: turn it on in its Settings.");
-    expect(peerProblem(err(401, "127.0.0.1:7777: unauthorized"), "Linux box", url)).toBe("The Linux box no longer accepts this machine's sign-in. Link it again under Settings → Machines, then Try again.");
+    expect(peerProblem(err(401, "127.0.0.1:7777: unauthorized"), "Linux box", url)).toBe("The Linux box no longer accepts this machine. Link it again under Settings → Machines, then Try again.");
     expect(peerProblem(err(403, "x", "not_linked"), "PC", url)).toBe("The PC doesn't have this machine linked for this yet. Check Settings → Machines, then Try again.");
     expect(peerProblem(err(404, "127.0.0.1:7777: not found", "not_found"), "PC", url)).toBe("The PC needs a Crosstalk update before it can answer. Update it, then Try again.");
     expect(peerProblem(err(429, "127.0.0.1:7777: PC is answering other questions right now.", "busy"), "PC", url)).toBe("The PC is busy with other questions. Try again in a moment.");
-    expect(peerProblem(err(409, "127.0.0.1:7777: Codex isn't signed in. Sign in under Settings → AI services, then ask again.", "not_signed_in"), "PC", url)).toBe("On the PC: Codex isn't signed in. Sign in under Settings → AI services, then ask again.");
+    expect(peerProblem(err(409, "127.0.0.1:7777: Codex isn't signed in. Sign in under Settings → Accounts, then ask again.", "not_signed_in"), "PC", url)).toBe("On the PC: Codex isn't signed in. Sign in under Settings → Accounts, then ask again.");
     expect(peerProblem(err(409, "127.0.0.1:7777: API key reached its $5 limit, so this reply didn't start.", "budget"), "Anna's laptop", url)).toBe("On Anna's laptop: API key reached its $5 limit, so this reply didn't start. Raise its limit in Settings there, or pick another.");
     expect(peerProblem(err(500, ""), "PC", url)).toBe("The PC couldn't answer. Try again.");
     // A plan window is not a money limit: B's sentence already says what to do, and there is nothing to raise.
@@ -1030,16 +1030,6 @@ describe("picking the model of another machine's agent", () => {
     expect((await a.app.asks.targetsFor(c.room.id, { models: true })).choices.find((r) => r.handle === "claude-on-pc")).toMatchObject({ target: { model: "opus" }, label: "Claude Code · Opus 5.5 · on the PC" });
   });
 
-  test("B's model pool runs one model: its row says so on A, and nothing is offered to pick", async () => {
-    const { a, b } = await pair();
-    const pool = b.app.providers.setEndpointAccount("claude", { label: "Model pool", baseUrl: "http://127.0.0.1:18080", models: ["qwen-pool", "qwen-other"], contextWindow: 65536 });
-    b.app.store.kvSet("pool.accounts", JSON.stringify({ claude: pool.id }));
-    const c = a.chat("codex");
-    const row = (await a.app.asks.targetsFor(c.room.id, { models: true, refresh: true })).choices.find((r) => r.handle === "model-pool-on-pc")!;
-    expect(row).toMatchObject({ fixedModel: "pool", available: true, label: "Model pool · qwen-pool · on the PC" });
-    expect(row.models).toBeUndefined();
-  });
-
   test("what another hub says about its models is checked: odd names dropped, lines cut, levels it names, sizes that are sizes, at most 100", () => {
     const good = { id: "sonnet", label: "Sonnet 4.6", description: "Fast", efforts: ["low", "high"], defaultEffort: "high", isDefault: false, contextWindow: 200_000, paid: "yes", typicalCostUsd: 0.02 };
     const models = readPeerModels([
@@ -1068,7 +1058,8 @@ describe("picking the model of another machine's agent", () => {
     expect(rows[0].models).toHaveLength(1);
     expect(rows[1].models).toBeUndefined();
     expect(rows.reduce((n, r) => n + (r.models?.length ?? 0), 0)).toBe(1_000);
-    expect(readPeerRows([{ ...row, fixedModel: "pool" }, { ...row, fixedModel: "update" }]).map((r) => r.fixedModel)).toEqual(["pool", undefined]);
+    // Why a model can't be picked is this machine's to say, never another hub's (an older one's model pool said "pool").
+    expect(readPeerRows([{ ...row, fixedModel: "pool" }, { ...row, fixedModel: "update" }]).map((r) => r.fixedModel)).toEqual([undefined, undefined]);
   });
 
   test("a card for another of B's models is named as B names the account, through a failed look too", async () => {

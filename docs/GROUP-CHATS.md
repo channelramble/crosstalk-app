@@ -1,8 +1,20 @@
 # Group chats
 
-Several agents in one chat, each with its own account, model and effort: group rooms are folded into chats. Every
-room that isn't a chat with one agent is a group chat now, so the multi-agent rooms from before open in the chat
-screen with everything they had.
+Several agents in one chat, each with its own account, model and effort.
+
+## Using one
+
+1. **Start it**: on Home, **Start a group chat** (or New chat → Group chat). It starts with Claude Code and Codex;
+   **Add an agent** lists every account that can join, one tap each.
+2. **Choose how they work together**: *One leads, the others help when asked*, *Everyone answers in turn*, or *One
+   builds, another reviews*. You can change it later in Chat settings.
+3. **Talk to them**: a plain message goes to whoever the line above the message box says. `@name` asks one agent,
+   `@all` asks everyone. Each agent at work has its own Stop.
+
+Claude Code and Codex can be in a group chat, on any of their accounts (a plan, an API key, another service or one of
+your own models).
+
+The rest of this page is for people working on Crosstalk itself: how group chats are built.
 
 ## Data
 
@@ -14,14 +26,22 @@ screen with everything they had.
   every `room.chat` path (rewind, Try again, Send now, Ask others, pins, search) applies; one-agent-only paths check
   `!room.chat.group` (Mac session sync, the teamwork helper, messages from other chats' agents).
 - Who answers a message that @mentions nobody is `Room.mode`: `direct` the lead (`leadMemberId`, else the first agent),
-  `roundrobin` everyone in turn, the lead first (`turnOrder` in shared), `review` Build & review. Old lead and relay
+  `roundrobin` everyone in turn, the lead first (`turnOrder` in shared), `review` one builds, another reviews. Old lead and relay
   rooms work like `direct`; round-robin isn't folded into `direct` any more.
 
 ## Hub
 
-- `POST /api/chats/group` (`Chats.createGroup`): 2 to 6 agents (`GROUP_MIN`/`GROUP_MAX`), Claude Code or Codex, each
-  with its settings or Settings → Defaults; handles from the name given, else the account's name, else the agent's own
-  (`Chats.groupHandle`, also used when an agent joins later). `POST /api/rooms` makes a group chat too.
+- `POST /api/chats/group` (`Chats.createGroup`): 2 to 6 agents (`GROUP_MIN`/`GROUP_MAX`), Claude Code or Codex on any of
+  their accounts (plan sign-ins, API keys, AI services and your own models), each with its settings or Settings →
+  Defaults; handles from the name given, else the account's name, else the agent's own (`Chats.groupHandle`, also used
+  when an agent joins later). `answers` is `lead`, `turns` or `review` (a group can start as one builds, another
+  reviews; hubs up to 0.8.1 took only the first two); `rounds` (1 to 25 review rounds, kept as `maxHops = rounds * 2 - 1`)
+  and `parallel` are optional and default to what Settings gives new chats. `POST /api/rooms` makes a group chat too.
+- Crosstalk's own agent and OpenCode can't be in a group chat, and `createGroup` says so in those words: neither driver
+  reads `DriverContext.chat.group` (no group briefing in their prompt, no room tools: OpenCode's Crosstalk MCP entry is
+  the one-agent toolset, Crosstalk's own agent has no link to the hub's tools at all), and the engine only trusts Claude
+  Code and Codex to say when they have a message in a group (`sink.taken`, the give-back in `finishRunning`). A service
+  they run joins a group once it's added for Claude Code or Codex.
 - Turns (engine.ts): group chats get the room-style briefing (`buildSystemNote`, group wording) and labelled digest
   (`buildTurnPrompt`), with `messageIds` for rewinds. Drivers get `DriverContext.chat.group`: the room tools (pre-allowed:
   they only reach that chat) and a group system prompt; Codex keeps a private app-server for them.
@@ -51,15 +71,35 @@ screen with everything they had.
 - After an edit or unsend, an agent that went back reads again from its own reply before the message (`Store.lastReplySeq`),
   and replies it was still owed stay owed.
 
+## Helpers and questions in a group chat
+
+- Each agent of a group chat has its own "Helpers run on" (`member.config.helpersOn`, hub/src/helpers.ts):
+  New group chat's agent rows offer it, a new agent starts with the machine's default (Settings → Agents together), and
+  the tools and note reach a group's agents as they do a chat's. A helper's cards and rows show under the agent that
+  started it. Quick questions (`ask_codex`, `ask_agent`) stay one-agent chats only: the other agents are in the chat.
+
 ## Web
 
 - `web/src/groupChat.ts` (pure, groupChat.test.ts): `whoAnswers`, `answersLine`, `sendLabel`/`sendName`, `workQueue`,
   `notAnswered` (Answer now, "Not answered by @codex": another agent's reply after your message doesn't answer it),
-  `retriedTurns` (a failed reply is answered only by a later reply of the same agent), `suggestHandles`. Views:
-  `NewGroupDialog` (New chat → Group chat, and Home), `GroupSettings` (who answers, lead, review rounds, parallel work,
-  agents through `AgentDialog`, reachability, pin, duplicate, export, delete twice), `GroupAvatar`; `ChatScreen`,
+  `retriedTurns` (a failed reply is answered only by a later reply of the same agent), `suggestHandles`,
+  `groupAgentOptions` (the rows of "Add an agent"), `ANSWER_OPTIONS` and `moreLine`. Views:
+  `NewGroupDialog` (New chat → Group chat, and Home), the Chat settings sheet (how they work together first, then one
+  block per agent; pin, duplicate, export, delete twice under This chat), `GroupHow` (the choice both share), `GroupAvatar`; `ChatScreen`,
   `Composer`, `ChatControls` (an agent picker), `WorkingPanel` (`GroupStatus`: a line and a Stop per agent at work),
-  `ChatSidebar` (a Group chats section), `DuplicateDialog` (These agents) handle `room.chat.group`.
+  `ChatSidebar` (a row among the other chats, by state, with the group's avatars), `DuplicateDialog` (These agents)
+  handle `room.chat.group`.
+- Setting one up (web/e2e/groupSetup.spec.ts): **an agent is an account**. "Add an agent" lists every account on the
+  picked machine that can answer in a group, one tap each (`groupAgentOptions`): Claude Code and Codex on their plan
+  sign-ins and API keys, then the AI services and your own models one of them runs (this machine's first), named as New
+  chat names them. One that can't be added now stays listed and says why ("Not signed in", "Not installed"); services
+  only Crosstalk's own agent or OpenCode run get one quiet line under the list. The two agents a new group starts with
+  are Claude Code and Codex on your defaults, on an account that can answer (`answeringChoice`, as New chat does).
+- **One choice, "How they work together"** (`GroupHow`, the same in New group chat and the chat's settings): "One leads,
+  the others help when asked" (`direct`), "Everyone answers in turn" (`roundrobin`), "One builds, another reviews"
+  (`review`). Who leads, the most review rounds (review only) and "Let agents work at the same time" are behind "More",
+  whose own line says what they are now ("@claude leads · up to 3 review rounds"), so nothing behind the fold is a
+  surprise. New group chat sends `rounds` and `parallel` only when they were changed there.
 - In a group chat `@name` means that agent answers (the @ popup lists the chat's agents and @all); the line above the box
   says who answers and in what order, and Send reads "Send to @codex". Ask others is in a message's actions.
 - `RoomView` stays only for rooms on hubs from before group chats.

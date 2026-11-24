@@ -151,8 +151,8 @@ describe("Claude Code driver (against a fake headless CLI)", () => {
     const d = new ClaudeDriver(c, join(FIX, "fake-claude"));
     const { sink, rec } = recordingSink();
     const res = await d.runTurn({ turnId: "t1", prompt: "/compact", systemNote: null }, sink);
-    expect(res).toEqual({ ok: true, text: "Compacted the conversation: 22k → 2k tokens." });
-    expect(rec.activities.some((a) => a.title.startsWith("Compacted the conversation"))).toBe(true);
+    expect(res).toEqual({ ok: true, text: "Summarized the earlier messages: 22k → 2k tokens." });
+    expect(rec.activities.some((a) => a.title.startsWith("Summarized the earlier messages"))).toBe(true);
     const args = JSON.parse(readFileSync(argsFile, "utf8").trim().split("\n")[0]);
     expect(JSON.parse(readFileSync(args[args.indexOf("--settings") + 1], "utf8"))).toMatchObject({ autoCompactWindow: 200000, fastMode: true });
     await d.dispose();

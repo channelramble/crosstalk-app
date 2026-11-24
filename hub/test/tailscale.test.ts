@@ -111,12 +111,9 @@ test("the CLI answers: this machine's status and where serve sends https, asked 
   expect(parseTailscaleStatus(a.status)).toEqual({ state: "Running", dnsName: "mini.tail1.ts.net", certs: true, keyExpiry: null });
   expect(parseServeStatus(a.serve, "mini.tail1.ts.net")).toEqual({ target: "http://127.0.0.1:7420", funnel: false });
   expect(selfTailscaleIPv4(a.status)).toBe("100.64.0.9");
-  // No peers unless they're asked for: nothing about the tailnet is read when only this machine is the question.
+  // Never the peers: nothing about the rest of the tailnet is read.
   // (Both questions go at once, so the log's order isn't the asking order.)
   expect(cli.runs().sort()).toEqual(["serve status --json shlvl=yes", "status --json --self --peers=false shlvl=yes"]);
-  const peers = await askTailscale({ peers: true }, { appDir: "/nonexistent" });
-  expect(peers.from).toBe("cli");
-  expect(cli.runs().at(-1)).toBe("status --json shlvl=yes");
 });
 
 test("the shell hint reaches the CLI, so the macOS app's own binary answers instead of trying to open the GUI", async () => {
@@ -151,7 +148,9 @@ test("the GUI error on stdout with exit 0 is never an answer: the app's own API 
     expect(parseServeStatus(a.serve, "mini.tail1.ts.net")).toEqual({ target: "http://127.0.0.1:7420", funnel: false });
     // Asked the documented way: the socket's name as Host, the token as an HTTP Basic password with no user — and
     // before any of that, one read with no credential at all, to see that tailscaled is what listens there.
-    expect(app.seen.map((s) => s.path)).toEqual(["/localapi/v0/status?peers=false", "/localapi/v0/status?peers=false", "/localapi/v0/serve-config"]);
+    // (The two questions after it go at once, so which of them the app hears first isn't the asking order.)
+    expect(app.seen[0]).toMatchObject({ path: "/localapi/v0/status?peers=false", auth: null });
+    expect(app.seen.slice(1).map((s) => s.path).sort()).toEqual(["/localapi/v0/serve-config", "/localapi/v0/status?peers=false"]);
     expect(app.seen.every((s) => s.host === "local-tailscaled.sock")).toBe(true);
     expect(app.seen.map((s) => s.auth)).toEqual([null, `Basic ${btoa(`:${app.token}`)}`, `Basic ${btoa(`:${app.token}`)}`]);
   } finally {

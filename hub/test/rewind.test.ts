@@ -30,7 +30,7 @@ class Agent implements AgentDriver {
   private seen: string[] = [];
   constructor(private ctx: DriverContext) {}
   async runTurn(input: TurnInput, sink: TurnSink): Promise<TurnResult> {
-    if (Agent.inApp) return { ok: false, error: "This conversation is open in the Claude app right now. Close it there, then tap Try again." };
+    if (Agent.inApp) return { ok: false, error: "This chat is open in the Claude app right now. Close it there, then tap Try again." };
     Agent.prompts.push(input.prompt);
     // A conversation is kept, as Claude Code's is (a fresh session starts without one).
     sink.saveSession({ sessionId: "fake-session" });
@@ -43,7 +43,7 @@ class Agent implements AgentDriver {
     return { ok: true };
   }
   async rewind(messageId: string): Promise<string[]> {
-    if (Agent.summarized) throw new Error("Claude Code can't go back to before that message, usually because it has summarized the conversation since.");
+    if (Agent.summarized) throw new Error("Claude Code can't go back to before that message, usually because it has summarized the earlier messages since.");
     if (!this.seen.includes(messageId)) throw new Error("This message can't be rewound to.");
     Agent.rewound.push(messageId);
     this.seen = this.seen.slice(0, this.seen.indexOf(messageId));
@@ -65,7 +65,7 @@ class Session implements AgentDriver {
   static fail = 0;
   static inApp = false;
   async runTurn(input: TurnInput, sink: TurnSink): Promise<TurnResult> {
-    if (Session.inApp) return { ok: false, error: "This conversation is open in the Claude app right now. Close it there, then tap Try again." };
+    if (Session.inApp) return { ok: false, error: "This chat is open in the Claude app right now. Close it there, then tap Try again." };
     const uuid = crypto.randomUUID();
     Session.inputs.push({ uuid, prompt: input.prompt });
     for (const id of input.messageIds ?? []) Session.refs.set(id, uuid);
@@ -187,7 +187,7 @@ test("rewinding needs a reply with something after it, in a chat", async () => {
     const legacy = { id: "r_legacy", name: "Neither", cwd: t.room.cwd, mode: "direct" as const, leadMemberId: null, maxHops: 0, rounds: 1, parallel: false, createdAt: 1, updatedAt: 1, archived: false };
     t.app.store.insertRoom(legacy);
     const old = t.app.engine.systemMessage(legacy.id, "Crosstalk restarted.");
-    await expect(t.app.rewindTo(old.id, "Phone")).rejects.toThrow("older rooms can't");
+    await expect(t.app.rewindTo(old.id, "Phone")).rejects.toThrow("from an older Crosstalk");
   } finally {
     await t.done();
   }
@@ -218,7 +218,7 @@ test("a reply that fails before the agent takes the message in gives it back: Ta
     // Open in the Claude app: the reply fails, and the message is the user's again (the agent never read it).
     Agent.inApp = true;
     const login = await t.say("Fix the login page");
-    expect(t.messages().slice(-1)[0]).toStartWith("agent:error:⚠️ This conversation is open");
+    expect(t.messages().slice(-1)[0]).toStartWith("agent:error:⚠️ This chat is open");
     expect(member().readSeq).toBeLessThan(seq(login.id));
     // Take back: just removed, with its failed reply. No rewind (Claude Code would refuse one: it never had it).
     const back = await t.app.reviseMessage(login.id, null, "Phone");
@@ -237,7 +237,7 @@ test("a reply that fails before the agent takes the message in gives it back: Ta
     expect(Agent.rewound).toEqual([]);
     expect(Agent.prompts.at(-1)).toBe("Fix the signup form");
     const [failed, answer] = t.messages().slice(-2);
-    expect(failed).toStartWith("agent:error:⚠️ This conversation is open");
+    expect(failed).toStartWith("agent:error:⚠️ This chat is open");
     expect(answer).toBe("agent:done:Answer to: Fix the signup form");
     expect(t.app.store.getMessage(signup.id)?.text).toBe("Fix the signup form");
 
@@ -325,7 +325,7 @@ test("rewinding to a reply over messages the agent never got takes back all of t
     const failing = (prompt: string) => prompt.includes("NEVER_GOT");
     registerDriver("claude", (c) => {
       const inner = new Agent(c);
-      return { provider: "claude", runTurn: (input: TurnInput, sink: TurnSink) => (failing(input.prompt) ? Promise.resolve({ ok: false, error: "This conversation is open in the Claude app right now." }) : inner.runTurn(input, sink)), interrupt: async () => {}, dispose: async () => {}, rewind: (id: string) => inner.rewind(id) };
+      return { provider: "claude", runTurn: (input: TurnInput, sink: TurnSink) => (failing(input.prompt) ? Promise.resolve({ ok: false, error: "This chat is open in the Claude app right now." }) : inner.runTurn(input, sink)), interrupt: async () => {}, dispose: async () => {}, rewind: (id: string) => inner.rewind(id) };
     });
     await t.app.engine.memberChanged(t.app.store.listMembers(t.room.id)[0].id);
     await t.say("NEVER_GOT one");
@@ -349,7 +349,7 @@ test("an agent that can't go back (its conversation was summarized since) says h
     Agent.summarized = true;
     const refused = await t.app.reviseMessage(bad.id, null, "Phone").then(() => null, (e) => e);
     expect(refused).toMatchObject({ status: 409, code: "rewind_failed" });
-    expect(refused.message).toContain("summarized the conversation since");
+    expect(refused.message).toContain("summarized the earlier messages since");
     expect(refused.message).toContain("Start fresh to unsend it");
     // Nothing went: the message and its failed reply are still there.
     expect(t.messages()).toHaveLength(4);

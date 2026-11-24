@@ -4,7 +4,8 @@ import { join } from "node:path";
 import type { LoginFlow, ModelOption } from "@crosstalk/shared";
 import { HOME, readSecrets } from "../config";
 import { StdioRpc } from "../agents/jsonrpc";
-import { installHint, run, type ProviderModule } from "./index";
+import { run, type ProviderModule } from "./index";
+import { withNpm } from "./node";
 
 let acpFlag: { bin: string; flag: string } | null = null;
 
@@ -28,7 +29,7 @@ export const geminiProvider: ProviderModule = {
   installCommand: [
     "bash",
     "-lc",
-    `set -e; if ! command -v npm >/dev/null 2>&1; then echo "Gemini CLI needs Node.js (npm). Install it first, e.g. ${installHint("node", "nodejs npm")}"; exit 1; fi; npm install -g --prefix "$HOME/.npm-global" @google/gemini-cli@latest; echo; echo "Installed: $($HOME/.npm-global/bin/gemini --version)"`,
+    `set -e; ${withNpm("Gemini CLI")}; echo "Installing Gemini CLI…"; npm install -g --prefix "$HOME/.npm-global" @google/gemini-cli@latest; echo; echo "Installed: $($HOME/.npm-global/bin/gemini --version)"`,
   ],
 
   async checkAuth(app) {

@@ -4,9 +4,9 @@ import type { ModelOption } from "@crosstalk/shared";
 import { MODEL_FIND_FROM, contextLabel, findModels, isNewModel, modelGroups, modelOptionText } from "../models";
 
 /** One choice in a menu of the chat's control row: its name, badges, a line of help, and a check on the one in use. */
-export function MenuItem({ on, title, help, badges = [], tone = "", onClick }: { on: boolean; title: string; help?: string; badges?: string[]; tone?: string; onClick: () => void }) {
+export function MenuItem({ on, title, help, badges = [], tone = "", value, onClick }: { on: boolean; title: string; help?: string; badges?: string[]; tone?: string; /** What the choice is to the machine (a model's id), for finding it by that. */ value?: string; onClick: () => void }) {
   return (
-    <button className={`pop-item ${on ? "on" : ""} ${tone}`} onClick={onClick} role="menuitemradio" aria-checked={on}>
+    <button type="button" className={`pop-item ${on ? "on" : ""} ${tone}`} onClick={onClick} role="menuitemradio" aria-checked={on} data-value={value}>
       <span className="pop-item-text">
         <span className="pop-item-title">
           {title}
@@ -70,6 +70,7 @@ export function ModelChoices({ models, current, note, onChoose, startWithMore = 
     <MenuItem
       key={m.id}
       on={current === m.id}
+      value={m.id}
       title={m.label}
       badges={[m.isDefault ? "Default" : "", isNewModel(m) ? "New" : "", m.noTools ? "No tools" : ""]}
       help={[m.description, contextLabel(m)].filter(Boolean).join(" · ") || undefined}

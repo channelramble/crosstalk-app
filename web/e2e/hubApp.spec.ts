@@ -44,7 +44,7 @@ const PLAN = {
   possible: true,
   whyNot: null,
   serviceOnly: false,
-  steps: ["Copies the hub to ~/.local/bin/crosstalk-hub.", "Adds a background service (~/Library/LaunchAgents/com.crosstalk.hub.plist) that starts the hub when you log in."],
+  steps: ["Puts Crosstalk at ~/.local/bin/crosstalk-hub.", "Adds a background service (~/Library/LaunchAgents/com.crosstalk.hub.plist) that starts it when you log in."],
   choices: [
     { id: "tailscale", label: "Reach it from your phone", detail: "Publishes it to your own Tailscale devices over HTTPS.", on: true },
     { id: "power", label: "Keep the Mac awake", detail: "Stops sleep and restarts after a power cut (pmset). macOS asks for your password.", on: true },
@@ -224,7 +224,7 @@ test("Pair a phone: a one-time code, its QR and when it expires", async ({ page 
   // Not on Tailscale: the code, and why a phone can't use it yet; no QR to a place it can't reach.
   await app.answer("pair", { ...CODE, base: null, link: null, qrSvg: null });
   await page.getByRole("button", { name: "Make another" }).click();
-  await expect(page.getByText(/This hub isn't on your Tailscale network yet/)).toBeVisible();
+  await expect(page.getByText(/This computer isn't on your Tailscale network yet/)).toBeVisible();
   await expect(page.getByRole("img", { name: "Pairing QR code" })).toBeHidden();
   await expect(page.getByRole("button", { name: "Copy link" })).toBeHidden();
   expect((await app.calls()).filter((c) => c === "pair")).toHaveLength(2);
@@ -233,11 +233,11 @@ test("Pair a phone: a one-time code, its QR and when it expires", async ({ page 
 test("an error says what happened and offers a way out", async ({ page }) => {
   const app = await openApp(page, {
     answers: base(STOPPED),
-    fail: { start: { message: "macOS didn't let the hub start. If Crosstalk is switched off under Login Items & Extensions (Allow in the Background), switch it on, then tap Start again.", fix: "loginItems" } },
+    fail: { start: { message: "macOS didn't let Crosstalk start. If Crosstalk is switched off under Login Items & Extensions (Allow in the Background), switch it on, then tap Start again.", fix: "loginItems" } },
   });
   await page.getByRole("button", { name: "Start", exact: true }).click();
   const alert = page.getByRole("alert");
-  await expect(alert).toContainText("macOS didn't let the hub start.");
+  await expect(alert).toContainText("macOS didn't let Crosstalk start.");
   await expect(alert.getByRole("button", { name: "Open Login Items" })).toBeVisible();
   await noHorizontalOverflow(page);
   await alert.getByRole("button", { name: "Open Login Items" }).click();
@@ -252,7 +252,7 @@ test("an error says what happened and offers a way out", async ({ page }) => {
   await expect.poll(async () => (await app.calls()).filter((c) => c === "start").length).toBe(3);
   await alert.getByRole("button", { name: "Show logs" }).click();
   await expect(page.getByRole("heading", { name: "Logs" })).toBeVisible();
-  await expect(page.getByLabel("The hub's log")).toContainText("Crosstalk hub 0.4.1");
+  await expect(page.getByLabel("Crosstalk's log")).toContainText("Crosstalk hub 0.4.1");
 });
 
 test("Try again after a failed Stop or Restart now asks again, and an old error doesn't wait for later", async ({ page }) => {
@@ -323,7 +323,7 @@ test("an error from the menu offers Try again, never only Dismiss", async ({ pag
   await expect(page.getByRole("heading", { name: "Logs" })).toBeVisible();
 
   // Only the setting helps: Open Login Items, not Try again.
-  await fromMenu({ message: "macOS didn't let the hub start.", fix: "loginItems", retry: "start" });
+  await fromMenu({ message: "macOS didn't let Crosstalk start.", fix: "loginItems", retry: "start" });
   await expect(alert.getByRole("button", { name: "Open Login Items" })).toBeVisible();
   await expect(alert.getByRole("button", { name: "Try again" })).toBeHidden();
 });
@@ -333,15 +333,15 @@ test("no hub yet: what Install changes, its output as it runs, then pairing", as
   await expect(page.getByRole("heading", { name: "Not installed" })).toBeVisible();
   await page.getByRole("button", { name: "Install Crosstalk…" }).click();
   await expect(page.getByRole("heading", { name: "Install Crosstalk" })).toBeVisible();
-  await expect(page.getByText("Copies the hub to ~/.local/bin/crosstalk-hub.")).toBeVisible();
+  await expect(page.getByText("Puts Crosstalk at ~/.local/bin/crosstalk-hub.")).toBeVisible();
   await expect(page.getByRole("checkbox", { name: /Reach it from your phone/ })).toBeChecked();
   await page.getByRole("checkbox", { name: /Keep the Mac awake/ }).uncheck();
   await noHorizontalOverflow(page);
   await page.getByRole("button", { name: "Install", exact: true }).click();
   await expect.poll(() => page.evaluate(() => (window as unknown as { __calls: [string, unknown][] }).__calls.find(([c]) => c === "install")?.[1])).toEqual({ tailscale: true, power: false });
-  await app.emit("install", { kind: "line", text: "1/5  Installing the hub" });
+  await app.emit("install", { kind: "line", text: "✓ Installed version 0.9.0" });
   await app.emit("install", { kind: "line", text: "    Pairing code: AB23-9XYZ  (valid until 6:32 PM)" });
-  await expect(page.getByLabel("What the installer says")).toContainText("1/5  Installing the hub");
+  await expect(page.getByLabel("What the installer says")).toContainText("✓ Installed version 0.9.0");
   await app.emit("install", { kind: "done", ok: true, message: "Crosstalk is installed and running.", pairingCode: "AB23-9XYZ", fixes: [] });
   await expect(page.getByText("Crosstalk is installed and running.")).toBeVisible();
   await noHorizontalOverflow(page);
@@ -361,4 +361,31 @@ test("the tray opens the window where it was asked, and Start at login switches 
   await expect.poll(() => page.evaluate(() => (window as unknown as { __calls: [string, unknown][] }).__calls.find(([c]) => c === "set_login_item")?.[1])).toEqual({ on: false });
   await expect(page.getByRole("switch", { name: /Start this app at login/ })).not.toBeChecked();
   await expect(page.getByText(/Off: open it yourself when you want it/)).toBeVisible();
+});
+
+// The two pictures in docs/HUB-APP.md, with what the app itself says (native/hub-tray/core/src/install.rs).
+// CT_DOCS_SHOTS=/some/dir npx playwright test hubApp --project=chromium-390 -g "pictures for the docs"
+test("pictures for the docs", async ({ browser }) => {
+  const dir = process.env.CT_DOCS_SHOTS;
+  test.skip(!dir || test.info().project.name !== "chromium-390", "Set CT_DOCS_SHOTS to a folder to take them (chromium-390 only).");
+  const context = await browser.newContext({ viewport: { width: 380, height: 760 }, deviceScaleFactor: 2, reducedMotion: "reduce", colorScheme: "dark" });
+  const page = await context.newPage();
+  const now = { ...RUNNING, version: "0.9.0", installedVersion: "0.9.0" };
+  const plan = {
+    ...PLAN,
+    steps: [
+      "Puts Crosstalk at ~/.local/bin/crosstalk-hub.",
+      "Runs it in the background (~/Library/LaunchAgents/com.crosstalk.hub.plist): it starts when you log in and comes back if it stops. It listens on this Mac only (port 7420).",
+      "Makes a one-time code to pair your phone. Your data stays in ~/.crosstalk.",
+    ],
+    choices: [{ ...PLAN.choices[0], detail: "Publishes it to your own Tailscale devices over HTTPS (tailscale serve). Nobody else can reach it." }, PLAN.choices[1]],
+  };
+  const app = await openApp(page, { answers: { ...base(now), app_info: { ...base().app_info, version: "0.9.0" }, install_plan: plan } });
+  await expect(page.getByRole("heading", { name: "Running" })).toBeVisible();
+  await page.screenshot({ path: join(dir!, "hub-app-window.png"), fullPage: true, animations: "disabled" });
+  await app.emit("status", { ...NOT_INSTALLED, version: null });
+  await page.getByRole("button", { name: "Install Crosstalk…" }).click();
+  await expect(page.getByRole("heading", { name: "Install Crosstalk" })).toBeVisible();
+  await page.screenshot({ path: join(dir!, "hub-app-install.png"), fullPage: true, animations: "disabled" });
+  await context.close();
 });

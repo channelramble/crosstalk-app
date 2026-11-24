@@ -318,12 +318,11 @@ export class LocalModels {
     await runners.ready();
     const ports = servers.map(portOf);
     const [memory, details] = await Promise.all([processMemory(ports, this.run), Promise.all(servers.map((s) => this.detail(s)))]);
-    const pool = this.app.poolNode.snapshot().server;
     return servers.map((s, i) => {
       const built = this.build(s, details[i], memory.get(ports[i]) ?? null);
       const run = runners.at(ports[i]);
       // Stop is offered for what Crosstalk started; anything else says how to stop it where it runs.
-      return run && run.kind === s.kind ? { ...built, startedId: run.id, stopWhy: null } : { ...built, startedId: null, stopWhy: runners.stopWhy(s, pool.running ? pool.port : null) };
+      return run && run.kind === s.kind ? { ...built, startedId: run.id, stopWhy: null } : { ...built, startedId: null, stopWhy: runners.stopWhy(s) };
     });
   }
 
@@ -392,6 +391,7 @@ export function localModelRoutes(app: App): Route[] {
     // Getting models (localLibrary.ts): each change answers the library as it is then.
     route("GET", "/api/local-models/library", () => lib.view()),
     route("PUT", "/api/local-models/folder", async ({ body }) => lib.setFolder(await input(body))),
+    route("PUT", "/api/local-models/hf-token", async ({ body }) => lib.setHfToken(await input(body))),
     route("GET", "/api/local-models/search", ({ url }) => lib.search(url.searchParams.get("q"))),
     route("GET", "/api/local-models/files", ({ url }) => lib.repoFiles(url.searchParams.get("repo"))),
     route("GET", "/api/local-models/ollama", ({ url }) => lib.ollamaInfo(url.searchParams.get("model"))),

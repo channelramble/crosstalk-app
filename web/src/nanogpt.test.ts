@@ -1,9 +1,10 @@
 // What Settings → AI services says about NanoGPT (web/src/services.ts): its search's summary and chips, a model's price
 // beside its name, and what an account has left to spend — as plain functions, without a hub.
 import { expect, test } from "bun:test";
+import { accountAbout, groupOf } from "./accountsList";
 import type { AgentAccount, CatalogModel, CatalogSearch, ServiceFunds, ServiceTestResult } from "@crosstalk/shared";
 import { servicePreset } from "./presets";
-import { NANOGPT_CHIPS, catalogChips, catalogFacts, catalogPath, catalogPlaceholder, catalogSummary, chooseAgent, fundsLines, fundsWords, isNanoGpt, kindLine, priceLine, protocolFor, serviceFixLine, testLines, tokenCount, usd } from "./services";
+import { NANOGPT_CHIPS, catalogChips, catalogFacts, catalogPath, catalogPlaceholder, catalogSummary, chooseAgent, fundsLines, fundsWords, isNanoGpt, priceLine, protocolFor, testLines, tokenCount, usd } from "./services";
 
 const model = (over: Partial<CatalogModel> = {}): CatalogModel => ({
   id: "deepseek/deepseek-v4.1-flash-uncensored",
@@ -55,14 +56,14 @@ test("the NanoGPT preset: Crosstalk's own agent first, Codex through the adapter
   ]);
 });
 
-test("a NanoGPT account on Crosstalk's agent: its row's words, and where it is changed and removed", () => {
+test("a NanoGPT account on Crosstalk's agent: under Other services, saying where it answers and which agent runs it", () => {
   const a: AgentAccount = { provider: "builtin", id: "nano1", label: "NanoGPT", kind: "endpoint", signedIn: true, account: null, plan: "Custom model", authMethod: "endpoint", error: null, checkedAt: 0, endpoint: { baseUrl: "https://nano-gpt.com/api", models: ["deepseek/deepseek-v4.1-flash-uncensored"], contextWindow: 1_048_576, hasKey: true, protocol: "chat" } };
-  expect(kindLine(a)).toBe("Crosstalk agent · Custom model · nano-gpt.com");
-  expect(serviceFixLine(a)).toBe("Change its address, key or models with Change, or take it away with Remove.");
-  expect(kindLine({ ...a, provider: "codex" })).toBe("Codex · Custom model · nano-gpt.com · chat adapter");
-  // On OpenCode it reads the same: its services are changed and removed on their own rows too, and no adapter is in between.
-  expect(kindLine({ ...a, provider: "opencode" })).toBe("OpenCode · Custom model · nano-gpt.com");
-  expect(serviceFixLine({ ...a, provider: "opencode" })).toBe("Change its address, key or models with Change, or take it away with Remove.");
+  expect(groupOf(a)).toBe("services");
+  expect(accountAbout(a)).toBe("nano-gpt.com · runs with Crosstalk agent");
+  expect(accountAbout({ ...a, provider: "codex" })).toBe("nano-gpt.com · runs with Codex");
+  // On OpenCode it reads the same.
+  expect(groupOf({ ...a, provider: "opencode" })).toBe("services");
+  expect(accountAbout({ ...a, provider: "opencode" })).toBe("nano-gpt.com · runs with OpenCode");
 });
 
 test("a model's price beside its name: in and out per million, and cached input when it's priced apart", () => {

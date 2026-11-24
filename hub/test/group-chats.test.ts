@@ -206,8 +206,37 @@ describe("starting a group chat", () => {
       expect(refused({ members: [{ provider: "claude" }, { provider: "gemini" }] })).toBe("Chats are with Claude Code or Codex");
       expect(refused({ members: [{ provider: "claude" }, { provider: "codex", account: "nope" }] })).toBe("That account doesn't exist for this agent");
       expect(refused({ members: [{ provider: "claude" }, { provider: "codex" }], lead: 2 })).toBe("The lead must be one of the agents");
-      expect(refused({ members: [{ provider: "claude" }, { provider: "codex" }], answers: "random" })).toBe("Say who answers: the lead, or everyone in turn");
+      expect(refused({ members: [{ provider: "claude" }, { provider: "codex" }], answers: "random" })).toBe("Say how they work together: one leads, everyone answers in turn, or one builds and another reviews");
+      // Crosstalk's own agent and OpenCode have no group form, whatever account they'd run on.
+      expect(refused({ members: [{ provider: "claude" }, { provider: "opencode", account: "svc" }] })).toBe("OpenCode can't be in a group chat. Pick Claude Code or Codex for it, on any of their accounts.");
+      expect(refused({ members: [{ provider: "builtin", account: "svc" }, { provider: "codex" }] })).toBe("Crosstalk agent can't be in a group chat. Pick Claude Code or Codex for it, on any of their accounts.");
+      expect(refused({ members: [{ provider: "claude" }, { provider: "codex" }], answers: "review", rounds: 0 })).toBe("Review rounds go from 1 to 25");
+      expect(refused({ members: [{ provider: "claude" }, { provider: "codex" }], answers: "review", rounds: 2.5 })).toBe("Review rounds go from 1 to 25");
+      expect(refused({ members: [{ provider: "claude" }, { provider: "codex" }], parallel: "yes" })).toBe("Say whether agents may work at the same time with true or false");
       expect(refused({ members: [{ provider: "claude", effort: 3 }, { provider: "codex" }] })).toBe("bad effort");
+    } finally {
+      await h.done();
+    }
+  });
+
+  test("one builds and another reviews can be picked from the start, with its rounds and working at the same time", async () => {
+    const h = harness();
+    try {
+      // Nothing said: one leads, with the review rounds and the working at the same time that Settings gives new chats.
+      h.app.setDefaults({ maxHops: 7, parallel: true });
+      expect(group(h)).toMatchObject({ mode: "direct", maxHops: 7, parallel: true });
+      h.app.setDefaults({ maxHops: 5, parallel: false });
+      const review = group(h, { answers: "review", lead: 1 });
+      const members = h.app.store.listMembers(review.id);
+      expect(review).toMatchObject({ mode: "review", leadMemberId: members[1].id, maxHops: 5, parallel: false });
+      // Picked: three rounds are the lead's work and its review three times over (Room.maxHops), as the chat's settings save it.
+      expect(group(h, { answers: "review", rounds: 3, parallel: true })).toMatchObject({ mode: "review", maxHops: 5, parallel: true });
+      expect(group(h, { answers: "review", rounds: 1 })).toMatchObject({ mode: "review", maxHops: 1 });
+      expect(group(h, { answers: "turns", parallel: false })).toMatchObject({ mode: "roundrobin", parallel: false });
+      // It runs as a review from its first message: the lead builds, the other agent checks it.
+      h.app.engine.postHumanMessage(review.id, "Add a health check", "Phone");
+      await h.app.engine.whenIdle();
+      expect(h.given.map((g) => g.handle).slice(0, 2)).toEqual(["codex", "claude"]);
     } finally {
       await h.done();
     }
@@ -348,8 +377,8 @@ describe("who answers", () => {
   });
 });
 
-describe("Try again, Answer now and Send now in a group chat", () => {
-  test("Try again under a failed reply goes to that agent; Answer now to whoever your message is for", async () => {
+describe("Try again, and a message sent while agents work, in a group chat", () => {
+  test("Try again under a failed reply goes to that agent; under your message, to whoever it's for", async () => {
     const h = harness();
     try {
       const room = group(h, { answers: "turns" });
@@ -365,8 +394,8 @@ describe("Try again, Answer now and Send now in a group chat", () => {
       // Nothing failed, nothing unread: nothing to try again.
       expect(() => h.app.engine.retry(room.id, m.claude.id)).toThrow("A later reply already answered this.");
 
-      // "Stop everything" left a message nobody read (it waited behind Claude Code's reply): Answer now sends it to who
-      // it's for.
+      // "Stop everything" left a message nobody read (it waited behind Claude Code's reply): Try again under it sends it
+      // to who it's for.
       h.hold.add("claude");
       h.app.engine.postHumanMessage(room.id, "@claude one more thing", "Phone");
       await Bun.sleep(30);
@@ -401,7 +430,7 @@ describe("Try again, Answer now and Send now in a group chat", () => {
       expect(again.handle).toBe("codex");
       expect(again.prompt).toContain("[Human · Phone]\n@codex `FAIL @codex` build X");
       expect(again.prompt).toContain("Your last reply ended with an error, and the user asked you to try again.");
-      // Answer now: your newest message was answered, so the reply that failed is tried again.
+      // Try again with no agent named (under your message): your newest message was answered, so the reply that failed is tried again.
       const answer = h.app.engine.retry(room.id);
       expect([answer.memberId, answer.triggerMessageId]).toEqual([m.codex.id, build.id]);
       await h.idle();
@@ -429,7 +458,7 @@ describe("Try again, Answer now and Send now in a group chat", () => {
     }
   });
 
-  test("with parallel work, Send now and Read it now go into the reply of the agent whose line they're on", async () => {
+  test("with parallel work, a message goes into the reply of the agent it's for, and Read it now stops the step of the agent whose line it's on", async () => {
     const h = harness();
     try {
       const room = group(h);
@@ -446,29 +475,39 @@ describe("Try again, Answer now and Send now in a group chat", () => {
       h.app.engine.postHumanMessage(room.id, "@codex start the tests", "Phone");
       await Bun.sleep(30);
       expect(h.app.engine.runningTurns(room.id).map((t) => t.memberId).sort()).toEqual([m.claude.id, m.codex.id].sort());
-      // Both have a message of yours waiting. The app says whose line was tapped.
+      // Each goes into the reply of the agent it's for, with no tap, labelled as in its turns. One right after the other:
+      // @codex's comes in while @claude's is on its way, and leaves @claude no turn of its own with nothing in it to answer.
       h.app.engine.postHumanMessage(room.id, "@claude and the docs", "Phone");
       h.app.engine.postHumanMessage(room.id, "@codex and the fixtures", "Phone");
+      for (let i = 0; i < 200 && h.app.engine.queuedTurns(room.id).length; i++) await Bun.sleep(5);
+      expect(h.app.engine.queuedTurns(room.id)).toEqual([]);
+      expect(steered).toEqual([
+        "claude: [Human · Phone]\n@codex start the tests\n(For @codex, not you: they answer it in their own turn.)\n\n[Human · Phone]\n@claude and the docs",
+        "codex: [Human · Phone]\n@claude and the docs\n(For @claude, not you: they answer it in their own turn.)\n\n[Human · Phone]\n@codex and the fixtures",
+      ]);
       const routes = buildRoutes(h.app);
       const post = (path: string, body: unknown) => {
         const r = routes.find((x) => x.method === "POST" && x.pattern.test(path))!;
         return r.handler({ req: new Request("http://hub"), url: new URL(`http://hub${path}`), params: { id: room.id }, device: { id: "d", name: "Phone", platform: "", createdAt: 0, lastSeenAt: null }, body: async () => body });
       };
-      expect(await post(`/api/rooms/${room.id}/send-now`, { memberId: m.codex.id })).toEqual({ sent: true });
-      expect(steered).toEqual(["codex: [Human · Phone]\n@claude and the docs\n(For @claude, not you: they answer it in their own turn.)\n\n[Human · Phone]\n@codex and the fixtures"]);
-      expect(await post(`/api/rooms/${room.id}/read-now`, { memberId: m.claude.id })).toEqual({ reading: false });
+      // An older app's Send now on Codex's line has nothing left to send, and hands nothing twice.
+      expect(await post(`/api/rooms/${room.id}/send-now`, { memberId: m.codex.id })).toEqual({ sent: false, why: "answering" });
+      expect(steered).toHaveLength(2);
+      // The app says whose line was tapped: only that agent's step is stopped.
       expect(await post(`/api/rooms/${room.id}/read-now`, { memberId: m.codex.id })).toEqual({ reading: true });
       expect(read).toEqual(["codex"]);
-      // Claude Code's own waiting turn is still there.
-      expect(h.app.engine.queuedTurns(room.id).map((t) => t.memberId)).toEqual([m.claude.id]);
+      expect(await post(`/api/rooms/${room.id}/read-now`, { memberId: m.claude.id })).toEqual({ reading: true });
+      expect(read).toEqual(["codex", "claude"]);
       h.hold.clear();
       await h.idle();
+      // Each answered in the reply it had: one reply apiece.
+      expect(h.given.map((g) => g.handle).sort()).toEqual(["claude", "codex"]);
     } finally {
       await h.done();
     }
   });
 
-  test("Send now hands your waiting message to the reply that's running when it's for that agent", async () => {
+  test("your message goes into the reply that's running when it's for that agent, and waits for its own agent's turn when it isn't", async () => {
     const h = harness();
     try {
       const room = group(h);
@@ -482,10 +521,12 @@ describe("Try again, Answer now and Send now in a group chat", () => {
       await Bun.sleep(30);
       // A message for Codex waits for Codex's turn: there's nothing to hand to Claude Code.
       h.app.engine.postHumanMessage(room.id, "@codex look at the tests", "Phone");
-      expect(await h.app.engine.sendNow(room.id)).toBe(false);
-      // One for the lead goes into its reply (with what came before it that it hasn't read).
+      await Bun.sleep(20);
+      expect(steered).toEqual([]);
+      expect(await h.app.engine.sendNow(room.id)).toBe(false); // nor on an older app's tap
+      // One for the lead goes into its reply by itself (with what came before it that it hasn't read).
       h.app.engine.postHumanMessage(room.id, "Also the docs", "Phone");
-      expect(await h.app.engine.sendNow(room.id)).toBe(true);
+      for (let i = 0; i < 200 && h.app.engine.queuedTurns(room.id).length > 1; i++) await Bun.sleep(5);
       // Labelled as in its turns: the one for Codex says so, so Claude Code doesn't take it on too.
       expect(steered).toEqual(["claude: [Human · Phone]\n@codex look at the tests\n(For @codex, not you: they answer it in their own turn.)\n\n[Human · Phone]\nAlso the docs"]);
       expect(h.app.engine.queuedTurns(room.id).map((t) => t.memberId)).toEqual([m.codex.id]);
@@ -613,7 +654,7 @@ describe("going back in a group chat", () => {
       await h.say(room, "Hello all");
       const hello = h.app.store.listMessages(room.id).find((x) => x.text === "Hello all")!;
       expect(h.given.map((g) => g.handle)).toEqual(["claude", "codex", "gem"]);
-      await expect(h.app.reviseMessage(hello.id, null, "Phone")).rejects.toThrow("@gem can't go back to an earlier message. Start a fresh session for @gem in the chat's settings, then try again.");
+      await expect(h.app.reviseMessage(hello.id, null, "Phone")).rejects.toThrow("@gem can't go back to an earlier message. Start @gem fresh in the chat's settings, then try again.");
       expect(h.rewound).toEqual([]);
       await h.app.engine.resetSession(h.app.store.getMember(gem.id)!);
       const r = await h.app.reviseMessage(hello.id, null, "Phone");
@@ -666,7 +707,7 @@ describe("going back in a group chat", () => {
       const [hello] = h.app.store.listMessages(room.id);
       // As if read in the room the chat was before (no rewind point for it).
       h.app.store.setMemberSession(m.claude.id, { standIn: "claude", msgRefs: {} });
-      await expect(h.app.reviseMessage(hello.id, null, "Phone")).rejects.toThrow("Start a fresh session for @claude in the chat's settings, then try again.");
+      await expect(h.app.reviseMessage(hello.id, null, "Phone")).rejects.toThrow("Start @claude fresh in the chat's settings, then try again.");
       // After Start fresh it has nothing to forget.
       await h.app.engine.resetSession(h.app.store.getMember(m.claude.id)!);
       const r = await h.app.reviseMessage(hello.id, null, "Phone");

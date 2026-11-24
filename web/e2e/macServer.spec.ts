@@ -158,7 +158,7 @@ test("a dialog waiting on the Mac shows on every screen, leads to This Mac, and 
 
 test("Details from a tab with unsaved defaults open asks once, then lands on This Mac", async ({ page }) => {
   await mac(page, STATUS, [DIALOG]);
-  await page.goto("/#/settings");
+  await page.goto("/#/settings/new-chats");
   // A half-made change in the tab Settings opens on: leaving it asks, and it asks once, not once per way of getting there.
   const defaults = page.getByRole("group", { name: "New Codex chat defaults", exact: true });
   await defaults.locator("summary").click();
@@ -170,7 +170,7 @@ test("Details from a tab with unsaved defaults open asks once, then lands on Thi
     void d.accept();
   });
   await page.locator(".mac-strip").getByRole("button", { name: "Details" }).click();
-  await expect(page.getByRole("tab", { name: "Machines", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("region", { name: "Machines", exact: true })).toBeVisible();
   await expect(page.locator(".mac-waiting")).toContainText("adb (started by an older Crosstalk) wants files on external drives");
   expect(asks).toBe(1);
 });

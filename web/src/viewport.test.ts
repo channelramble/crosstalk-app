@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { screenRoom, type ScreenSize } from "./viewport";
+import { foldOf, POSTURE_STEADY_MS, screenRoom, type ScreenSize } from "./viewport";
 
 /** An iPhone 390 × 844 held upright, as a home-screen app, at 100%, nothing focused: the sizes a test changes. */
 const screen = (s: Partial<ScreenSize>): ScreenSize => ({ width: 390, height: 844, page: 844, tallest: 844, typing: false, shrinks: false, zoom: 1, ...s });
@@ -56,4 +56,28 @@ test("a computer's or an iPad's window made shorter while typing is no keyboard"
   expect(screenRoom(screen({ width: 1440, tallest: 800, page: 400, height: 400, typing: true }))).toEqual({ ...nothing, short: true });
   // An iPad's Stage Manager window made shorter, a keyboard attached: the message box keeps its home-indicator gap.
   expect(screenRoom(screen({ width: 900, tallest: 900, page: 520, height: 520, typing: true }))).toEqual(nothing);
+});
+
+test("two parts of the screen count as a fold only when each has room and they're this screen's", () => {
+  const part = (x: number, y: number, width: number, height: number) => ({ x, y, width, height });
+  const unfolded = { width: 768, height: 906 };
+  // Flat, or a browser that knows no folds.
+  expect(foldOf(null, 1, unfolded)).toBe(null);
+  expect(foldOf(undefined, 1, unfolded)).toBe(null);
+  expect(foldOf([part(0, 0, 768, 906)], 1, unfolded)).toBe(null);
+  // Half-folded: side by side, or one above the other.
+  expect(foldOf([part(0, 0, 384, 906), part(384, 0, 384, 906)], 1, unfolded)).toBe("book");
+  expect(foldOf([part(0, 0, 540, 720), part(574, 0, 540, 720)], 1, { width: 1114, height: 720 })).toBe("book");
+  expect(foldOf([part(0, 0, 412, 502), part(0, 502, 412, 502)], 1, { width: 412, height: 1004 })).toBe("tabletop");
+  // A fold at the window's edge (the app beside another one): a part with no room is no half to lay anything out in.
+  expect(foldOf([part(0, 0, 384, 906), part(384, 0, 0, 906)], 1, { width: 384, height: 906 })).toBe(null);
+  expect(foldOf([part(0, 0, 412, 502), part(0, 502, 412, 0)], 1, { width: 412, height: 502 })).toBe(null);
+  // At a big text size the halves are laid out narrower: under 240 px of the page's own, it's the usual layout.
+  expect(foldOf([part(0, 0, 345, 829), part(345, 0, 345, 829)], 1, { width: 690, height: 829 })).toBe("book");
+  expect(foldOf([part(0, 0, 345, 829), part(345, 0, 345, 829)], 1.5, { width: 690, height: 829 })).toBe(null);
+  // The inner screen's parts while the window is already the cover screen's: not this screen's fold.
+  expect(foldOf([part(0, 0, 384, 906), part(384, 0, 384, 906)], 1, { width: 344, height: 882 })).toBe(null);
+  // Long enough that a phone swung open has passed through half-open, short enough for one set down half-folded.
+  expect(POSTURE_STEADY_MS).toBeGreaterThanOrEqual(700);
+  expect(POSTURE_STEADY_MS).toBeLessThanOrEqual(1500);
 });

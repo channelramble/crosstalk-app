@@ -2,8 +2,8 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { isCrosstalkMcpServer, leanCodexTools, parseCodexQuestionReply, PROVIDER_INFO, wantsLongContext, type AgentQuestion, type ApprovalDecision, type BackgroundTask, type CodexQuestionReply, type PermissionMode, type UsageSnapshot, type UsageWindow } from "@crosstalk/shared";
-import { chatToolTitle } from "../mcp/describe";
-import { autoCompactLimit, CHAT_TOOL_NAMES, COMPACT_COMMAND, ROOM_TOOL_NAMES, type AgentDriver, type ApprovalRequest, type DriverContext, type TurnInput, type TurnResult, type TurnSink } from "./driver";
+import { chatToolTitle, helperToolTitle } from "../mcp/describe";
+import { autoCompactLimit, CHAT_TOOL_NAMES, COMPACT_COMMAND, HELPER_TOOL_NAMES, ROOM_TOOL_NAMES, type AgentDriver, type ApprovalRequest, type DriverContext, type TurnInput, type TurnResult, type TurnSink } from "./driver";
 import { codexLimitHit, type LimitHit } from "./limits";
 import { codexAuthHit, type AuthHit } from "./stale-login";
 import { RpcError, SocketRpc, StdioRpc, type JsonRpc } from "./jsonrpc";
@@ -666,12 +666,17 @@ export class CodexDriver implements AgentDriver {
      * default — helpers on, roles unwritten, the spawn tool's model and effort on offer — and the chat would silently lose the
      * model lock this hub exists to keep (AGENTS.md's first user rule). So openThread asks for `build(false)` instead.
      */
+    // The person chose another account for helper work (helpers.ts): the tools that hand work to it and what to do with
+    // them. With "use the agent's own helpers when that account can't" off, Codex's own helper agents are switched off the
+    // way a lean thread's are, on a Codex that takes that setting; an older one is only told.
+    const onOthers = chat?.helpers && !chat.ephemeral ? chat.helpers : null;
+    const noOwn = !!onOthers?.only && takesLeanTools(serverVersions.get(rpc) ?? null) !== false;
     const build = async (lean: boolean) => {
       // What send() puts in front of the next message: a lean chat has no helpers, so no note about them.
       this.leanThread = lean;
       // Asking for helpers on another model (use_helper_model) is offered everywhere but in a one-off question, and not in a
       // lean chat, which has no helpers to pick a model for.
-      const helperTool = chat?.ephemeral || lean ? {} : { CROSSTALK_HELPER_MODEL: "1" };
+      const helperTool = { ...(chat?.ephemeral || lean ? {} : { CROSSTALK_HELPER_MODEL: "1" }), ...(onOthers ? { CROSSTALK_HELPERS: "1" } : {}) };
       const tools = chat && !chat.group
         ? chat.helper || crossChat || !chat.ephemeral
           ? { ...mcp.env, CROSSTALK_TOOLSET: "chat", ...(chat.helper ? { CROSSTALK_ASK: chat.helper.provider } : {}), ...(crossChat ? { CROSSTALK_CHATS: "1" } : {}), ...helperTool }
@@ -740,11 +745,11 @@ export class CodexDriver implements AgentDriver {
         // hold them to a model either. Otherwise Codex's helper roles are replaced by ones that set the model (the one
         // picked for helpers, else the chat's) and the chat's effort: a role that sets them can't be changed by the agent
         // when it spawns a helper.
-        ...(lean ? { agents: { enabled: false } } : chat?.ephemeral ? {} : { agents: { ...this.writeRoles(this.helperModel() ?? model, helperEffort ?? this.chatEffort()), ...(helperSettings ? this.helperDefaults(helperEffort) : {}) } }),
+        ...(lean || noOwn ? { agents: { enabled: false } } : chat?.ephemeral ? {} : { agents: { ...this.writeRoles(this.helperModel() ?? model, helperEffort ?? this.chatEffort()), ...(helperSettings ? this.helperDefaults(helperEffort) : {}) } }),
       };
       return {
         config,
-        developerInstructions: [chat?.notes, chat?.helper?.note, lean ? null : helperNote("codex", this.helperModel(), !chat?.ephemeral), alongsideNote("codex", room, { ephemeral: chat?.ephemeral, lean }), chat?.ephemeral ? null : CODEX_QUESTION_NOTE].filter(Boolean).join("\n\n"),
+        developerInstructions: [chat?.notes, chat?.helper?.note, onOthers?.note, lean || noOwn ? null : helperNote("codex", this.helperModel(), !chat?.ephemeral), alongsideNote("codex", room, { ephemeral: chat?.ephemeral, lean }), chat?.ephemeral ? null : CODEX_QUESTION_NOTE].filter(Boolean).join("\n\n"),
       };
     };
     const common = {
@@ -788,7 +793,7 @@ export class CodexDriver implements AgentDriver {
     if (lost) {
       sink.activity?.({
         kind: "notice",
-        title: "Codex has lost this chat's earlier conversation",
+        title: "Codex no longer remembers this chat's earlier messages",
         detail: "Codex couldn't find it (it was deleted, or its files moved), so this reply starts a new one. The messages above are all still here, but Codex doesn't remember them: tell it anything it needs to know.",
         status: "done",
       });
@@ -896,10 +901,10 @@ export class CodexDriver implements AgentDriver {
     try {
       res = await this.openThread(rpc, "thread/fork", at ? { ...params, lastTurnId: at } : params, plain);
     } catch (e) {
-      if (!at) throw new Error(`couldn't copy the original conversation (${e instanceof Error ? e.message : e}). Start fresh from the chat's settings to go on without it.`);
+      if (!at) throw new Error(`couldn't copy what the agent remembers of the original chat (${e instanceof Error ? e.message : e}). Start fresh from the chat's settings to go on without it.`);
       log.info(`couldn't fork thread ${from} at turn ${at}, forking all of it: ${e instanceof Error ? e.message : e}`);
       res = await this.openThread(rpc, "thread/fork", params, plain).catch((e2) => {
-        throw new Error(`couldn't copy the original conversation (${e2 instanceof Error ? e2.message : e2}). Start fresh from the chat's settings to go on without it.`);
+        throw new Error(`couldn't copy what the agent remembers of the original chat (${e2 instanceof Error ? e2.message : e2}). Start fresh from the chat's settings to go on without it.`);
       });
     }
     this.threadId = res.thread.id;
@@ -1031,7 +1036,7 @@ export class CodexDriver implements AgentDriver {
     // (like the computers it can reach) also go with the first message this driver sends. Not with an answer to Codex's
     // questions (its reply envelope): Codex's apps know one for an answer only as the whole message, so the notes wait
     // for the next message.
-    const notes = [this.ctx.chat?.notes, this.leanThread ? null : helperNote("codex", this.helperModel(), !this.ctx.chat?.ephemeral), alongsideNote("codex", this.ctx.room, { ephemeral: this.ctx.chat?.ephemeral, lean: this.leanThread }), this.ctx.chat?.ephemeral ? null : CODEX_QUESTION_NOTE].filter(Boolean).join("\n\n");
+    const notes = [this.ctx.chat?.notes, this.ctx.chat?.helpers && !this.ctx.chat.ephemeral ? this.ctx.chat.helpers.note : null, this.leanThread ? null : helperNote("codex", this.helperModel(), !this.ctx.chat?.ephemeral), alongsideNote("codex", this.ctx.room, { ephemeral: this.ctx.chat?.ephemeral, lean: this.leanThread }), this.ctx.chat?.ephemeral ? null : CODEX_QUESTION_NOTE].filter(Boolean).join("\n\n");
     const answer = !input.systemNote && !!parseCodexQuestionReply(input.prompt);
     if (notes && !this.notesSent && input.prompt.trim() !== COMPACT_COMMAND && !answer) {
       text = `(Note from Crosstalk: ${notes})\n\n${text}`;
@@ -1046,6 +1051,8 @@ export class CodexDriver implements AgentDriver {
     if (input.prompt.trim() !== COMPACT_COMMAND) this.forkEffort = null;
     // The effort (or model) may have changed since the thread started: helpers started by role get this turn's.
     if (this.roleFiles && !this.ctx.chat?.ephemeral) this.writeRoles(this.helperModel() ?? (this.ctx.member.model || this.threadModel), effort ?? this.chatEffort());
+    // What its helpers had left on this app-server as the turn is asked for: that is what this turn takes in.
+    const leftBefore = this.leftAnswers;
     return new Promise<TurnResult>((resolve) => {
       const active: ActiveTurn = { rpc, settled: false, turnId: null, sink, done: resolve, items: new Map(), lastAgentItem: null, usageStart: null, error: null, tail: "" };
       this.active = active;
@@ -1076,8 +1083,10 @@ export class CodexDriver implements AgentDriver {
         .then((r) => {
           if (r?.turn?.id) {
             active.turnId = r.turn.id;
-            // The app-server that holds what its helpers left gives it to this turn.
-            this.answersTaken(rpc);
+            // The app-server that holds what its helpers left gives it to this turn: what was left before it was asked
+            // for. This answer can come after the turn has ended and a helper has finished since (read in one go with
+            // the helper's end, seen on Linux): what that helper left is for the next turn, and stays.
+            if (this.leftAnswers === leftBefore) this.answersTaken(rpc);
             this.noteOwnTurn(r.turn.id, sink);
             // Codex has the message in its thread now, whatever happens to the turn.
             sink.taken?.();
@@ -1234,7 +1243,7 @@ export class CodexDriver implements AgentDriver {
         if (a.stopping) void this.interruptTurn(a);
         break;
       case "thread/compacted":
-        if (a.compact) a.done({ ok: true, text: "Compacted the conversation." });
+        if (a.compact) a.done({ ok: true, text: "Summarized the earlier messages." });
         break;
       case "item/agentMessage/delta":
         this.splitIfNext(a);
@@ -1368,12 +1377,12 @@ export class CodexDriver implements AgentDriver {
         break;
       }
       case "mcpToolCall": {
-        const asked = item.server === "crosstalk" && typeof item.tool === "string" && item.tool.startsWith("ask_") ? (PROVIDER_INFO as Record<string, { name: string }>)[item.tool.slice(4)]?.name : undefined;
-        const chats = item.server === "crosstalk" && typeof item.tool === "string" ? chatToolTitle(item.tool, item.arguments ?? {}) : null;
+        const asked = item.server === "crosstalk" && typeof item.tool === "string" && item.tool.startsWith("ask_") ? (item.tool === "ask_agent" ? String(item.arguments?.who || "another agent") : (PROVIDER_INFO as Record<string, { name: string }>)[item.tool.slice(4)]?.name) : undefined;
+        const chats = item.server === "crosstalk" && typeof item.tool === "string" ? helperToolTitle(item.tool, item.arguments ?? {}, this.ctx.chat?.helpers?.label) ?? chatToolTitle(item.tool, item.arguments ?? {}) : null;
         const id = asked
           ? sink.activity({ kind: "tool", title: `Asked ${asked}: ${String(item.arguments?.question ?? "").slice(0, 120)}`, detail: String(item.arguments?.question ?? "") })
           : chats
-            ? sink.activity({ kind: "tool", title: chats, detail: String(item.arguments?.text ?? item.arguments?.query ?? "") })
+            ? sink.activity({ kind: "tool", title: chats, detail: String(item.arguments?.text ?? item.arguments?.query ?? item.arguments?.task ?? "") })
             : sink.activity({ kind: "tool", title: `${item.server}: ${item.tool}`, detail: JSON.stringify(item.arguments ?? {}, null, 2) });
         a.items.set(item.id, { activityId: id, item });
         break;
@@ -1437,7 +1446,7 @@ export class CodexDriver implements AgentDriver {
   }
 
   private helperError(wrong: string) {
-    return `Codex started a helper agent ${wrong}, so Crosstalk stopped this reply. Helpers use ${this.helperModel() ? "the model picked for them" : "this chat's model"} at this chat's effort; pick another model for helpers in the model menu or the chat's settings.`;
+    return `Codex started a helper agent ${wrong}, so Crosstalk stopped this reply. Helpers use ${this.helperModel() ? "the model picked for them" : "this chat's model"} at this chat's effort; pick another model for helpers in Chat settings → Helpers.`;
   }
 
   private inspectHelper(a: ActiveTurn, id: string, settings?: Json) {
@@ -1535,8 +1544,8 @@ export class CodexDriver implements AgentDriver {
         if (it) sink.updateActivity(it.activityId, { status: item.status === "failed" ? "error" : "done" });
         break;
       case "contextCompaction":
-        sink.activity({ kind: "notice", title: "Compacted the conversation", detail: "Older messages were summarized to free up the context window.", status: "done" });
-        if (a.compact && !a.tail) this.emitText(a, "Compacted the conversation.");
+        sink.activity({ kind: "notice", title: "Summarized the earlier messages", detail: "Done to make room: the chat got too long for the model to hold.", status: "done" });
+        if (a.compact && !a.tail) this.emitText(a, "Summarized the earlier messages.");
         break;
       case "agentMessage": {
         // Questions the agent asked and went on without waiting for (request_user_input_async; the text lists them for
@@ -1671,7 +1680,9 @@ export class CodexDriver implements AgentDriver {
           // A group chat's own tools only read it and post to it.
           ((!this.ctx.chat || !!this.ctx.chat.group) && !!tool && ROOM_TOOL_NAMES.includes(tool)) ||
           // It asks the user itself whenever their own message didn't name the model.
-          (!this.ctx.chat?.ephemeral && tool === HELPER_TOOL);
+          (!this.ctx.chat?.ephemeral && tool === HELPER_TOOL) ||
+          // "Helpers run on" another account is the consent: what a helper does beyond the chat's permissions asks itself.
+          (!!this.ctx.chat?.helpers && !this.ctx.chat.ephemeral && !!tool && HELPER_TOOL_NAMES.includes(tool));
         if (p.serverName === "crosstalk" && p._meta?.codex_approval_kind === "mcp_tool_call" && ok) {
           return { action: "accept", content: {}, _meta: null };
         }
@@ -1776,7 +1787,7 @@ export class CodexDriver implements AgentDriver {
 
   /**
    * A stopped or failed turn drops input it hadn't read, and nothing answers that by itself: Codex starts no turn of its
-   * own. So what steer handed this turn and Codex never took in is the person's again, unread, with Answer now (takeUnread).
+   * own. So what steer handed this turn and Codex never took in is the person's again, unread, with Try again (takeUnread).
    */
   private dropped(a: ActiveTurn) {
     for (const w of a.steered?.values() ?? []) this.neverRead.push(...(w.messageIds ?? []));
@@ -1958,6 +1969,11 @@ export class CodexDriver implements AgentDriver {
    * Ended when idle (Engine.endIdle) unless a turn is under way, a command it started still runs in the background, or a
    * helper of its thread still works (it would end with a private app-server).
    */
+  /** Its own app-server only: one shared with the Codex app is the person's, not started by the hub. */
+  pids(): number[] {
+    return this.rpc instanceof StdioRpc && this.rpc.proc.pid ? [this.rpc.proc.pid] : [];
+  }
+
   canEndWhenIdle(): boolean {
     return !this.starting && (!this.active || this.active.settled) && this.canEndWithItsWork();
   }

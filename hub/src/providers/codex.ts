@@ -3,7 +3,7 @@ import type { LoginFlow, ModelOption } from "@crosstalk/shared";
 import type { App } from "../app";
 import { CODEX_FAST_TIER, codexRefused, codexUsage, planName, startCodexServer } from "../agents/codex";
 import type { StdioRpc } from "../agents/jsonrpc";
-import { installHint, run, type ModelContextInfo, type ProviderModule } from "./index";
+import { run, type ModelContextInfo, type ProviderModule } from "./index";
 import { logger } from "../util/log";
 
 const log = logger("codex-provider");
@@ -104,16 +104,24 @@ export function codexModelOptions(data: Json): ModelOption[] {
   return [...rows.filter((m) => !m.hidden).map(option), ...rows.filter((m) => m.hidden).map((m) => ({ ...option(m), more: true }))];
 }
 
+/**
+ * Installs Codex without Node.js: the build OpenAI publishes for this kind of machine, into ~/.local/bin (where Codex is
+ * looked for). It lands under another name first, so a download that stops half way leaves the old one in place.
+ */
+export const CODEX_INSTALL_LINE =
+  `t=$(uname -sm | sed 's/Darwin arm64/aarch64-apple-darwin/;s/Darwin x86_64/x86_64-apple-darwin/;s/Linux x86_64/x86_64-unknown-linux-musl/;s/Linux aarch64/aarch64-unknown-linux-musl/;s/Linux arm64/aarch64-unknown-linux-musl/') && mkdir -p "$HOME/.local/bin" && curl -fsSL "https://github.com/openai/codex/releases/latest/download/codex-$t.tar.gz" | tar -xzO > "$HOME/.local/bin/.codex.new" && chmod +x "$HOME/.local/bin/.codex.new" && mv "$HOME/.local/bin/.codex.new" "$HOME/.local/bin/codex"`;
+
 export const codexProvider: ProviderModule = {
   id: "codex",
   binNames: ["codex"],
   extraPaths: ["~/.npm-global/bin", "~/.local/bin", "/opt/homebrew/bin", "/usr/local/bin"],
   versionArgs: ["--version"],
-  // Official npm package, installed under the user's home so no sudo is needed.
+  // No Node.js needed: OpenAI's own ready-made build, under the user's home so no sudo is needed. A copy npm put there
+  // before (Crosstalk's installs until 0.8) goes on being updated with npm, so there's never two.
   installCommand: [
     "bash",
     "-lc",
-    `set -e; if command -v npm >/dev/null 2>&1; then echo "Installing @openai/codex with npm…"; npm install -g --prefix "$HOME/.npm-global" @openai/codex@latest; echo; echo "Installed: $($HOME/.npm-global/bin/codex --version)"; elif command -v brew >/dev/null 2>&1; then brew install --cask codex; else echo "Codex needs Node.js (npm). Install it first, e.g. ${installHint("node", "nodejs npm")}, then try again."; exit 1; fi`,
+    `set -e; if [ -x "$HOME/.npm-global/bin/codex" ] && command -v npm >/dev/null 2>&1; then echo "Updating @openai/codex with npm…"; npm install -g --prefix "$HOME/.npm-global" @openai/codex@latest; echo; echo "Installed: $($HOME/.npm-global/bin/codex --version)"; else case "$(uname -sm)" in "Darwin arm64" | "Darwin x86_64" | "Linux x86_64" | "Linux aarch64" | "Linux arm64") ;; *) echo "OpenAI has no ready-made Codex for this kind of machine ($(uname -sm))."; exit 1 ;; esac; echo "Downloading Codex from OpenAI's releases…"; set -o pipefail; ${CODEX_INSTALL_LINE}; echo; echo "Installed: $($HOME/.local/bin/codex --version)"; fi`,
   ],
 
   async checkAuth(app, bin) {

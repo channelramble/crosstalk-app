@@ -6,7 +6,8 @@ import { test, expect } from "./fixtures";
 /*
  * The chat list's motion (web/src/views/ChatListMotion.ts, web/src/styles/motion-lists.css), on a phone (390 px), in
  * each engine:
- * - its lines glide to their new places (a chat with news going to the top, a pin, a fold), from exactly where they
+ * - its lines glide to their new places (a chat with news going to the top, one changing section as its state does, a
+ *   pin, a fold), from exactly where they
  *   were drawn, only on screen, and take a tap wherever they're drawn on the way;
  * - nothing waits for it: the focus is back on a pinned row while it still glides, and what goes is gone from the page
  *   at once while an inert copy fades;
@@ -92,7 +93,8 @@ async function drawer(page: Page) {
 
 const rowOf = (where: Locator, name: string) => where.locator(".csb-item").filter({ has: where.page().locator(".csb-chat-name", { hasText: new RegExp(`^${name}$`) }) });
 const moreOf = (where: Locator, name: string) => rowOf(where, name).getByRole("button", { name: `Options for ${name}`, exact: true });
-const groupOf = (side: Locator, name: string) => side.locator(".csb-group").filter({ has: side.page().locator(".csb-agent-name", { hasText: name }) });
+/** One section of the list (pinned, needs, working, recent), by its key. */
+const sectionOf = (side: Locator, key: string) => side.locator(`.csb-group[data-group="${key}"]`);
 const names = (where: Locator) => where.locator(".csb-chat-name").allTextContents();
 
 type Seen = { what: string; line: string | null; props: string[]; ms: number; repeats: boolean; onScreen: boolean };
@@ -196,7 +198,7 @@ test.describe("with motion", () => {
       const live = await liveSocket(page);
       await page.goto("/");
       const side = await drawer(page);
-      const codex = groupOf(side, "Codex");
+      const codex = sectionOf(side, "recent");
       await expect.poll(() => names(codex)).toEqual([delta, charlie, bravo, alpha]);
       await slowGlides(page);
       await watch(page);
@@ -208,7 +210,7 @@ test.describe("with motion", () => {
       await expect.poll(() => names(codex)).toEqual([alpha, delta, charlie, bravo]);
       const glide = (await glideOf(rowOf(codex, alpha)))!;
       expect(glide, "Alpha glides").not.toBeNull();
-      // From exactly where it was drawn, to the top of the group, over the rows it passes.
+      // From exactly where it was drawn, to the top of Recent, over the rows it passes.
       expect(Math.abs(glide.from.y - was.y), JSON.stringify({ was, glide })).toBeLessThan(1);
       expect(Math.abs(glide.from.x - was.x), JSON.stringify({ was, glide })).toBeLessThan(1);
       expect(glide.to.y).toBeLessThan(was.y - 2 * was.height);
@@ -239,16 +241,63 @@ test.describe("with motion", () => {
     }
   });
 
+  test("a chat that starts working glides up to Working from where it was, as the sections make room", async ({ page, request, token }) => {
+    const tag = Math.random().toString(36).slice(2, 6);
+    const chats = await made(request, token, [`Alpha ${tag}`, `Bravo ${tag}`, `Charlie ${tag}`]);
+    const [alpha, bravo, charlie] = chats.rooms.map((r) => r.name);
+    try {
+      await onlyThese(page, chats.rooms.map((r) => r.id));
+      const live = await liveSocket(page);
+      const state = await (await request.get(`${HUB}/api/state`, { headers: { authorization: `Bearer ${token}` } })).json();
+      const member = (state.members as Member[]).find((m) => m.roomId === chats.rooms[0].id)!;
+      await page.goto("/");
+      const side = await drawer(page);
+      const recent = sectionOf(side, "recent");
+      await expect.poll(() => names(recent)).toEqual([charlie, bravo, alpha]);
+      await slowGlides(page);
+      await watch(page);
+      const was = (await rowOf(recent, alpha).boundingBox())!;
+
+      // Alpha's agent starts on a reply: its row leaves Recent for a new section above it, Working.
+      live.send({ t: "member", member: { ...member, status: "working" } });
+      const working = sectionOf(side, "working");
+      await expect.poll(() => names(working)).toEqual([alpha]);
+      await expect.poll(() => names(recent)).toEqual([charlie, bravo]);
+      await expect(rowOf(working, alpha).locator(".csb-chat-words")).toHaveText("Working");
+      // The row is a new element in a new section, and still glides from exactly where the old one was drawn, over the
+      // rows it passes.
+      const glide = (await glideOf(rowOf(working, alpha)))!;
+      expect(glide, "Alpha glides").not.toBeNull();
+      expect(Math.abs(glide.from.y - was.y), JSON.stringify({ was, glide })).toBeLessThan(1);
+      expect(Math.abs(glide.from.x - was.x), JSON.stringify({ was, glide })).toBeLessThan(1);
+      expect(glide.to.y).toBeLessThan(was.y - was.height);
+      expect(glide.lift).toBe(true);
+      expect(glide.after).toBe("none");
+      await page.screenshot({ ...shot("chat-list-state-glide.png") });
+      await twoFrames(page);
+      const seen = await since(page);
+      // Recent's heading and its rows slide down to make room; Working's heading fades in where it is.
+      expect(seen.animations.some((a) => a.line === "g:recent" && a.props.includes("transform")), "Recent's heading slides down").toBe(true);
+      expect(seen.animations.some((a) => a.line === `r:/${chats.rooms[2].id}` && a.props.includes("transform")), "its rows slide down").toBe(true);
+      expect(seen.animations.some((a) => a.line === "g:working" && a.props.includes("opacity")), "Working's heading fades in").toBe(true);
+      expect(seen.animations.filter((a) => a.props.some((p) => LAYOUT.test(p))), "nothing animates a layout property").toEqual([]);
+      expect(seen.animations.filter((a) => a.line?.startsWith("r:") && a.props.includes("transform")).every((a) => a.onScreen), "only rows on screen move").toBe(true);
+    } finally {
+      await chats.cleanup();
+    }
+  });
+
   test("a pin glides the row up to Pinned with the focus already on it, and the last unpin leaves Pinned as a fading copy", async ({ page, request, token }) => {
     const tag = Math.random().toString(36).slice(2, 6);
-    // Newest last: Fix login is at the top of Codex's chats, with two under it.
-    const chats = await made(request, token, [`Old one ${tag}`, `Write docs ${tag}`, `Fix login ${tag}`]);
-    const [, docs, fix] = chats.rooms.map((r) => r.name);
+    // Newest last: Fix login is second under Recent, with a chat above it and one under it. (At the top it wouldn't
+    // move at all when it's pinned: Pinned's heading takes the place of Recent's.)
+    const chats = await made(request, token, [`Old one ${tag}`, `Fix login ${tag}`, `Write docs ${tag}`]);
+    const [, fix, docs] = chats.rooms.map((r) => r.name);
     try {
       await onlyThese(page, chats.rooms.map((r) => r.id));
       await page.goto("/");
       const side = await drawer(page);
-      const codex = groupOf(side, "Codex");
+      const codex = sectionOf(side, "recent");
       await expect(rowOf(codex, fix)).toBeVisible();
       await watch(page);
       const was = (await rowOf(codex, fix).boundingBox())!;
@@ -259,7 +308,7 @@ test.describe("with motion", () => {
       await twoFrames(page);
       const opened = await since(page);
       expect(opened.animations.some((a) => a.what.startsWith("div.csb-row-tray") && a.what.endsWith("m-drop-in")), "the options drop in").toBe(true);
-      expect(opened.animations.some((a) => a.line === `r:/${chats.rooms[1].id}` && a.props.includes("transform")), "the row below makes room").toBe(true);
+      expect(opened.animations.some((a) => a.line === `r:/${chats.rooms[0].id}` && a.props.includes("transform")), "the row below makes room").toBe(true);
       await slowGlides(page);
 
       await rowOf(codex, fix).getByRole("button", { name: "Pin to top", exact: true }).click();
@@ -304,41 +353,43 @@ test.describe("with motion", () => {
     }
   });
 
-  test("folding fades the rows away as copies while the groups below slide up and the chevron turns; a search never moves", async ({ page, request, token }) => {
+  test("folding fades the rows away as copies while the sections below slide up and the chevron turns; a search never moves", async ({ page, request, token }) => {
     const tag = Math.random().toString(36).slice(2, 6);
     const claude = await made(request, token, [`Plan the trip ${tag}`], "claude");
     const codexChats = await made(request, token, [`Fix login ${tag}`, `Write docs ${tag}`]);
     try {
-      await onlyThese(page, [...claude.rooms, ...codexChats.rooms].map((r) => r.id));
+      await onlyThese(page, [...claude.rooms, ...codexChats.rooms].map((r) => r.id), { unread: claude.rooms[0].id });
+      // Two sections: the first chat is pinned (with a reply no one has read), the other two are under Recent, below it.
+      await request.post(`${HUB}/api/rooms/${claude.rooms[0].id}/pin`, { headers: { authorization: `Bearer ${token}` }, data: { pinned: true, order: -1 } });
       await page.goto("/");
       const side = await drawer(page);
-      const claudeGroup = groupOf(side, "Claude Code");
-      const codex = groupOf(side, "Codex");
+      const claudeGroup = sectionOf(side, "pinned");
+      const codex = sectionOf(side, "recent");
       await expect(rowOf(claudeGroup, claude.rooms[0].name)).toBeVisible();
       await watch(page);
 
-      await claudeGroup.getByRole("button", { name: "Hide Claude Code chats", exact: true }).click();
-      // Gone from the page at once (its copy fades, out of every selector's reach), and folded it says what's inside.
+      await claudeGroup.getByRole("button", { name: "Hide pinned chats", exact: true }).click();
+      // Gone from the page at once (its copy fades, out of every selector's reach), and folded it says what needs a look.
       await expect(claudeGroup.locator(".csb-chat")).toHaveCount(0);
-      await expect(claudeGroup.locator(".csb-fold-said")).toHaveText("1 chat");
+      await expect(claudeGroup.locator(".csb-fold-said")).toHaveText("1 needs a look");
       await expect(side.getByText(claude.rooms[0].name)).toHaveCount(0);
       await twoFrames(page);
       const folded = await since(page);
       expect(folded.copies, "the row leaves a copy").toBeGreaterThan(0);
       expect(folded.animations.some((a) => a.what.includes("csb-item") && a.what.endsWith("m-fade-out")), "which fades").toBe(true);
-      expect(folded.animations.some((a) => a.line === "g:codex" && a.props.includes("transform")), "Codex's heading slides up").toBe(true);
+      expect(folded.animations.some((a) => a.line === "g:recent" && a.props.includes("transform")), "Recent's heading slides up").toBe(true);
       expect(folded.animations.some((a) => a.line === `r:/${codexChats.rooms[0].id}` && a.props.includes("transform")), "its rows slide up").toBe(true);
-      expect(folded.animations.some((a) => a.line === "s:claude" && a.props.includes("opacity")), "what's inside fades in").toBe(true);
+      expect(folded.animations.some((a) => a.line === "s:pinned" && a.props.includes("opacity")), "what's inside fades in").toBe(true);
       expect(folded.animations.some((a) => a.what.startsWith("svg") && a.props.includes("transform")), "the chevron turns").toBe(true);
       expect(folded.animations.filter((a) => a.props.some((p) => LAYOUT.test(p)))).toEqual([]);
 
       // Unfolded: the row fades back in, the groups below slide down.
-      await claudeGroup.getByRole("button", { name: /^Show Claude Code chats/ }).click();
+      await claudeGroup.getByRole("button", { name: /^Show pinned chats/ }).click();
       await expect(rowOf(claudeGroup, claude.rooms[0].name)).toBeVisible();
       await twoFrames(page);
       const unfolded = await since(page);
       expect(unfolded.animations.some((a) => a.line === `r:/${claude.rooms[0].id}` && a.props.includes("opacity")), "the row fades in").toBe(true);
-      expect(unfolded.animations.some((a) => a.line === "g:codex" && a.props.includes("transform")), "Codex's heading slides down").toBe(true);
+      expect(unfolded.animations.some((a) => a.line === "g:recent" && a.props.includes("transform")), "Recent's heading slides down").toBe(true);
 
       // A search filters at once, as you type, and clearing it puts the list back at once: nothing in it moves.
       await settle(page);
@@ -346,7 +397,8 @@ test.describe("with motion", () => {
       await since(page);
       const search = side.getByRole("textbox", { name: "Search chats", exact: true });
       await search.pressSequentially("login", { delay: 30 });
-      await expect(codex.locator(".csb-chat-name")).toHaveText([codexChats.rooms[0].name]);
+      // (What's found is one flat list, without the sections.)
+      await expect(side.locator(".csb-chat-name")).toHaveText([codexChats.rooms[0].name]);
       await search.fill("");
       await expect(codex.locator(".csb-chat")).toHaveCount(2);
       await twoFrames(page);
@@ -361,13 +413,13 @@ test.describe("with motion", () => {
 
   test("with hundreds of chats, only what's on screen moves, and the drawer opens again exactly where it was", async ({ page, request, token }) => {
     const base = Date.now();
-    // Made-up chats, only listed: 300 of them with Codex, a second apart.
+    // Made-up chats, only listed: 300 of them, a second apart, all under Recent.
     const extra = Array.from({ length: 300 }, (_, i) => ({ id: `r_many_${i}`, name: `Many ${String(i).padStart(3, "0")}`, cwd: `/tmp/many-${i}`, mode: "direct", leadMemberId: null, maxHops: 0, rounds: 1, parallel: false, createdAt: base - 1e6, updatedAt: base - 1e6 - i * 1000, archived: false, chat: { provider: "codex", origin: "web" } }) as unknown as Room);
     const given = await onlyThese(page, [], { extra });
     const live = await liveSocket(page);
     await page.goto("/");
     const side = await drawer(page);
-    const codex = groupOf(side, "Codex");
+    const codex = sectionOf(side, "recent");
     await side.getByRole("button", { name: "Show all 300", exact: true }).click();
     await expect(codex.locator(".csb-item")).toHaveCount(300);
     // Halfway down the list.
@@ -463,7 +515,7 @@ test.describe("with motion", () => {
     const headers = { authorization: `Bearer ${token}` };
     const tag = Math.random().toString(36).slice(2, 6);
     const chats = await made(request, token, [`Read later ${tag}`, `Fresh news ${tag}`]);
-    // Five models of yours (and the model pool): the menu has room for three, the rest are a step away.
+    // Five models of yours: the menu has room for three, the rest are a step away.
     const accounts: AgentAccount[] = [];
     for (let i = 1; i <= 5; i++) accounts.push(await (await request.post(`${HUB}/api/accounts/endpoint`, { headers, data: { provider: "codex", label: `Model ${i} ${tag}`, baseUrl: "http://127.0.0.1:8099", apiKey: "", models: ["qwen3-8b"], contextWindow: 16384 } })).json());
     try {
@@ -471,7 +523,7 @@ test.describe("with motion", () => {
       const live = await liveSocket(page);
       await page.goto("/");
       const side = await drawer(page);
-      const codex = groupOf(side, "Codex");
+      const codex = sectionOf(side, "recent");
       await watch(page);
       // Drawn with the list: no pop.
       const first = rowOf(codex, chats.rooms[0].name).locator(".reply-dot");
@@ -549,7 +601,7 @@ test.describe("with motion", () => {
       await page.goto("/");
       expect(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--zoom").trim())).toBe("1.5");
       const side = await drawer(page);
-      const codex = groupOf(side, "Codex");
+      const codex = sectionOf(side, "recent");
       const name = chats.rooms[0].name;
       await moreOf(codex, name).click();
       await slowGlides(page);
@@ -580,7 +632,7 @@ test.describe("with Reduce Motion", () => {
       const live = await liveSocket(page);
       await page.goto("/");
       const side = await drawer(page);
-      const codex = groupOf(side, "Codex");
+      const codex = sectionOf(side, "recent");
       await expect(rowOf(codex, alpha)).toBeVisible();
       await watch(page);
 
@@ -596,8 +648,8 @@ test.describe("with Reduce Motion", () => {
       await rowOf(pinned, bravo).getByRole("button", { name: "Unpin", exact: true }).click();
       await expect(pinned).toHaveCount(0);
       await expect(moreOf(codex, bravo)).toBeFocused();
-      await codex.getByRole("button", { name: "Hide Codex chats", exact: true }).click();
-      await codex.getByRole("button", { name: /^Show Codex chats/ }).click();
+      await codex.getByRole("button", { name: "Hide recent chats", exact: true }).click();
+      await codex.getByRole("button", { name: /^Show recent chats/ }).click();
       await moreOf(codex, alpha).click();
       await twoFrames(page);
       await page.keyboard.press("Escape");

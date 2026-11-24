@@ -3,7 +3,7 @@ import type { Member, PromptTemplate, Room, TemplateInput } from "@crosstalk/sha
 import { rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test, expect, noHorizontalOverflow } from "./fixtures";
+import { test, expect, noHorizontalOverflow, effortInForce, modelInForce } from "./fixtures";
 import { otherMachine } from "./otherMachine";
 
 // Prompt templates (hub templates.ts; web views/TemplatesSection.tsx, views/TemplatePick.tsx, templates.ts). Settings →
@@ -247,8 +247,8 @@ test("New chat from a template: its agent, model, effort and folder are filled i
     await expect(blanks).toContainText("Fill in each one to start the chat.");
     await expect(dialog.getByRole("textbox", { name: "First message", exact: true })).toHaveValue(template.text);
     // Its model, effort and folder, on your defaults.
-    await expect(dialog.getByRole("combobox", { name: "Model", exact: true })).toHaveValue("codex-model");
-    await expect(dialog.getByRole("combobox", { name: "Effort", exact: true })).toHaveValue("low");
+    await expect(modelInForce(dialog)).toHaveAttribute("data-value", "codex-model");
+    await expect(effortInForce(dialog)).toHaveAttribute("data-value", "low");
     // Picked in the list of folders, with nothing typed.
     await expect(dialog.getByRole("radio", { name: `${folder.split("/").pop()}, ${folder}`, exact: true })).toHaveAttribute("aria-checked", "true");
     await expect(dialog.getByRole("textbox", { name: "Folder path", exact: true })).toHaveValue("");
@@ -418,7 +418,7 @@ test("with several machines, New chat lists each one's templates under its name,
   const elsewhere = "Its model and folder are for Linux box, so yours are used here.";
   await machine.selectOption("");
   await expect(dialog).toContainText(elsewhere);
-  await expect(dialog.getByRole("combobox", { name: "Model", exact: true })).toHaveValue("");
+  await expect(modelInForce(dialog)).toContainText("Default");
   await expect(dialog.getByRole("radio", { name: "A new folder", exact: true })).toHaveAttribute("aria-checked", "true");
   // Back on Linux box: all of it again.
   await machine.selectOption(linux.base);
@@ -475,7 +475,7 @@ test("an agent's template sets New chat's agent; None, or a template for any age
   await menu.selectOption("");
   await expect(opened).toBeVisible();
   // Your Claude Code defaults are back with it.
-  await expect(opened.getByRole("combobox", { name: "Model", exact: true }).locator("option").first()).toHaveText(/claude model/);
+  await expect(modelInForce(opened)).toContainText(/claude model/);
   await opened.getByRole("button", { name: "Cancel", exact: true }).click();
   await expect(page.getByRole("dialog")).toHaveCount(0);
 });

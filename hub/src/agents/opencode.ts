@@ -20,8 +20,9 @@
 // What OpenCode can't see, the driver does: a tool call written out as text ends its turn looking finished (#50206), so it
 // is asked again (toolText.ts); there is no guard against the same call over and over (#59339), so one is kept here; a
 // service's errors come back in Crosstalk's plain words. Checked against OpenCode 2.2.5 (providers/opencode.ts pins it) with
-// a stand-in model service: hub/test/opencode-real.test.ts. Rewind and Send now have no ACP form, so these chats have neither.
+// a stand-in model service: hub/test/opencode-real.test.ts. Rewind and taking a message mid-reply (steer) have no ACP form, so these chats have neither.
 
+import { settingsPath } from "@crosstalk/shared";
 import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, readlinkSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -632,7 +633,7 @@ export class OpenCodeDriver extends AcpDriver {
 
   override async runTurn(input: TurnInput, sink: TurnSink): Promise<TurnResult> {
     const ep = this.ctx.endpoint;
-    if (!ep) return { ok: false, error: "OpenCode runs on an AI service: pick one in this chat's settings (Settings → AI services adds them)." };
+    if (!ep) return { ok: false, error: `OpenCode needs an account to run on: pick one in this chat's settings (${settingsPath("ai-services")} adds them).` };
     if (!this.model) return { ok: false, error: `Pick a model for ${ep.label} in this chat's settings.` };
     this.calls.clear();
     this.planCard = null;
@@ -672,8 +673,8 @@ export class OpenCodeDriver extends AcpDriver {
     }
     if (this.gaveUp) return { ok: false, error: this.gaveUp, ...(this.replyText.trim() ? { text: `${this.replyText.trimEnd()}\n\n⚠️ ${this.gaveUp}` } : {}) };
     if (compacting && result.ok) {
-      if (this.compactFailure) return { ok: false, error: `Couldn't summarise the conversation: ${this.compactFailure}` };
-      if (!this.replyText.trim()) sink.setText("Done: the conversation so far is summarised, and the chat goes on from the summary.");
+      if (this.compactFailure) return { ok: false, error: `Couldn't summarise the chat: ${this.compactFailure}` };
+      if (!this.replyText.trim()) sink.setText("Done: the chat so far is summarised, and it goes on from the summary.");
     }
     return result;
   }
@@ -926,7 +927,7 @@ export class OpenCodeDriver extends AcpDriver {
     const c = meta["opencode/compaction"];
     if (c && !meta["opencode/child-session"]) {
       const key = String(c.messageId ?? "compaction");
-      if (c.status === "started") this.compactCard.set(key, sink.activity({ kind: "notice", title: "Summarising the conversation so far", status: "running" }));
+      if (c.status === "started") this.compactCard.set(key, sink.activity({ kind: "notice", title: "Summarising the chat so far", status: "running" }));
       else {
         const id = this.compactCard.get(key);
         const failed = c.status === "failed";

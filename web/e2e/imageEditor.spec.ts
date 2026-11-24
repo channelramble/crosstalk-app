@@ -110,7 +110,7 @@ const theSwitch = (page: Page) => section(page).getByRole("checkbox", { name: "A
 
 async function openSettings(page: Page) {
   await page.goto("/#/settings/image-editor");
-  await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Your own models", exact: true })).toBeVisible();
 }
 
 /** CT_SHOTS: a folder for the screens (390 px Chromium only), the image editor's card at the top. */
@@ -124,8 +124,8 @@ async function shot(page: Page, name: string) {
 
 test("a machine without the image editor doesn't show it", async ({ page }) => {
   await openSettings(page);
-  // The tab it would be in opens all the same (the model pool is there too); the section itself just isn't there.
-  await expect(page.getByRole("heading", { name: "Model pool", exact: true })).toBeVisible();
+  // The page it would be on opens all the same (Local models is there too); the section itself just isn't there.
+  await expect(page.getByRole("heading", { name: "Local models", exact: true }).first()).toBeVisible();
   await expect(page.getByRole("heading", { name: "Image editor" })).toHaveCount(0);
 });
 

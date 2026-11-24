@@ -12,6 +12,26 @@
     <link rel="apple-touch-icon" href="./icon-180.png" />
     <link rel="manifest" href="./manifest.webmanifest" />
     <title>Crosstalk</title>
+    <!-- The theme saved on this device (src/themeDevice.ts keeps it, with what it paints), put on the page before
+         anything is drawn, so the default look never flashes first. A device with no theme saved does nothing here. -->
+    <script>
+      (function () {
+        try {
+          var saved = localStorage.getItem("crosstalk.theme.v1");
+          if (!saved) return;
+          var paint = JSON.parse(saved).paint;
+          if (!paint) return;
+          var root = document.documentElement;
+          var k;
+          for (k in paint.vars) root.style.setProperty(k, paint.vars[k]);
+          for (k in paint.attrs) root.setAttribute(k, paint.attrs[k]);
+          var bar = document.querySelector('meta[name="theme-color"]');
+          if (bar && paint.color) bar.setAttribute("content", paint.color);
+          var status = document.querySelector('meta[name="apple-mobile-web-app-status-bar-style"]');
+          if (status && paint.scheme === "light") status.setAttribute("content", "default");
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

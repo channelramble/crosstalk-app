@@ -1,8 +1,8 @@
 import type { Locator, Page, Route, WebSocketRoute } from "@playwright/test";
 import type { LocalServer, ServiceTestResult } from "@crosstalk/shared";
-import { test, expect, noHorizontalOverflow } from "./fixtures";
+import { test, expect, noHorizontalOverflow, addAnotherService } from "./fixtures";
 
-// Settings → AI services, with the hub's answers played here (docs/SPEC-0.4.md section 3): the shared test hub's accounts
+// Settings → Accounts (once "AI services"), with the hub's answers played here (docs/SPEC-0.4.md section 3): the shared test hub's accounts
 // and settings stay as they were, and nothing here reaches an AI service or this Mac's own model servers.
 // CT_SHOTS: a folder to save the phone screens in, to look at them.
 const shot = (name: string) => (process.env.CT_SHOTS ? { path: `${process.env.CT_SHOTS}/${name}` } : {});
@@ -131,18 +131,17 @@ async function liveUpdates(page: Page) {
 
 const totals = (usd: number) => ({ usd, replies: usd ? 3 : 0, unpriced: 0, inputTokens: 0, outputTokens: 0 });
 const row = (page: Page, name: string) => page.getByRole("group", { name, exact: true });
-const addService = (page: Page) => page.getByRole("button", { name: "Add an AI service", exact: true });
-const sheet = (page: Page) => page.getByRole("dialog", { name: "Add an AI service", exact: true });
+const sheet = (page: Page) => page.getByRole("dialog", { name: /^Add (another service|a model on this machine)$/ });
 const openSheet = async (page: Page, service: string) => {
-  await addService(page).click();
+  await addAnotherService(page);
   const dialog = sheet(page);
   await dialog.getByRole("button", { name: new RegExp(`^${service}`) }).click();
   return dialog;
 };
 const settings = async (page: Page) => {
   await phone(page);
-  await page.goto("/#/settings");
-  await expect(page.getByRole("heading", { name: "AI services", exact: true })).toBeVisible();
+  await page.goto("/#/settings/accounts");
+  await expect(page.getByRole("button", { name: "Add an account", exact: true })).toBeVisible();
 };
 /** Scrolls so the element starts at the top of the screen (a phone screenshot of just what's being shown). */
 const atTop = (target: Locator) => target.evaluate((el) => el.scrollIntoView({ block: "start" }));
@@ -160,20 +159,22 @@ test("the list shows every account with its kind, status, models and what it cos
     { provider: "codex", account: "kimi1", label: "Kimi K3.1 Pro", kind: "endpoint", today: totals(0.4), month: totals(4.2), total: totals(9), budget: { limitUsd: 5, period: "month", since: 0, usedUsd: 4.2, percent: 84, state: "warn" } },
     { provider: "codex", account: "default", label: "Main", kind: "signin", today: totals(1), month: totals(12.4), total: totals(30), budget: null },
   ] });
-  await expect(page.getByText("Add any AI that works with Claude Code or Codex. Crosstalk checks it before you use it.", { exact: true })).toBeVisible();
+  await expect(page.getByText("An account is who answers a chat: your Claude or ChatGPT plan, an API key, another service, or a model of your own.", { exact: true })).toBeVisible();
+  // One list, under plain headings, with one Add.
+  await expect(page.locator(".acct-group .settings-heading")).toHaveText(["Claude Code", "Codex", "Other services", "Your own models"]);
   const kimi = row(page, "Codex · Kimi K3.1 Pro");
-  await expect(kimi.getByText("Codex · Custom model · api.moonshot.ai", { exact: true })).toBeVisible();
+  await expect(kimi.getByText("api.moonshot.ai · runs with Codex", { exact: true })).toBeVisible();
   await expect(kimi.getByText("Not tested yet", { exact: true })).toBeVisible();
   await expect(kimi.getByText("2 models: kimi-k3.1-pro, kimi-k3.1-pro-highspeed", { exact: true })).toBeVisible();
   await expect(kimi.getByText("$4.20 this month", { exact: true })).toHaveClass(/warn/);
   // A plan sign-in isn't billed: its figure is what the use would cost.
   await expect(row(page, "Codex · Main").getByText("≈$12.40 this month", { exact: true })).toBeVisible();
-  await expect(row(page, "Codex · Main").getByText("Signed in", { exact: true })).toBeVisible();
-  await expect(row(page, "Claude Code · Work key").getByText("Claude Code · API key, billed per use", { exact: true })).toBeVisible();
+  await expect(row(page, "Codex · Main").locator(".svc-status")).toHaveText(/^Signed in/);
+  await expect(row(page, "Claude Code · Work key").getByText("API key · billed per use", { exact: true })).toBeVisible();
   // Every agent's own sign-in comes before its other accounts.
   const names = await page.locator(".svc-row .svc-name").allTextContents();
   expect(names).toEqual(["Main", "Work key", "Main", "Kimi K3.1 Pro"]);
-  await atTop(page.getByRole("heading", { name: "AI services", exact: true }));
+  await atTop(page.locator("#ai-services"));
   await noHorizontalOverflow(page);
   await page.screenshot({ ...shot("01-ai-services-list.png"), animations: "disabled" });
   await atTop(row(page, "Codex · Kimi K3.1 Pro"));
@@ -211,10 +212,10 @@ test("a service on the chat adapter says what Codex's tools cost on it, as last 
   await page.screenshot({ ...shot("01c-ai-services-tool-cost.png"), animations: "disabled" });
 });
 
-test("anchors still scroll: every section keeps its id, and the agents' cards come after the list", async ({ page }) => {
+test("anchors still scroll: every section keeps its id, and each agent's accounts are under its heading", async ({ page }) => {
   await hub(page);
   await settings(page);
-  // The ids of this tab (the other tabs' own ids, and the address for each, are settingsTabs.spec.ts's).
+  // The ids of this page (the other pages' own ids, and the address for each, are settingsTabs.spec.ts's).
   for (const id of ["ai-services", "agent-claude", "agent-codex"]) {
     const target = page.locator(`#${id}`);
     await target.scrollIntoViewIfNeeded();
@@ -222,9 +223,10 @@ test("anchors still scroll: every section keeps its id, and the agents' cards co
   }
   const [list, card] = await Promise.all([page.locator("#ai-services").boundingBox(), page.locator("#agent-claude").boundingBox()]);
   expect(card!.y).toBeGreaterThan(list!.y);
-  // The agents' own cards are all still there.
-  await expect(page.locator("#agent-claude").getByRole("region", { name: "Claude Code accounts", exact: true })).toBeVisible();
-  await expect(page.locator("#agent-codex").getByRole("button", { name: "Add a custom model", exact: true })).toBeVisible();
+  // Each agent's accounts are under its own heading, with the agent itself in one line above them.
+  await expect(page.locator("#agent-claude")).toHaveAttribute("aria-label", "Claude Code accounts");
+  await expect(page.locator("#agent-claude").getByRole("region", { name: "Claude Code", exact: true })).toContainText(/^Claude Code .* · installed/);
+  await expect(page.getByRole("region", { name: "Your own models", exact: true })).toBeVisible();
 });
 
 test("Test on a custom model shows what the check found, and a check that can't run says what to do", async ({ page }) => {
@@ -263,12 +265,13 @@ test("Test on a saved API key is the account's own check, like a plan sign-in's,
   const h = await hub(page, [CLAUDE_MAIN, WORK_KEY, CODEX_MAIN, teamKey, KIMI]);
   await settings(page);
   const key = row(page, "Claude Code · Work key");
-  await expect(key.getByText("Key accepted", { exact: true })).toBeVisible();
+  await expect(key.getByText("Key works", { exact: true })).toBeVisible();
   // The agent stops accepting the key. Test asks it again, through the route Check under Accounts uses.
   h.check = (a) => ({ ...a, signedIn: false });
   await key.getByRole("button", { name: "Test", exact: true }).click();
-  await expect(key.getByText("Key not accepted", { exact: true })).toBeVisible();
-  await expect(key.getByText("Replace the key under Claude Code below.", { exact: true })).toBeVisible();
+  await expect(key.getByText("Key was refused", { exact: true })).toBeVisible();
+  // What's wrong is fixed where it's said: the key's own button is on the row.
+  await expect(key.getByRole("button", { name: "Key & workspace", exact: true })).toBeVisible();
   expect(h.checked).toEqual(["claude/key1"]);
   // The service check finds custom models only: it was never asked about the key (it would answer "No such custom model").
   expect(h.tests).toEqual([]);
@@ -279,13 +282,13 @@ test("Test on a saved API key is the account's own check, like a plan sign-in's,
   // A key that works again.
   h.check = (a) => ({ ...a, signedIn: true });
   await key.getByRole("button", { name: "Test", exact: true }).click();
-  await expect(key.getByText("Key accepted", { exact: true })).toBeVisible();
-  await expect(key.getByText("Replace the key under Claude Code below.", { exact: true })).toHaveCount(0);
+  await expect(key.getByText("Key works", { exact: true })).toBeVisible();
+  await expect(key.getByRole("button", { name: "Key & workspace", exact: true })).toBeHidden();
   expect(h.checked).toEqual(["claude/key1", "claude/key1"]);
   // A Codex key is the same.
   const team = row(page, "Codex · Team key");
   await team.getByRole("button", { name: "Test", exact: true }).click();
-  await expect(team.getByText("Key accepted", { exact: true })).toBeVisible();
+  await expect(team.getByText("Key works", { exact: true })).toBeVisible();
   expect(h.checked.at(-1)).toBe("codex/key2");
   expect(h.tests).toEqual([]);
 });
@@ -293,7 +296,7 @@ test("Test on a saved API key is the account's own check, like a plan sign-in's,
 test("a 404 from a hub that has the route is reported as it came: only a hub without the route is too old", async ({ page }) => {
   const h = await hub(page);
   await settings(page);
-  const tooOld = "This machine's hub is too old to check services.";
+  const tooOld = "This machine runs an older Crosstalk that can't check an account this way.";
   // The key's account was removed meanwhile (on another phone, say): the check's route says so in its own words.
   const key = row(page, "Claude Code · Work key");
   h.check = () => 404;
@@ -301,9 +304,9 @@ test("a 404 from a hub that has the route is reported as it came: only a hub wit
   await expect(key.getByRole("alert")).toHaveText("The check didn't run: No such account. Press Test to try again.");
   // The same for the service check, which finds a custom model among its own.
   const kimi = row(page, "Codex · Kimi K3.1 Pro");
-  h.test = () => ({ status: 404, error: "No such custom model" });
+  h.test = () => ({ status: 404, error: "That account isn't here any more" });
   await kimi.getByRole("button", { name: "Test", exact: true }).click();
-  await expect(kimi.getByRole("alert")).toHaveText("The check didn't run: No such custom model. Press Test to try again.");
+  await expect(kimi.getByRole("alert")).toHaveText("The check didn't run: That account isn't here any more. Press Test to try again.");
   await expect(page.getByText(tooOld, { exact: false })).toHaveCount(0);
   // A hub without the route says its plain "not found": that one is too old.
   h.test = () => 404;
@@ -316,7 +319,8 @@ test("Test on a plan sign-in rechecks it, and a sign-in that's gone says where t
   await settings(page);
   const main = row(page, "Codex · Main");
   await expect(main.getByText("Not signed in", { exact: true })).toBeVisible();
-  await expect(main.getByText("Press Sign in under Codex below.", { exact: true })).toBeVisible();
+  // Its Sign in is on its own row.
+  await expect(main.getByRole("button", { name: "Sign in", exact: true })).toBeVisible();
   // The check is the account's own, the same as Check under Accounts: no service is asked.
   let rechecked = 0;
   await page.route((url) => url.pathname === "/api/accounts/codex/default/refresh", (route) => (rechecked++, route.fulfill({ json: CODEX_MAIN })));
@@ -326,13 +330,13 @@ test("Test on a plan sign-in rechecks it, and a sign-in that's gone says where t
   await expect(main.getByRole("button", { name: "Test", exact: true })).toBeEnabled();
 });
 
-test("Add an AI service: pick DeepSeek, follow the steps, Test, choose models and add it", async ({ page }) => {
+test("Add an account, another service: pick DeepSeek, follow the steps, Test, choose models and add it", async ({ page }) => {
   const h = await hub(page);
   await settings(page);
-  await addService(page).click();
+  await addAnotherService(page);
   const dialog = sheet(page);
   // Every service the spec names, each with a line about it.
-  for (const title of ["Kimi", "DeepSeek", "Mistral", "OpenRouter", "Groq", "xAI", "Venice", "Google Gemini", "A server on this machine", "Another server"]) {
+  for (const title of ["Kimi", "DeepSeek", "Mistral", "OpenRouter", "Groq", "xAI", "Venice", "Google Gemini", "A model on this machine", "Something else"]) {
     await expect(dialog.getByRole("button", { name: new RegExp(`^${title}`) })).toBeVisible();
   }
   await noHorizontalOverflow(page);
@@ -383,7 +387,7 @@ test("Add an AI service: pick DeepSeek, follow the steps, Test, choose models an
   await expect(page.getByText("Added. Pick it as the account in a new Codex chat.", { exact: true })).toBeVisible();
   // It's in the list now.
   const added = row(page, "Codex · DeepSeek");
-  await expect(added.getByText("Codex · Custom model · api.deepseek.com · chat adapter", { exact: true })).toBeVisible();
+  await expect(added.getByText("api.deepseek.com · runs with Codex", { exact: true })).toBeVisible();
   await expect(added.getByText("2 models: deepseek-reasoner, deepseek-chat", { exact: true })).toBeVisible();
 });
 
@@ -470,7 +474,7 @@ test("an agent that isn't installed isn't offered first, and when it's the only 
   await expect(dialog.getByRole("button", { name: "Add it", exact: true })).toBeEnabled();
   await choice.getByRole("radio", { name: "Codex", exact: true }).click();
   const missing = dialog.getByRole("alert").filter({ hasText: "Codex isn't installed" });
-  await expect(missing).toHaveText("Codex isn't installed on this machine yet. Close this, press Install under Codex below, then add the service.");
+  await expect(missing).toHaveText("Codex isn't installed on this machine yet. Close this, tap Install on Codex's line in Accounts, then add the service.");
   await expect(dialog.getByRole("button", { name: "Add it", exact: true })).toBeDisabled();
   await atTop(dialog.getByText("Reachable", { exact: true }));
   await noHorizontalOverflow(page);
@@ -560,23 +564,23 @@ test("Venice: its key page, the line about its own prompt, a model that can't ru
     // Saved with the account: the hub's adapter puts it in every chat request, under its own fields.
     extra: { venice_parameters: { include_venice_system_prompt: false, strip_thinking_response: true } },
   });
-  await expect(row(page, "Codex · Venice").getByText("Codex · Custom model · api.venice.ai · chat adapter", { exact: true })).toBeVisible();
+  await expect(row(page, "Codex · Venice").getByText("api.venice.ai · runs with Codex", { exact: true })).toBeVisible();
 });
 
 test("when nothing answers at a hosted service's address, the address opens so it can be fixed", async ({ page }) => {
   const h = await hub(page);
   await settings(page);
   const dialog = await openSheet(page, "Groq");
-  const address = dialog.getByLabel("Server address", { exact: true });
+  const address = dialog.getByLabel("Address", { exact: true });
   // It starts tucked away.
   await expect(address).toBeHidden();
-  h.test = () => answer({ reachable: false, authOk: null, problems: ["Nothing answered at https://api.groq.com/openai. Check the address under Server address, then press Test."] });
+  h.test = () => answer({ reachable: false, authOk: null, problems: ["Nothing answered at https://api.groq.com/openai. Check the address under Address, then press Test."] });
   await dialog.getByLabel("API key", { exact: true }).fill("gsk-1");
   await dialog.getByRole("button", { name: "Test", exact: true }).click();
   await expect(dialog.getByText("Can't reach it", { exact: true })).toBeVisible();
   await expect(address).toBeVisible();
   await expect(address).toHaveValue("https://api.groq.com/openai");
-  await atTop(dialog.getByText("Server address", { exact: true }).first());
+  await atTop(dialog.getByText("Address", { exact: true }).first());
   await noHorizontalOverflow(page);
   await page.screenshot({ ...shot("15-address-opens.png"), animations: "disabled" });
   // Typing there stays open (and forgets the answer); the new address is what's tested next.
@@ -592,9 +596,9 @@ test("when nothing answers at a hosted service's address, the address opens so i
 test("a service that lists no models can be added with names typed by hand", async ({ page }) => {
   const h = await hub(page);
   await settings(page);
-  const dialog = await openSheet(page, "Another server");
-  await dialog.getByLabel("Server address", { exact: true }).fill("https://llm.example.com");
-  await tip(dialog.getByRole("button", { name: "What's a server address?", exact: true }), "Where the server listens, as this machine reaches it, like http://127.0.0.1:11434.");
+  const dialog = await openSheet(page, "Something else");
+  await dialog.getByLabel("Address", { exact: true }).fill("https://llm.example.com");
+  await tip(dialog.getByRole("button", { name: "What's the address?", exact: true }), "Where it answers, as this machine reaches it, like http://127.0.0.1:11434.");
   h.test = () => answer({ authOk: null, protocols: { responses: "yes", messages: "no", chat: "no" }, works: [{ provider: "codex", via: "responses" }] });
   await dialog.getByRole("button", { name: "Test", exact: true }).click();
   await expect(dialog.getByText("No models listed", { exact: true })).toBeVisible();
@@ -649,7 +653,7 @@ test("Found on this machine: servers with their models and memory, In use, Resca
   const lm = row(page, "LM Studio on 127.0.0.1:1234");
   await expect(lm.getByText("In use", { exact: true })).toBeVisible();
   await expect(lm.getByRole("button", { name: "Use it", exact: true })).toHaveCount(0);
-  await tip(found.getByRole("button", { name: "What does this list?", exact: true }), "Model servers running on this machine right now, such as Ollama or LM Studio. Each machine lists its own: switch machines at the top of Settings to see another one's.");
+  await tip(found.getByRole("button", { name: "What does this list?", exact: true }), "Models running on this machine right now, in Ollama, LM Studio or llama.cpp. Each machine lists its own.");
   await atTop(found);
   await noHorizontalOverflow(page);
   await page.screenshot({ ...shot("11-found-on-this-machine.png"), animations: "disabled" });
@@ -661,7 +665,7 @@ test("Found on this machine: servers with their models and memory, In use, Resca
   expect(h.scanQueries).toEqual(Array(opened).fill(""));
   h.servers = [];
   await found.getByRole("button", { name: "Rescan", exact: true }).click();
-  await expect(found.getByText("No model server found on this machine. Start Ollama, LM Studio or llama.cpp, then press Rescan.", { exact: true })).toBeVisible();
+  await expect(found.getByText("Nothing found running on this machine. Start Ollama, LM Studio or llama.cpp, then press Rescan.", { exact: true })).toBeVisible();
   expect(h.scans).toBe(opened + 1);
   expect(h.scanQueries.at(-1)).toBe("?fresh=1");
   h.servers = [ollama];
@@ -674,7 +678,7 @@ test("Found on this machine: servers with their models and memory, In use, Resca
   h.test = () => answer({ authOk: null, protocols: { responses: "yes", messages: "yes", chat: "yes" }, models: ollama.models.map((m) => ({ id: m.id, contextWindow: m.contextWindow })), works: [{ provider: "codex", via: "responses" }, { provider: "claude", via: "messages" }] });
   await ol.getByRole("button", { name: "Use it", exact: true }).click();
   const dialog = sheet(page);
-  await expect(dialog.getByLabel("Server address", { exact: true })).toHaveValue("http://127.0.0.1:11434");
+  await expect(dialog.getByLabel("Address", { exact: true })).toHaveValue("http://127.0.0.1:11434");
   await expect(dialog.getByText("3 models found", { exact: true })).toBeVisible();
   expect(h.tests).toEqual([{ baseUrl: "http://127.0.0.1:11434" }]);
   await expect(dialog.getByLabel("Name", { exact: true })).toHaveValue("Ollama");
@@ -731,7 +735,7 @@ test("an older hub: no scan means no Found block, and a service check that isn't
   h.servers = 404;
   h.test = () => 404;
   await settings(page);
-  await expect(page.getByRole("button", { name: "Add an AI service", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Add an account", exact: true })).toBeVisible();
   await expect.poll(() => h.scans).toBeGreaterThanOrEqual(1);
   await expect(page.getByRole("region", { name: "Found on this machine", exact: true })).toHaveCount(0);
   // (Local models has a Rescan of its own below.)
@@ -739,7 +743,7 @@ test("an older hub: no scan means no Found block, and a service check that isn't
   const dialog = await openSheet(page, "DeepSeek");
   await dialog.getByLabel("API key", { exact: true }).fill("sk-1");
   await dialog.getByRole("button", { name: "Test", exact: true }).click();
-  await expect(dialog.getByRole("alert")).toContainText("This machine's hub is too old to check services. Update it, or use Add a custom model under Claude Code or Codex below.");
+  await expect(dialog.getByRole("alert")).toContainText("This machine runs an older Crosstalk that can't check an account this way. Update Crosstalk on it, then press Test again.");
 });
 
 test("a scan that fails says what to do and Rescan tries again", async ({ page }) => {
@@ -747,12 +751,12 @@ test("a scan that fails says what to do and Rescan tries again", async ({ page }
   h.servers = 500;
   await settings(page);
   const found = page.getByRole("region", { name: "Found on this machine", exact: true });
-  await expect(found.getByRole("alert")).toContainText("Couldn't look for servers");
+  await expect(found.getByRole("alert")).toContainText("Couldn't look on this machine");
   await expect(found.getByRole("alert")).toContainText("Press Rescan to try again.");
   h.servers = [];
   await found.getByRole("button", { name: "Rescan", exact: true }).click();
   await expect(found.getByRole("alert")).toHaveCount(0);
-  await expect(found.getByText("No model server found on this machine", { exact: false })).toBeVisible();
+  await expect(found.getByText("Nothing found running on this machine", { exact: false })).toBeVisible();
 });
 
 for (const width of [320, 390]) {
@@ -761,14 +765,14 @@ for (const width of [320, 390]) {
     h.servers = [{ id: "llamacpp", kind: "llamacpp", label: "llama.cpp with a rather long server name", baseUrl: "http://127.0.0.1:8080", models: [{ id: "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF:UD-Q4_K_XL", contextWindow: 65_536, sizeBytes: 1, loaded: true }], memoryBytes: 18 * 1024 ** 3, protocols: { ...none }, accountIds: [] }];
     h.catalogs.set("kimi1", { provider: "codex", accountId: "kimi1", live: false, error: "down", checkedAt: MARCH_3, models: [] });
     await page.setViewportSize({ width, height: 800 });
-    await page.goto("/#/settings");
-    await expect(page.getByRole("heading", { name: "AI services", exact: true })).toBeVisible();
+    await page.goto("/#/settings/accounts");
+    await expect(page.getByRole("button", { name: "Add an account", exact: true })).toBeVisible();
     await expect(row(page, "Codex · Kimi K3.1 Pro")).toBeVisible();
     await expect(page.getByRole("region", { name: "Found on this machine", exact: true })).toContainText("llama.cpp with a rather long server name");
     await noHorizontalOverflow(page);
-    const dialog = await openSheet(page, "Another server");
+    const dialog = await openSheet(page, "Something else");
     await noHorizontalOverflow(page);
-    await dialog.getByLabel("Server address", { exact: true }).fill("https://a-very-long-host-name.example-llm-service.com/some/long/path");
+    await dialog.getByLabel("Address", { exact: true }).fill("https://a-very-long-host-name.example-llm-service.com/some/long/path");
     h.test = () => answer({
       authOk: null, protocols: { responses: "yes", messages: "yes", chat: "yes" },
       models: Array.from({ length: 12 }, (_, i) => ({ id: `organization/a-long-model-name-${i}-instruct-2026-10-27`, contextWindow: 131_072 })),

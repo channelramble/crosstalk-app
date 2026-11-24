@@ -25,7 +25,7 @@ process.env.CROSSTALK_FEATHERLESS_URL = "http://127.0.0.1:9";
 process.env.CROSSTALK_NANOGPT_URL = "http://127.0.0.1:9";
 // Refuseless (refuseless.ts, its prices in prices.ts): a closed port too; the Refuseless tests start their own stand-in.
 process.env.CROSSTALK_REFUSELESS_URL = "http://127.0.0.1:9";
-// GitHub's API (the model pool's llama.cpp builds, BrowserOS neo's releases): a closed port, so no test asks the real
+// GitHub's API (BrowserOS neo's releases): a closed port, so no test asks the real
 // one — which also means no test spends the 60 unsigned checks an hour a machine gets. Tests that want an answer
 // point this at their own stand-in.
 process.env.CROSSTALK_GITHUB_API = "http://127.0.0.1:9";

@@ -4,7 +4,7 @@ import { describe, expect, test } from "bun:test";
 import type { AgentAccount, MacStatus, MachineInfo, Provider, ProviderStatus, SetupChecklist } from "@crosstalk/shared";
 import { INSTALL_LINES, SETUP_ITEM_IDS, SETUP_PROMPT, clean, newerThan, pairingUrl, setupChecklist, sh, type SetupFacts } from "../src/setup/checklist";
 import { SETUP_GUIDE, directLocal, guideSection } from "../src/setup";
-import { parseServeStatus, parseTailscaleStatus, redactLog } from "../src/setup/system";
+import { parseServeStatus, parseTailscaleStatus, redactLog, serviceFromManager } from "../src/setup/system";
 import { claudeProvider } from "../src/providers/claude";
 import { codexProvider } from "../src/providers/codex";
 import { geminiProvider } from "../src/providers/gemini";
@@ -38,7 +38,6 @@ function facts(over: Partial<SetupFacts> = {}, hub: Partial<SetupFacts["hub"]> =
     mac: MAC,
     machines: [],
     machineVersions: {},
-    pool: null,
     ...over,
   };
 }
@@ -142,6 +141,23 @@ describe("service", () => {
     const off = itemOf(linux({ service: { runningUnder: "systemd", label: "crosstalk-hub.service", file: "/u", fileExists: true, linger: false } }), "service");
     expect(off).toMatchObject({ state: "user", fix: { command: "sudo loginctl enable-linger me", password: true } });
   });
+  test("on Linux CROSSTALK_UNIT names another unit, as CROSSTALK_LABEL does on a Mac: it's the one asked about and the one the commands name", async () => {
+    const asked: string[][] = [];
+    const run = async (args: string[]) => {
+      asked.push(args);
+      return { code: 3, out: args.includes("is-enabled") ? "enabled\n" : "inactive\n" };
+    };
+    const other = await serviceFromManager(run, { CROSSTALK_UNIT: "crosstalk-hub-test" }, "linux");
+    expect(other).toMatchObject({ label: "crosstalk-hub-test.service", file: expect.stringMatching(/\/\.config\/systemd\/user\/crosstalk-hub-test\.service$/), loaded: true, active: false });
+    expect(asked).toEqual([
+      ["systemctl", "--user", "is-enabled", "crosstalk-hub-test.service"],
+      ["systemctl", "--user", "is-active", "crosstalk-hub-test.service"],
+    ]);
+    expect((await serviceFromManager(run, {}, "linux"))?.label).toBe("crosstalk-hub.service");
+    // What the checklist tells the person to run names that unit.
+    const stopped = itemOf(linux({ service: { ...other!, fileExists: true }, offline: { code: "stopped", tried: [] } } as Partial<SetupFacts>, { running: false }), "service");
+    expect(stopped.fix).toMatchObject({ command: "systemctl --user start crosstalk-hub-test", text: expect.stringContaining("journalctl --user -u crosstalk-hub-test -n 50 --no-pager") });
+  });
   test("not known: unknown", () => {
     expect(itemOf(facts({ service: null }), "service").state).toBe("unknown");
   });
@@ -229,6 +245,11 @@ describe("version", () => {
     const bare = itemOf(facts({ staged: "0.4.2", idleRestart: null }), "version");
     expect(bare.fix).toMatchObject({ command: "launchctl kickstart -k gui/$(id -u)/com.crosstalk.hub", text: expect.stringContaining("ask the person first") });
     expect(itemOf(linux({ staged: "0.4.2", idleRestart: null }), "version").fix?.command).toBe("systemctl --user restart crosstalk-hub");
+    // On Linux too the idle watcher does it when it's installed, with its log in the data folder (the service's own is the journal).
+    expect(itemOf(linux({ staged: "0.4.2", idleRestart: "/home/me/.crosstalk/bin/restart-when-idle.sh" }, { home: "/home/me/.crosstalk" }), "version").fix).toMatchObject({
+      text: expect.stringContaining("start the idle watcher"),
+      command: "mkdir -p /home/me/.crosstalk/logs && nohup /home/me/.crosstalk/bin/restart-when-idle.sh >> /home/me/.crosstalk/logs/restart-when-idle.log 2>&1 &",
+    });
     expect(itemOf(facts({ staged: "0.4.1" }), "version").detail).toBe("A new build of 0.4.1 is installed and waits for a restart.");
   });
   test("a linked machine on a newer version: the person updates this one", () => {
@@ -300,7 +321,7 @@ describe("network", () => {
     const https = itemOf(answers, "https");
     expect(https).toMatchObject({ state: "done", fix: null });
     expect(https.detail).toBe("https://mini.tail1.ts.net answers and reaches this Crosstalk. Tailscale itself couldn't be asked, so whether Funnel also puts it on the public internet isn't known.");
-    expect(itemOf(answers, "public-url")).toMatchObject({ state: "done", detail: expect.stringContaining("this hub answers there") });
+    expect(itemOf(answers, "public-url")).toMatchObject({ state: "done", detail: expect.stringContaining("this machine answers there") });
     // Only one way in on a Linux hub, and nothing answering there: then there is something to do.
     const quiet = linux({ tailscale: { ...silent, cli: "tailscale", tried: ["cli"] }, https: { answers: false, crosstalk: false, version: null } });
     expect(itemOf(quiet, "tailscale")).toMatchObject({ state: "unknown", detail: "Tailscale is installed but didn't answer (tried the tailscale command).", fix: { command: "tailscale status" } });
@@ -352,7 +373,7 @@ describe("network", () => {
 describe("devices and notifications", () => {
   test("no device: the person types a code an agent makes, at the hub's address", () => {
     const none = itemOf(facts({ devices: [] }), "devices");
-    expect(none).toMatchObject({ state: "user", fix: { command: "/Users/me/.local/bin/crosstalk-hub pair 15", screen: "Settings → Devices → Pair a new device", target: "devices" } });
+    expect(none).toMatchObject({ state: "user", fix: { command: "/Users/me/.local/bin/crosstalk-hub pair 15", screen: "Settings → This device → Paired devices → Pair a new device", target: "devices" } });
     expect(none.fix?.text).toContain("pair_code");
     expect(none.fix?.text).toContain("https://mini.tail1.ts.net");
     const many = itemOf(facts({ devices: ["iPhone\u202e", "iPad", "MacBook", "Pixel"].map((name) => ({ name, platform: "" })) }), "devices");
@@ -392,7 +413,7 @@ describe("devices and notifications", () => {
   });
   test("notifications: none on is the person's; iPhones without the https address are not", () => {
     const off = itemOf(facts({ push: { devices: 0, apple: 0, lastOkAt: null } }), "push");
-    expect(off).toMatchObject({ state: "user", fix: { screen: "Settings → Devices", target: "devices" } });
+    expect(off).toMatchObject({ state: "user", fix: { screen: "Settings → This device → Notifications", target: "notifications" } });
     expect(off.fix?.text).toContain("Add to Home Screen");
     expect(itemOf(facts({ push: { devices: 0, apple: 0, lastOkAt: null } }, { publicUrl: null }), "push").detail).toContain("https address first");
     expect(itemOf(facts({}, { publicUrl: null }), "push")).toMatchObject({ state: "missing", detail: expect.stringContaining("iPhones") });
@@ -404,7 +425,7 @@ describe("devices and notifications", () => {
 describe("agents", () => {
   test("installed agents are needed; with none installed, Claude Code and Codex both are", () => {
     const one = setupChecklist(facts({ providers: [status("claude"), status("codex", { installed: false, version: null, binPath: null, signedIn: null })] }));
-    expect(get(one, "agent.codex")).toMatchObject({ state: "missing", optional: true, fix: { command: INSTALL_LINES.codex, screen: "Settings → AI services → Codex", target: "agent-codex" } });
+    expect(get(one, "agent.codex")).toMatchObject({ state: "missing", optional: true, fix: { command: INSTALL_LINES.codex, screen: "Settings → Accounts → Codex", target: "agent-codex" } });
     const none = setupChecklist(facts({ providers: (["claude", "codex", "gemini", "antigravity", "muse"] as Provider[]).map((p) => status(p, { installed: false, version: null, binPath: null, signedIn: null })) }));
     expect(none.items.filter((i) => i.group === "agents").map((i) => [i.id, i.state, i.optional])).toEqual([
       ["agent.claude", "missing", false],
@@ -432,7 +453,7 @@ describe("agents", () => {
   });
   test("signed out is the person's (from the phone, or at the machine); any signed-in account counts, as in Settings", () => {
     const out = itemOf(facts({ providers: [status("claude", { signedIn: false }), status("codex")] }), "agent.claude");
-    expect(out).toMatchObject({ state: "user", detail: "Claude Code 2.1.0 is installed but not signed in.", fix: { command: "/opt/homebrew/bin/claude auth login", password: true, screen: "Settings → AI services → Claude Code → Sign in", target: "agent-claude" } });
+    expect(out).toMatchObject({ state: "user", detail: "Claude Code 2.1.0 is installed but not signed in.", fix: { command: "/opt/homebrew/bin/claude auth login", password: true, screen: "Settings → Accounts → Claude Code → Sign in", target: "agent-claude" } });
     const viaAccount = itemOf(facts({ providers: [status("claude", { signedIn: false }), status("codex")], accounts: [account({ provider: "claude", id: "work", label: "Work", kind: "signin" })] }), "agent.claude");
     expect(viaAccount.state).toBe("done");
     // The plan shows; the account's email never does.
@@ -456,7 +477,7 @@ describe("agents", () => {
 
 describe("AI services", () => {
   test("optional: none added, a key refused, a server here not used yet, or what was added", () => {
-    expect(itemOf(facts(), "services")).toMatchObject({ state: "user", optional: true, fix: { screen: "Settings → AI services", target: "ai-services" } });
+    expect(itemOf(facts(), "services")).toMatchObject({ state: "user", optional: true, fix: { screen: "Settings → Accounts", target: "ai-services" } });
     expect(itemOf(facts({ accounts: [account({ kind: "apikey", label: "Work key", signedIn: false })] }), "services")).toMatchObject({ state: "user", detail: "Work key (Codex): its key was refused." });
     const unused = itemOf(facts({ localServers: [{ label: "Ollama (port 11434)", used: false }] }), "services");
     expect(unused.detail).toBe("Ollama (port 11434) runs on this machine and isn't used yet.");
@@ -472,7 +493,7 @@ describe("AI services", () => {
 describe("This Mac", () => {
   test("automatic login off: the fixed command Settings runs, without its terminal wrapper, for the person's password", () => {
     const off = itemOf(facts({ mac: { ...MAC, autoLogin: null } }), "mac.autologin");
-    expect(off).toMatchObject({ state: "user", fix: { command: "/usr/bin/sudo /usr/sbin/sysadminctl -autologin set -userName me -password -", password: true, screen: "Settings → This Mac → Turn on automatic login", target: "this-mac" } });
+    expect(off).toMatchObject({ state: "user", fix: { command: "/usr/bin/sudo /usr/sbin/sysadminctl -autologin set -userName me -password -", password: true, screen: "Settings → Machines → This Mac → Turn on automatic login", target: "this-mac" } });
     expect(itemOf(facts({ mac: { ...MAC, autoLogin: null, fileVault: true } }), "mac.autologin")).toMatchObject({ state: "user", detail: expect.stringContaining("FileVault") });
     expect(itemOf(facts({ mac: { ...MAC, autoLogin: null, fileVault: null } }), "mac.autologin").state).toBe("unknown");
   });
@@ -503,7 +524,7 @@ describe("This Mac", () => {
   });
 });
 
-describe("linked machines and the model pool", () => {
+describe("linked machines", () => {
   test("machines are optional: an older one, one signed out, one unreachable, or all fine", () => {
     expect(itemOf(facts(), "machines")).toMatchObject({ state: "user", optional: true, fix: { target: "machines" } });
     expect(itemOf(facts({ machines: [machine({ agents: "needs-update" })] }), "machines")).toMatchObject({ state: "user", detail: "Linux box runs an older Crosstalk." });
@@ -512,14 +533,6 @@ describe("linked machines and the model pool", () => {
     expect(itemOf(facts({ machines: [machine({ agents: "failed", error: "Couldn't reach box: timed out" })] }), "machines").detail).toBe("Couldn't reach Linux box: Couldn't reach box: timed out.");
     expect(itemOf(facts({ machines: [machine(), machine({ id: "h_2", name: "Studio", agents: "two-way" })] }), "machines")).toMatchObject({ state: "done", detail: "Linked: Linux box and Studio." });
     expect(itemOf(facts({ machines: [machine({ agents: "removing" })] }), "machines").detail).toContain("None linked");
-  });
-  test("the pool shows once it's set up: running, stopped with an error (needed), or off (optional)", () => {
-    expect(setupChecklist(facts({ pool: { configured: false, state: "off", detail: null, alias: "", machines: 1 } })).items.some((i) => i.id === "pool")).toBe(false);
-    const pool = (state: "running" | "error" | "off" | "starting", detail: string | null = null) => itemOf(facts({ pool: { configured: true, state, detail, alias: "qwen3-235b", machines: 3 } }), "pool");
-    expect(pool("running")).toMatchObject({ state: "done", detail: "qwen3-235b runs on 3 machines." });
-    expect(pool("error", "The PC's helper didn't start: open its window.")).toMatchObject({ state: "missing", optional: false, detail: "The PC's helper didn't start: open its window.", fix: { target: "model-pool" } });
-    expect(pool("off")).toMatchObject({ state: "missing", optional: true });
-    expect(pool("starting", "Loading the model")).toMatchObject({ state: "unknown", detail: "Starting: Loading the model. Check again in a minute." });
   });
 });
 
@@ -549,6 +562,9 @@ describe("BrowserOS neo", () => {
     expect(i.fix?.text).toContain("SHA-256");
     expect(i.fix?.text).toContain("notarisation");
     expect(i.fix?.target).toBe("agent-setup");
+    // On Linux nothing is said of a Mac's folder or checks.
+    const onLinux = get(setupChecklist(linux({ browseros: browserOs({ installed: null, mcp: null, links: [] }) })), "browseros");
+    expect(onLinux.fix?.text).toBe("Install it. Crosstalk checks the download against the SHA-256 GitHub reports before anything goes on this machine:");
   });
 
   test("installed but never opened asks the person to open it once, and says why the port isn't guessed", () => {
@@ -669,7 +685,7 @@ test("names and errors from elsewhere come out as one plain line, capped", () =>
 test("the guide has a section for every item, and no item id is missing from it", () => {
   const ids = SETUP_ITEM_IDS;
   // Every id the checklist can make, from facts that make each one, in the documented order.
-  const every = setupChecklist(facts({ pool: { configured: true, state: "off", detail: null, alias: "m", machines: 1 }, providers: (["claude", "codex", "gemini", "antigravity", "muse", "opencode"] as Provider[]).map((p) => status(p)), mac: { ...MAC, dialogs: [{ id: "d", app: "a", wants: "b", since: NOW, count: 1 }] }, browseros: browserOs() }));
+  const every = setupChecklist(facts({ providers: (["claude", "codex", "gemini", "antigravity", "muse", "opencode"] as Provider[]).map((p) => status(p)), mac: { ...MAC, dialogs: [{ id: "d", app: "a", wants: "b", since: NOW, count: 1 }] }, browseros: browserOs() }));
   expect(every.items.map((i) => i.id)).toEqual(ids);
   for (const id of ids) {
     const s = guideSection(id);

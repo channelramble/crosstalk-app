@@ -6,7 +6,7 @@
 // web/e2e/costs.spec.ts covers one-agent chats; this file is only the gaps. Each test says whether it is EXPECTED TO
 // FAIL on today's code and why. The hub's money answers are mocked, so the shared test hub's own state stays as it was
 // (the rooms and the account these make are removed in `finally`, and the cleanHub fixture checks it).
-import { test, expect, noHorizontalOverflow } from "./fixtures";
+import { test, expect, noHorizontalOverflow, chatSettings } from "./fixtures";
 import type { APIRequestContext, Page } from "@playwright/test";
 import type { AccountSpend, BudgetState, Member, SpendTotals } from "@crosstalk/shared";
 
@@ -122,13 +122,8 @@ test("a group chat's cost line follows the agent whose popup it is in, not which
   s.history.turns = [s.turn("t1", s.keys.id, { replyMessageId: "money-2", triggerMessageId: "money-1" })];
   try {
     await s.open();
-    // The controls are for one agent at a time: pick the one on the API key.
-    await page.getByRole("button", { name: /^Settings for @claude\./ }).click();
-    // A menu item is named by its title and the help under it ("@keys" then the agent and model).
-    await page.getByRole("menuitemradio", { name: /^@keys\b/ }).click();
-    await expect(page.getByRole("button", { name: /^Settings for @keys\./ })).toBeVisible();
-    await page.getByRole("button", { name: /Show context and plan limits/ }).click();
-    const pop = page.getByRole("dialog", { name: "Context and plan limits", exact: true });
+    // Each agent has its own block in the chat's settings: the one on the API key.
+    const pop = await chatSettings(page, "Answers with", "keys");
     const line = pop.locator(".chat-cost");
     await expect(line).toBeVisible();
     // @keys is billed per reply: nothing here may say a plan covers this chat.
@@ -158,24 +153,19 @@ test("a group chat's popups say each agent's part, and the asks and earlier acco
   await page.route(`**/api/rooms/${s.room.id}/spend`, (r) => r.fulfill({ json: { roomId: s.room.id, usd: 15.4, replies: 7, unpriced: 0, estimated: 4, byAccount } }));
   s.history.messages = [s.message("human", "Plan the release"), s.message("agent", "Planned.", s.keys.id, "t1")];
   s.history.turns = [s.turn("t1", s.keys.id, { replyMessageId: "money-2", triggerMessageId: "money-1" })];
-  const context = page.getByRole("button", { name: /Show context and plan limits/ });
-  const pop = page.getByRole("dialog", { name: "Context and plan limits", exact: true });
+  const pop = page.getByRole("dialog", { name: "Chat settings", exact: true }).getByRole("region", { name: "@claude", exact: true });
+  const keys = page.getByRole("dialog", { name: "Chat settings", exact: true }).getByRole("region", { name: "@keys", exact: true });
   const rest = "Asks and earlier accounts in this chat: $3.10";
   try {
     await s.open();
-    await context.click();
+    await chatSettings(page, "Answers with", "claude");
     await expect(pop.locator(".chat-cost")).toHaveText("@claude in this chat: ≈$4.10 at API prices, included in your plan");
     await expect(pop.locator(".chat-cost-rest")).toHaveText(rest);
     await noHorizontalOverflow(page);
-    await page.keyboard.press("Escape");
-    await expect(pop).toBeHidden();
-    await page.getByRole("button", { name: /^Settings for @claude\./ }).click();
-    await page.getByRole("menuitemradio", { name: /^@keys\b/ }).click();
-    await expect(page.getByRole("button", { name: /^Settings for @keys\./ })).toBeVisible();
-    await context.click();
-    await expect(pop.locator(".chat-cost")).toHaveText("@keys in this chat: $8.20");
+    await chatSettings(page, "Answers with", "keys");
+    await expect(keys.locator(".chat-cost")).toHaveText("@keys in this chat: $8.20");
     // The same $3.10, billed, and in no way said to be covered by @claude's plan.
-    await expect(pop.locator(".chat-cost-rest")).toHaveText(rest);
+    await expect(keys.locator(".chat-cost-rest")).toHaveText(rest);
     await noHorizontalOverflow(page);
   } finally {
     await s.cleanup();
@@ -226,7 +216,7 @@ async function mockUsage(page: Page, windows: { label: string; usedPercent: numb
     await route.fulfill({ json: snap });
   });
   await page.goto("/#/usage");
-  await expect(page.locator(".topbar h1")).toHaveText("Usage");
+  await expect(page.locator(".topbar h1")).toHaveText("Usage & costs");
   const card = page.locator(".card").filter({ hasText: "Codex · Main" });
   await expect(card).toBeVisible();
   return card;

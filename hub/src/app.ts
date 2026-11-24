@@ -4,6 +4,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { homedir, hostname, platform as osPlatform, tmpdir } from "node:os";
 import {
+  settingsPath,
   FACTORY_DEFAULTS,
   FACTORY_HUB_SETTINGS,
   FACTORY_STORAGE,
@@ -11,6 +12,7 @@ import {
   PERMISSION_MODES,
   PROVIDER_INFO,
   DEFAULT_ACCOUNT,
+  helperAtWork,
   limitAgentWords,
   limitWaitWords,
   memberAccount,
@@ -32,6 +34,10 @@ import {
   type RoomMode,
   type StateSnapshot,
   isServiceOnlyAgent,
+  memoryBriefing,
+  memoryNoResumeLine,
+  CHAT_PROVIDERS,
+  type HelpersOn,
 } from "@crosstalk/shared";
 import { Store } from "./db";
 import { Bus } from "./bus";
@@ -39,7 +45,7 @@ import { Auth } from "./auth";
 import { Engine, HttpError } from "./engine/engine";
 import { createDriver } from "./agents";
 import type { AgentEndpoint, McpLaunch } from "./agents/driver";
-import { HOME, HUB_VERSION, RUN_DIR, type HubConfig } from "./config";
+import { HOME, HUB_VERSION, RUN_DIR, readSecrets, writeSecret, type HubConfig } from "./config";
 import { newId, secretToken } from "./util/ids";
 import { logger } from "./util/log";
 import { cutText } from "./util/text";
@@ -53,20 +59,22 @@ import { dropForkCopies } from "./duplicate";
 import { Storage } from "./storage";
 import { Machines } from "./machines";
 import { CrossChat } from "./xchat";
-import { PoolNodeRuntime } from "./pool/node";
-import { askTailscale } from "./tailscale";
-import { Pool } from "./pool/pool";
+import { askTailscale, tailscaleIPv4 } from "./tailscale";
 import { ImageEditor } from "./imageEditor";
 import { listenersOn, runCommand, shutdownLocalModels, startLocalModels } from "./localModels";
 import { MemoryGuard, blindReader, type HolderProbe } from "./memory";
 import { existingLocalRunners, localRunnersOf } from "./localRunners";
 import { localLibraryOf } from "./localLibrary";
-import { MacServer } from "./mac";
+import { MacServer, clock } from "./mac";
+import { FACTORY_SCREEN, ScreenManager } from "./screen";
+import { Updater } from "./update";
+import { stagedBuild, takeNextBuild } from "./setup/system";
 import { isModelAlias, modelName, pickModel, userNamed } from "./agents/model-lock";
 import { forgetConversation } from "./agents/builtin";
 import { codexAllowedLabel } from "./agents/codex";
 import { ruleLabel, ruleText } from "./mcp/always";
 import { Asks } from "./asks";
+import { Helpers } from "./helpers";
 import { Spend } from "./spend";
 import { Services } from "./services";
 import { ChatAdapter } from "./adapter";
@@ -113,18 +121,18 @@ export class App {
   readonly storage: Storage;
   readonly machines: Machines;
   readonly xchat: CrossChat;
-  /** This hub as a machine in a model pool (pool/node.ts): llama.cpp builds, its helper, model downloads, the server. */
-  readonly poolNode: PoolNodeRuntime;
-  /** The model pool set up on this hub (pool/pool.ts): its machines, starting and stopping it, its custom models. */
-  readonly pool: Pool;
   /** Settings → Image editor: the local AI image editor in the workspace's ai-models folder, switched on and off. */
   readonly imageEditor: ImageEditor;
   /** The memory guard (memory.ts): what's heavy on this machine, whether the next thing fits, and when it's thrashing. */
   readonly memory: MemoryGuard;
   /** Settings → This Mac (on a Mac hub): what keeps it from running unattended, and the dialogs waiting on its screen. */
   readonly mac: MacServer;
+  readonly screen: ScreenManager;
+  readonly updater: Updater;
   /** Ask others (asks.ts): one-shot questions to other agents about a message, answered into cards. */
   readonly asks: Asks;
+  /** Helpers that run for a chat's agent on another account (helpers.ts). */
+  readonly helpers: Helpers;
   /** What each account has cost, and its spending limit (spend.ts). */
   readonly spend: Spend;
   /** AI services (services.ts): checking a service before use, finding model servers on this machine. */
@@ -177,13 +185,24 @@ export class App {
       mcpLaunch: (m) => this.mcpLaunch(m),
       agentEnv: (m) => this.providers.agentEnv(m.provider, memberAccount(m)),
       resolveBin: (p) => this.providers.which(p),
+      // Helpers on another account (helpers.ts) stop with the agent that started them, and report as its reply ends.
+      stopHelpers: (roomId, memberId) => this.helpers.stop(roomId, memberId),
+      replyOver: (room, member, status) => this.helpers.replyOver(room, member, status),
       briefing: (room, member) =>
         [
           this.computers.briefing(),
           // A Mac hub runs unattended: a macOS dialog waits until someone clicks it on the Mac's screen.
-          osPlatform() === "darwin" && !inMemory
+          osPlatform() === "darwin" && !inMemory && this.screen.agentsAllowed()
+            ? "- This Mac runs unattended: when macOS asks permission, the dialog waits on its screen and what asked stops meanwhile. You can see and answer such a dialog with the screen_ tools; allow only what the task needs. Still prefer ways that raise none: don't search the whole home folder (find ~, rg ~, du ~) or open Photos, Contacts, Calendar, Mail or Messages data unless the task needs it, and reach other computers by their Tailscale addresses."
+            : osPlatform() === "darwin" && !inMemory
             ? "- This Mac runs unattended: when macOS asks permission, the dialog waits on its screen until someone clicks it there, and what asked stops meanwhile. Unless the task needs it, don't search the whole home folder (find ~, rg ~, du ~), drive other apps (osascript, System Events), capture the screen, or open Photos, Contacts, Calendar, Mail or Messages data; download with curl, brew or git rather than a browser; and reach other computers by their Tailscale addresses."
             : null,
+          // The screen tools (screen/index.ts): what they're for, and what stays the person's.
+          this.screen.agentsAllowed()
+            ? "- You can see and use this machine's screen with the screen_ tools (screenshot, click, type, key, scroll, drag, windows): for apps with no command line, and for dialogs waiting on the screen, including the system's own permission prompts. Prefer a command or a file edit where one does the job; take a screenshot before you act and check the result after. The person can watch live in Crosstalk's Screen view. Never type their passwords, sign-in codes or keys: ask them to type those themselves there. Don't change system or security settings unless they asked for exactly that."
+            : null,
+          // A machine with little memory (16 GB or less): a browser left with many pages open is how it runs out.
+          inMemory ? null : memoryBriefing(this.memory.reader.ramBytes()),
           this.xchat.offered(room, member)
             ? `- You're on ${this.machineName()}. The user's Crosstalk chats, on this machine and on their other machines, can be reached with list_chats, read_chat and send_to_chat; start_chat starts a new chat. Use them only when the human asks or when another chat has something you need. Other chats can't see this room or this machine's files, so make messages self-contained. Reach other machines' chats only with these tools, never with ssh or curl.`
             : null,
@@ -193,8 +212,8 @@ export class App {
       pauseNearLimitPercent: () => (this.hubSettings().pauseNearLimit ? 90 : null),
       // "Carry on when the limit resets": on unless it was turned off (absent means on, as for priceLookup).
       carryOnAfterLimit: () => this.hubSettings().carryOnAfterLimit !== false,
-      // "Keep going while helpers work": on unless it was turned off (absent means on, so existing installs have it).
-      messagesFlow: () => this.hubSettings().messagesFlow !== false,
+      // New replies wait while the machine is nearly out of memory and agents are what fills it (memory.ts).
+      memoryHold: () => this.memory?.holding() ?? false,
       accountLabel: (m) => this.accountLabelOf(m),
       onLimitWait: (e) => this.limitNote(e.kind, e.room, e.wait),
       chatContext: (room, member) => this.chats.context(room, member),
@@ -207,10 +226,6 @@ export class App {
       endpointFor: (m) => this.endpointFor(m.provider, memberAccount(m), m.model),
       checkFolder: (room) => this.checkFolder(room),
       checkBudget: (_room, m) => this.spend.checkBudget(m.provider, memberAccount(m)),
-      // A chat on the model pool while the pool isn't running: plain words with a way out, before the agent starts and
-      // again if the pool went away under a reply that was running (pool.ts chatProblem).
-      checkEndpoint: (_room, m) => this.pool?.chatProblem(m) ?? null,
-      replyFailed: (m) => this.pool?.chatProblem(m) ?? null,
       recordUsage: (room, m, turn, usage) => this.spend.recordTurn(room, m, turn, usage),
       turnStarting: (room, member) => this.chats.turnStarting(room, member),
       modelInfo: (m, model) => this.providers.modelInfo(m.provider, memberAccount(m), model),
@@ -231,11 +246,10 @@ export class App {
       revokeDevice: (id) => this.auth.revoke(id),
       setDeviceHub: (id, hubId) => this.store.setDeviceHub(id, hubId),
       devicesOfHub: (hubId) => this.store.devicesOfHub(hubId),
-      beforeUnlink: (id) => this.pool.release(id),
-      changed: () => this.pool?.linksChanged(),
     });
     this.xchat = new CrossChat(this);
     this.asks = new Asks(this);
+    this.helpers = new Helpers(this);
     // The memory guard (memory.ts). In-memory hubs (tests) get a blind one: it reads nothing of this Mac and stands
     // in the way of nothing, the same way they never look for this machine's model servers or Tailscale.
     this.memory = new MemoryGuard({
@@ -245,24 +259,33 @@ export class App {
       // The same ceiling the "fits this machine?" verdict shows, so the guard and the download screens never disagree.
       machine: () => localLibraryOf(this).machine(),
       emit: (memory) => this.bus.emit({ t: "memory", memory }),
-      notify: (note) => void this.push.send({ ...note, url: "./#/settings/memory", tag: "memory-low" }),
-      ...(inMemory ? { reader: blindReader("This hub keeps nothing on disk, so it doesn't watch the machine's memory.") } : {}),
+      // About a chat's reply: a tap opens that chat. What Crosstalk stopped is a notification of its own, not a
+      // replacement for the warning before it.
+      notify: (note) => void this.push.send({ title: note.title, body: note.body, url: note.roomId ? `./#/room/${note.roomId}` : "./#/settings/memory", tag: note.acted ? "memory-acted" : "memory-low" }),
+      // "Free memory by itself" (Settings → Memory): on unless it was turned off.
+      acts: () => this.hubSettings().memoryAct !== false,
+      agents: () => [...this.engine.agentProcesses(), ...this.helpers.processes()],
+      act: {
+        endIdle: (idleMs) => this.engine.endIdleNow(idleMs),
+        hold: () => this.engine.memoryHoldChanged(),
+        steer: (memberId, text) => this.engine.noteToReply(memberId, text),
+        stop: (roomId, memberId, error) => this.engine.stopForMemory(roomId, memberId, error),
+        say: (roomId, text) => void this.engine.systemMessage(roomId, text),
+        // Only ever one of the agents' browser's page processes (memory.ts closePages): asked to quit, never killed.
+        endPage: (pid) => void process.kill(pid, "SIGTERM"),
+      },
+      // In-memory hubs (tests) keep nothing, and never read the last run's.
+      readState: inMemory ? undefined : () => readText(join(RUN_DIR, "memory.json")),
+      writeState: inMemory ? undefined : (text) => keepFile(join(RUN_DIR, "memory.json"), text),
+      ...(inMemory ? { reader: blindReader("Crosstalk keeps nothing on disk here, so it doesn't watch the machine's memory.") } : {}),
     });
-    this.poolNode = new PoolNodeRuntime({
-      hubId: () => this.hubId(),
-      name: () => this.machineName(),
-      // In-memory hubs (tests) never look for processes an earlier run left behind.
-      stateFile: inMemory ? undefined : join(RUN_DIR, "pool-processes.json"),
-      beforeStart: (o) => this.memory.check(o).then(() => {}),
-    });
-    this.pool = new Pool(this);
     this.imageEditor = new ImageEditor({
       dir: join(opts.config.workspaceRoot, "ai-models", "image-editor"),
       logFile: inMemory ? join(scratchDir("crosstalk-image-editor-"), "server.log") : imageEditorLog(),
       // In-memory hubs (tests) never pick up a server an earlier run noted.
       pidFile: inMemory ? undefined : join(RUN_DIR, "image-editor.json"),
       emit: (status) => this.bus.emit({ t: "imageEditor", status }),
-      tailscaleIp: () => this.poolNode.address(),
+      tailscaleIp: () => tailscaleIPv4(),
       // The editor is ComfyUI, not llama.cpp: it is measured against the machine's memory ("ram"), never against
       // Metal's working set, which is two thirds of this Mac and less than one edit needs on a machine that runs it
       // every day. docs: shared's `roomFor`.
@@ -270,6 +293,35 @@ export class App {
       // `syncPage` is deliberately not set: the hub never writes this build's phone page into the user's editor
       // install on its own. Their installed page may be one they edited by hand, and replacing it changes what
       // their phone is served at the next reload, so that is a moment a person picks. docs/IMAGE-EDITOR.md.
+    });
+    // In a test hub nothing is kept on disk, so neither is the screen's password.
+    let testScreenPassword = "";
+    this.screen = new ScreenManager({
+      settings: () => ({ ...FACTORY_SCREEN, ...(this.hubSettings().screen ?? {}) }),
+      save: (next) => {
+        const all = this.hubSettings();
+        this.store.kvSet("hubSettings", JSON.stringify({ ...all, screen: next }));
+      },
+      password: () => (inMemory ? testScreenPassword : readSecrets().SCREEN_PASSWORD ?? ""),
+      setPassword: (p) => (inMemory ? void (testScreenPassword = p ?? "") : writeSecret("SCREEN_PASSWORD", p)),
+      changed: () => {
+        this.bus.emit({ t: "hub", hub: this.hubInfo() });
+        // Agents get (or lose) the screen tools when they start: restart idle ones now, busy ones after their turn.
+        for (const r of this.store.listRooms()) for (const m of this.store.listMembers(r.id)) void this.engine.memberChanged(m.id);
+      },
+      hubPid: process.pid,
+    });
+    this.updater = new Updater({
+      staged: inMemory ? async () => null : stagedBuild(runQuietly),
+      working: () => this.workingChats(),
+      // The same way out as a signal from the service: main.ts shuts everything down and exits, and the service starts
+      // the hub again, on the new build.
+      restart: () => {
+        // A build that waited beside this one goes in its place now, at the last moment (see nextBuildPath).
+        if (takeNextBuild(HUB_VERSION)) log.info("the new build is in place");
+        process.kill(process.pid, "SIGTERM");
+      },
+      changed: () => this.bus.emit({ t: "hub", hub: this.hubInfo() }),
     });
     this.mac = new MacServer({
       run: (args, timeoutMs) => runQuietly(args, timeoutMs),
@@ -302,8 +354,8 @@ export class App {
       onStatus: (status) => this.bus.emit({ t: "storage", status }),
       onLow: (s) =>
         void this.push.send({
-          title: "The hub is low on storage",
-          body: `${(s.free / 1024 ** 3).toFixed(1)} GB free on ${hostname()}${s.free < s.reserve ? ": uploads are paused until there's more room" : ""}. Settings → Storage shows what can go.`,
+          title: `${this.machineName()} is low on storage`,
+          body: `${(s.free / 1024 ** 3).toFixed(1)} GB free on ${hostname()}${s.free < s.reserve ? ": uploads are paused until there's more room" : ""}. ${settingsPath("storage")} shows what can go.`,
           url: "./#/settings/storage",
           tag: "storage-low",
         }),
@@ -322,9 +374,12 @@ export class App {
     // What it's busy with that its database doesn't show (background work, wake-ups agents owe), for the restart scripts.
     this.busy = new BusyFile(this.opts.dbPath === ":memory:" ? null : join(RUN_DIR, "busy.json"), () => this.engine.busyWork(), (fn) => this.bus.on(fn));
     this.removeRetiredAgents();
-    // Pick up the work a restart interrupted, now that everything an agent needs is ready. A chat on the model pool's
-    // server waits until the pool runs again.
-    this.engine.resumeAfterRestart((m) => this.pool.servesMember(m));
+    // Pick up the work a restart interrupted, now that everything an agent needs is ready.
+    // Except the reply that was filling the machine when it last went down out of memory: that one waits for the person.
+    const down = this.memory.wentDown();
+    this.engine.resumeAfterRestart((m) => (down && down.memberId === m.id ? memoryNoResumeLine(this.machineName(), clock(down.at)) : null));
+    // Helpers on another account that the last hub left working, and reports nobody had read: their agents are told.
+    this.helpers.restore();
     // Tidy uploads that were never sent, now and every 6 hours.
     this.cleanupUploads();
     setInterval(() => this.cleanupUploads(), 6 * 60 * 60_000).unref?.();
@@ -336,8 +391,6 @@ export class App {
       // Finish what a restart interrupted (an unlink, connecting agents), then retry failed links every minute.
       this.machines.start();
       void this.machines.retryTick().then(() => this.machines.complete());
-      // llama.cpp processes a crashed run of the hub left running are ended.
-      void this.poolNode.start();
       // Model downloads (Settings → Local models) that were running when the hub stopped carry on.
       void startLocalModels(this).catch((e) => log.warn(`local models: ${e instanceof Error ? e.message : e}`));
     }
@@ -345,6 +398,10 @@ export class App {
     void this.imageEditor.start().catch((e) => log.warn(`image editor: ${e instanceof Error ? e.message : e}`));
     // A Mac's privacy dialogs are told to the phone while they wait on its screen (never in tests: that's this Mac's).
     if (osPlatform() === "darwin" && this.opts.dbPath !== ":memory:") void this.mac.start();
+    // The machine's screen: is it shared, and does the password Crosstalk has still work (screen/index.ts).
+    if (this.opts.dbPath !== ":memory:" || process.env.CROSSTALK_SCREEN_PORT) this.screen.start();
+    // A new build put in place starts by itself once the chats are quiet (update.ts).
+    if (this.opts.dbPath !== ":memory:") this.updater.start();
   }
 
   /**
@@ -543,8 +600,30 @@ export class App {
       publicUrl: this.config.publicUrl,
       id: this.hubId(),
       name: this.machineName(),
-      messagesFlow: this.hubSettings().messagesFlow !== false,
+      // Always, since 0.8 (the switch is gone): a message goes into a working agent's reply by itself, helpers or not.
+      messagesFlow: true,
+      flowsIn: true,
+      screen: { ready: this.screen.ready(), agents: this.screen.agentsAllowed() },
+      update: this.updater.status(),
     };
+  }
+
+  /**
+   * The chats where something is working, by name: a reply running or waiting its turn, an agent's background work or a
+   * reply it owes by itself, a question to another agent. What an update waits for (update.ts).
+   */
+  workingChats(): string[] {
+    const ids = new Set<string>();
+    for (const r of this.store.listRooms()) if (this.engine.isBusy(r.id)) ids.add(r.id);
+    for (const b of this.engine.busyWork()) ids.add(b.roomId);
+    const names = [...ids].map((id) => this.store.getRoom(id)?.name ?? "a chat");
+    try {
+      const asking = this.store.db.query("SELECT COUNT(*) AS n FROM asks WHERE status IN ('running', 'queued')").get() as { n: number } | null;
+      if (asking?.n) names.push("a question to another agent");
+    } catch {
+      // no asks yet
+    }
+    return names;
   }
 
   /** This hub's id, made once: tells it apart from other machines' hubs in the app. */
@@ -562,7 +641,7 @@ export class App {
     if (dir.startsWith(root + sep)) {
       try {
         mkdirSync(dir, { recursive: true });
-        this.engine.systemMessage(room.id, `This chat's folder was gone (moved or deleted outside Crosstalk), so Crosstalk made it again, empty: ${dir}. The conversation is all still here; files that were in the folder aren't.`);
+        this.engine.systemMessage(room.id, `This chat's folder was gone (moved or deleted outside Crosstalk), so Crosstalk made it again, empty: ${dir}. The messages are all still here; files that were in the folder aren't.`);
         return null;
       } catch (e) {
         return `This chat's folder ${dir} is gone and couldn't be made again (${e instanceof Error ? e.message : e}). Pick another folder in the chat's settings, then ${again}.`;
@@ -599,8 +678,6 @@ export class App {
       storage: this.storageStatus(),
       macDialogs: this.mac.dialogs(),
       templates: this.templates.list(),
-      // The model pool as a model to chat with: every screen that starts a chat has it from the start (pool events keep it current).
-      pool: this.pool.chatOffer(),
       memory: this.memory.status(),
       // Agent accounts found signed out, and the sign-ins started from the phone (signin.ts): those, with their links
       // and codes, for people's own devices only, never another machine's hub.
@@ -608,6 +685,16 @@ export class App {
       signInSessions: isPersonDevice(device) ? this.signIns.sessions() : [],
       // What the person keeps (bookmarks.ts): their own devices', never another machine's hub.
       bookmarked: isPersonDevice(device) ? bookmarkedIds(this) : {},
+      // For the chat list, about chats a device hasn't opened (their history has the rest): since when each running
+      // reply has run, and the helpers still at work after a reply ended.
+      replyStarts: Object.fromEntries(this.store.unfinishedTurns().filter((t) => t.status === "running").map((t) => [t.memberId, { turnId: t.id, at: t.startedAt ?? t.createdAt }])),
+      tasks: Object.fromEntries(
+        this.engine
+          .busyWork()
+          .filter((w) => w.why === "background")
+          .map((w) => [w.memberId, this.engine.tasksIn(w.roomId)[w.memberId] ?? []] as const)
+          .filter(([, tasks]) => tasks.some(helperAtWork)),
+      ),
     };
   }
 
@@ -625,18 +712,11 @@ export class App {
       // themselves is unknown to the hub until somebody opens Settings -- so `heavy()` answers with what it holds or
       // what one edit needs, whichever is bigger, and with its port while the hub thinks nothing of its is running.
       const e = this.imageEditor.heavy();
-      out.push({ what: "the image editor", ours: true, section: "image-editor", bytes: e.bytes, port: e.port });
+      out.push({ what: "the image editor", ours: true, section: "image-editor", bytes: e.bytes, port: e.port, ...(e.pid ? { claims: [e.pid] } : {}) });
     }
     for (const r of existingLocalRunners(this)?.heavy() ?? []) out.push({ what: r.what, ours: true, section: "local-models", pid: r.pid });
-    const pool = this.poolNode.heavy();
-    for (const r of pool) out.push({ what: r.what, ours: true, section: "model-pool", pid: r.pid });
-    // The ports of what Crosstalk started: each is already counted above by its process. The pool's own port belongs
-    // here too -- the "Model pool" account points at 127.0.0.1:<port>, and without this the pool's server was counted
-    // twice, once by pid and once by port, so a 10 GB model read as 20 GB taken on a 16 GB machine.
-    const ours = new Set([
-      ...Object.keys(existingLocalRunners(this)?.ports() ?? {}).map(Number),
-      ...pool.map((r) => r.port).filter((n): n is number => typeof n === "number"),
-    ]);
+    // The ports of what Crosstalk started: each is already counted above by its process.
+    const ours = new Set(Object.keys(existingLocalRunners(this)?.ports() ?? {}).map(Number));
     const seen = new Set<number>();
     for (const a of this.providers.accounts()) {
       const url = a.endpoint?.baseUrl;
@@ -652,7 +732,7 @@ export class App {
       if (ours.has(port) || seen.has(port)) continue;
       seen.add(port);
       // The person started it, so Crosstalk never ends it and never offers to: it only says what it is holding.
-      out.push({ what: `the model server on port ${port}`, ours: false, section: null, port });
+      out.push({ what: `the model running on port ${port}`, ours: false, section: null, port });
     }
     return out;
   }
@@ -677,6 +757,8 @@ export class App {
         CROSSTALK_HUB_SOCKET: this.internalSocket,
         CROSSTALK_MEMBER_ID: member.id,
         CROSSTALK_MEMBER_TOKEN: this.internalToken(member.id),
+        // The screen tools, while the person lets agents use the screen and it can be reached (screen/index.ts).
+        ...(this.screen.agentsAllowed() ? { CROSSTALK_SCREEN: "1" } : {}),
       },
     };
   }
@@ -729,7 +811,7 @@ export class App {
     try { saved = JSON.parse(this.store.kvGet("hubSettings") ?? "{}"); } catch { /* corrupt: use the built-ins */ }
     const teamwork = { ...FACTORY_TEAMWORK, ...(saved.teamwork ?? {}), helper: { ...FACTORY_TEAMWORK.helper, ...(saved.teamwork?.helper ?? {}) } };
     const storage = { ...FACTORY_STORAGE, ...(saved.storage ?? {}) };
-    return { ...FACTORY_HUB_SETTINGS, ...saved, machineName: typeof saved.machineName === "string" ? saved.machineName : "", teamwork, storage };
+    return { ...FACTORY_HUB_SETTINGS, ...saved, machineName: typeof saved.machineName === "string" ? saved.machineName : "", teamwork, storage, screen: { ...FACTORY_SCREEN, ...(saved.screen ?? {}) } };
   }
 
   setHubSettings(input: Partial<HubSettings>): HubSettings {
@@ -740,7 +822,10 @@ export class App {
     if (input.pauseNearLimit !== undefined) next.pauseNearLimit = !!input.pauseNearLimit;
     if (input.priceLookup !== undefined) next.priceLookup = !!input.priceLookup;
     if (input.carryOnAfterLimit !== undefined) next.carryOnAfterLimit = !!input.carryOnAfterLimit;
-    const flowBefore = next.messagesFlow !== false;
+    const actBefore = next.memoryAct !== false;
+    if (input.memoryAct !== undefined) next.memoryAct = input.memoryAct !== false;
+    // "Keep going while helpers work" went in 0.8 (a message always goes to a working agent by itself): what an older app
+    // saves for it is kept as it sent it, and nothing goes by it.
     if (input.messagesFlow !== undefined) next.messagesFlow = input.messagesFlow !== false;
     const before = JSON.stringify(next.teamwork);
     if (input.teamwork !== undefined) {
@@ -748,6 +833,18 @@ export class App {
       if (t.enabled !== undefined) next.teamwork.enabled = !!t.enabled;
       if (t.perReply !== undefined) next.teamwork.perReply = clamp(Number(t.perReply), 1, 3);
       if (t.skipAbovePercent !== undefined) next.teamwork.skipAbovePercent = clamp(Number(t.skipAbovePercent), 50, 100);
+      // Who agents may ask: the accounts ticked (only this machine's, each once); null goes back to "the other agent".
+      if (t.who !== undefined) {
+        if (!Array.isArray(t.who)) delete next.teamwork.who;
+        else {
+          const all = this.providers.accounts();
+          const seen = new Set<string>();
+          next.teamwork.who = t.who
+            .filter((w) => !!w && typeof w.provider === "string" && typeof w.account === "string" && (CHAT_PROVIDERS as readonly string[]).includes(w.provider) && all.some((a) => a.provider === w.provider && a.id === w.account))
+            .filter((w) => !seen.has(`${w.provider}:${w.account}`) && !!seen.add(`${w.provider}:${w.account}`))
+            .map((w) => ({ provider: w.provider, account: w.account }));
+        }
+      }
       if (t.helper !== undefined && typeof t.helper === "object") {
         for (const [p, h] of Object.entries(t.helper ?? {})) {
           if (!PROVIDER_INFO[p as Provider] || !h || typeof h !== "object") continue;
@@ -758,6 +855,12 @@ export class App {
         }
       }
     }
+    // Who does helper work in new chats; null: each agent's own helpers. Chats that exist keep what they have.
+    if (input.helpers !== undefined) {
+      const h = this.cleanHelpers(input.helpers);
+      if (h) next.helpers = h;
+      else delete next.helpers;
+    }
     if (input.storage !== undefined && input.storage && typeof input.storage === "object") {
       const st = input.storage;
       if (st.autoClean !== undefined) next.storage.autoClean = !!st.autoClean;
@@ -766,6 +869,8 @@ export class App {
     this.store.kvSet("hubSettings", JSON.stringify(next));
     // A new warning level may change whether space counts as low.
     void this.storage.check();
+    // "Free memory by itself" was switched: every device's Memory card follows, and nothing waits for memory once it's off.
+    if ((next.memoryAct !== false) !== actBefore) this.memory.settingChanged();
     if (next.agentsAcrossChats !== crossBefore) {
       // Agents get (or lose) the tools for other chats when they start: restart idle ones now, busy ones after.
       for (const r of this.store.listRooms()) for (const m of this.store.listMembers(r.id)) void this.engine.memberChanged(m.id);
@@ -776,13 +881,33 @@ export class App {
     if (JSON.stringify(next.teamwork) !== before) {
       for (const r of this.store.listRooms()) if (r.chat) for (const m of this.store.listMembers(r.id)) void this.engine.memberChanged(m.id);
     }
-    // "Keep going while helpers work": every open device goes by it from now on, with no reload (the bar, Read it now), and
-    // what it held or lets go changes at once (Engine.flowChanged).
-    if ((next.messagesFlow !== false) !== flowBefore) {
-      this.bus.emit({ t: "hub", hub: this.hubInfo() });
-      this.engine.flowChanged();
-    }
     return next;
+  }
+
+  /**
+   * A "Helpers run on" choice as it's kept (HelpersOn), checked: the account must be one of this machine's, of an agent
+   * that can run a helper. Null for "the agent's own helpers" (null, "" or nothing picked).
+   */
+  cleanHelpers(raw: unknown): HelpersOn | null {
+    if (raw === null || raw === undefined || raw === "") return null;
+    const h = raw as Partial<Record<keyof HelpersOn, unknown>>;
+    if (typeof h !== "object") throw new HttpError(400, "Pick who helpers run on.");
+    if (!(CHAT_PROVIDERS as readonly unknown[]).includes(h.provider) || typeof h.account !== "string" || !this.providers.accounts().some((a) => a.provider === h.provider && a.id === h.account)) throw new HttpError(400, "That account isn't on this machine any more. Pick another for helpers.");
+    const name = (v: unknown, what: string): string | null => {
+      if (v === undefined || v === null || v === "") return null;
+      if (typeof v !== "string" || !/^[\w.:@/[\]-]{1,100}$/.test(v)) throw new HttpError(400, `bad helper ${what}`);
+      return v;
+    };
+    const model = name(h.model, "model");
+    const effort = name(h.effort, "effort");
+    return { provider: h.provider as Provider, account: h.account, ...(model ? { model } : {}), ...(effort ? { effort } : {}), ...(h.fallback === false ? { fallback: false } : {}) };
+  }
+
+  /** The same for a new chat on `provider` and `account`: the machine's default, unless that is the chat's own account. */
+  defaultHelpers(provider: Provider, account: string): HelpersOn | null {
+    const h = this.hubSettings().helpers;
+    if (!h || (h.provider === provider && h.account === account)) return null;
+    return this.providers.accounts().some((a) => a.provider === h.provider && a.id === h.account) ? h : null;
   }
 
   /** Settings → Defaults, merged over the built-in ones. */
@@ -893,7 +1018,7 @@ export class App {
     if (code === 0) this.engine.systemMessage(room.id, `Cloned ${url}.`);
     else {
       mkdirSync(room.cwd, { recursive: true });
-      this.engine.systemMessage(room.id, `Clone failed (exit ${code}). ${err.trim().slice(-500)}\nThe room is using an empty folder instead.`);
+      this.engine.systemMessage(room.id, `Clone failed (exit ${code}). ${err.trim().slice(-500)}\nThe chat is using an empty folder instead.`);
     }
   }
 
@@ -921,7 +1046,7 @@ export class App {
     if (patch.archived !== undefined) allowed.archived = !!patch.archived;
     if (patch.privateFromAgents !== undefined) allowed.privateFromAgents = !!patch.privateFromAgents;
     const room = this.store.updateRoom(id, allowed);
-    if (!room) throw new HttpError(404, "room not found");
+    if (!room) throw new HttpError(404, "That chat isn't here any more.");
     this.bus.emit({ t: "room", room });
     // A new folder, or being kept from other agents (its own agent loses or gets the tools): agents restart for it.
     if (allowed.cwd || patch.privateFromAgents !== undefined) for (const m of this.store.listMembers(id)) void this.engine.memberChanged(m.id);
@@ -942,7 +1067,7 @@ export class App {
     const via = this.adapter.urlFor(provider, ep.id);
     // Crosstalk's own agent and OpenCode speak Chat Completions themselves (agents/builtin.ts, agents/opencode.ts): they get
     // the service's own address and key, as Codex's translator does.
-    if (ep.protocol === "chat" && !via && !isServiceOnlyAgent(provider)) throw new Error(`${ep.label} only speaks an older style that Crosstalk translates for Codex, and the translator isn't available right now. Try again in a moment, or add it again in Settings → AI services.`);
+    if (ep.protocol === "chat" && !via && !isServiceOnlyAgent(provider)) throw new Error(`${ep.label} only speaks an older style that Crosstalk translates for Codex, and the translator isn't available right now. Try again in a moment, or add it again in ${settingsPath("ai-services")}.`);
     const baseUrl = via?.baseUrl ?? ep.baseUrl;
     const key = via?.key ?? ep.key;
     // A model saved with the account has its size there; one of the server's others (under More models), the size the
@@ -954,12 +1079,13 @@ export class App {
 
   async deleteRoom(id: string) {
     const room = this.store.getRoom(id);
-    if (!room) throw new HttpError(404, "room not found");
+    if (!room) throw new HttpError(404, "That chat isn't here any more.");
     const members = this.store.listMembers(id);
     await this.engine.roomRemoved(id, members.map((m) => m.id));
     // A duplicated chat deleted before it forked: the transcript copied for its fork goes too.
     for (const m of members) dropForkCopies(this, m.id);
     this.asks.roomRemoved(id);
+    this.helpers.removed(id);
     this.store.deleteRoom(id);
     this.bus.emit({ t: "room.deleted", roomId: id });
   }
@@ -971,7 +1097,7 @@ export class App {
     input: { provider: Provider; handle?: string; model?: string | null; role?: string; permissionMode?: PermissionMode; config?: Record<string, unknown> },
   ): Member {
     const room = this.store.getRoom(roomId);
-    if (!room) throw new HttpError(404, "room not found");
+    if (!room) throw new HttpError(404, "That chat isn't here any more.");
     if (!PROVIDER_INFO[input.provider]) throw new HttpError(400, "unknown agent type");
     const existing = this.store.listMembers(roomId);
     // A chat with one agent stays one (its agent shares its conversation with the agent's own apps): a group chat is the
@@ -990,6 +1116,10 @@ export class App {
     // null or "" means helpers use the agent's own model (and keeps the default from applying).
     if (config.helperModel === null || config.helperModel === "") delete config.helperModel;
     else if (config.helperModel !== undefined && (typeof config.helperModel !== "string" || !/^[\w.:@/[\]-]{1,100}$/.test(config.helperModel))) throw new HttpError(400, "bad helper model");
+    // Who does its helper work: what was picked, else the machine's default for new chats.
+    const helpers = !(CHAT_PROVIDERS as readonly string[]).includes(input.provider) ? null : config.helpersOn === undefined ? this.defaultHelpers(input.provider, memberAccount({ config })) : this.cleanHelpers(config.helpersOn);
+    if (helpers) config.helpersOn = helpers;
+    else delete config.helpersOn;
     let handle = slugHandle(input.handle?.trim() || PROVIDER_INFO[input.provider].defaultHandle);
     if (RESERVED_HANDLES.includes(handle)) handle = `${handle}-agent`;
     const base = handle;
@@ -1043,7 +1173,7 @@ export class App {
     const m = this.store.getMessage(messageId);
     if (!m) throw new HttpError(404, "No such message");
     const room = this.store.getRoom(m.roomId);
-    if (!room?.chat) throw new HttpError(400, "Chats can be rewound; older rooms can't");
+    if (!room?.chat) throw new HttpError(400, "This chat is from an older Crosstalk and can't be rewound");
     if (m.authorKind === "human") throw new HttpError(400, "To go back to before one of your messages, unsend it");
     const seq = this.store.messageSeq(m.id);
     const next = this.store.messagesAfter(room.id, seq).find((x) => x.authorKind === "human");
@@ -1142,6 +1272,12 @@ export class App {
       const helper = allowed.config.helperModel;
       if (helper !== undefined && helper !== null && helper !== "" && (typeof helper !== "string" || !/^[\w.:@/\[\]-]{1,100}$/.test(helper))) throw new HttpError(400, "bad helper model");
       if (!helper) delete allowed.config.helperModel;
+      // Who does its helper work ("Helpers run on"): another account of this machine's, or nothing for its own helpers.
+      // What the chat already has is kept as it is (its account may have been removed since: the helper tool says so).
+      const same = JSON.stringify(allowed.config.helpersOn ?? null) === JSON.stringify(cur.config?.helpersOn ?? null);
+      const on = same ? (cur.config?.helpersOn as HelpersOn | undefined) ?? null : this.cleanHelpers(allowed.config.helpersOn);
+      if (on) allowed.config.helpersOn = on;
+      else delete allowed.config.helpersOn;
       // Long context is on or off, and only Codex gives a chat more than its model's usual window.
       if (allowed.config.longContext !== true || cur.provider !== "codex") delete allowed.config.longContext;
     }
@@ -1298,6 +1434,7 @@ export class App {
     const m = this.store.getMember(id);
     if (!m) throw new HttpError(404, "agent not found");
     await this.engine.memberRemoved(m);
+    this.helpers.removed(m.roomId, m.id);
     this.store.deleteMember(id);
     const room = this.store.getRoom(m.roomId);
     // A group chat's lead that leaves: the first of the others leads (and shows the chat to older apps).
@@ -1310,23 +1447,23 @@ export class App {
     log.info("shutting down");
     // First, so a shutdown that macOS cuts short (it's restarting) still counts as stopping on purpose (see mac.ts).
     this.mac.stop();
+    this.screen.shutdown();
+    this.updater.stop();
+    this.push.stopRetries();
     this.busy?.stop();
     this.storage.stop();
     this.memory.stop();
     this.machines.stop();
     // One-shot asks and the translator first: their agent processes and sockets never outlive the hub.
     await this.asks.shutdown();
+    await this.helpers.shutdown();
     await this.adapter.shutdown();
     // Sign-ins started from the phone: their processes never outlive the hub.
     await this.signIns.shutdown();
-    // Agents first: a reply on the model pool's server is saved for resuming before that server goes. Then the pool's
-    // helpers and server (llama.cpp) never outlive the hub: those it runs on other hubs first, then this one's.
     await this.engine.shutdown();
     // A usage-limit note still settling would go out after the database has closed.
     for (const note of this.limitNotes.values()) clearTimeout(note.timer);
     this.limitNotes.clear();
-    await this.pool.shutdown();
-    await this.poolNode.shutdown();
     // The image editor and the model servers Local models started keep running: they aren't the hub's to end.
     this.imageEditor.shutdown();
     await shutdownLocalModels(this);

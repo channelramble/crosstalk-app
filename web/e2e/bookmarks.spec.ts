@@ -38,7 +38,7 @@ test("a message bookmarked in its chat is on the Bookmarks screen, opens its cha
     expect((await saved).ok()).toBe(true);
     await expect(mine.getByRole("button", { name: "Bookmarked", exact: true })).toHaveAttribute("aria-pressed", "true");
 
-    // In the sidebar, Bookmarks is just above Terminal.
+    // In the sidebar, Bookmarks is just before Terminal, in the row under the list.
     const show = page.getByRole("button", { name: "Show chats", exact: true });
     if (await show.count()) await show.click();
     const side = page.getByRole("complementary", { name: "Chats", exact: true });
@@ -46,7 +46,8 @@ test("a message bookmarked in its chat is on the Bookmarks screen, opens its cha
     const terminal = side.getByRole("button", { name: "Terminal", exact: true });
     await expect(link).toBeVisible();
     const [a, b] = [await link.boundingBox(), await terminal.boundingBox()];
-    expect(a!.y + a!.height).toBeLessThanOrEqual(b!.y + 1);
+    expect(a!.x + a!.width).toBeLessThanOrEqual(b!.x + 1);
+    expect(Math.abs(a!.y - b!.y)).toBeLessThan(1);
     await page.screenshot({ ...shot(`bookmarks-sidebar-${width}.png`), animations: "disabled" });
     await link.click();
 

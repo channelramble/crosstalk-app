@@ -188,37 +188,83 @@ export class Push {
       subs.map(async (s) => {
         if (opts.skipVisible && this.visible.has(s.device_id)) return;
         this.store.db.query("UPDATE push_subs SET latest = ? WHERE endpoint = ?").run(JSON.stringify(note), s.endpoint);
-        this.store.db.query("INSERT INTO push_notes (endpoint, note, created_at) VALUES (?,?,?)").run(s.endpoint, JSON.stringify(note), now);
-        try {
-          const jwt = await this.jwt(new URL(s.endpoint).origin);
-          // A sign-out can happen while signing the request.
-          if (!this.store.getDevice(s.device_id)) return;
-          const res = await fetch(s.endpoint, {
-            method: "POST",
-            headers: {
-              authorization: `vapid t=${jwt}, k=${this.keys!.publicKey}`,
-              ttl: "86400",
-              urgency: "high",
-              // A push service keeps only the newest undelivered push of a topic: one per tag, never two tags sharing one.
-              topic: pushTopic(note.tag),
-              "content-length": "0",
-            },
-          });
-          if (res.status === 404 || res.status === 410) this.unsubscribe(s.endpoint);
-          else if (res.ok) {
-            this.store.db.query("UPDATE push_subs SET last_ok_at = ? WHERE endpoint = ?").run(Date.now(), s.endpoint);
-            tally.sent++;
-          } else {
-            tally.failed++;
-            log.warn(`push to ${new URL(s.endpoint).host} failed: ${res.status} ${(await res.text()).slice(0, 200)}`);
-          }
-        } catch (e) {
-          tally.failed++;
-          log.warn(`push failed: ${e instanceof Error ? e.message : e}`);
-        }
+        const row = this.store.db.query("INSERT INTO push_notes (endpoint, note, created_at) VALUES (?,?,?) RETURNING id").get(s.endpoint, JSON.stringify(note), now) as { id: number };
+        const went = await this.post(s, note.tag);
+        if (went === "sent") tally.sent++;
+        else if (went !== "gone") tally.failed++;
+        // The push service was unreachable or busy for a moment: tried again shortly, while the note still waits.
+        if (went === "again") this.again(s, note.tag, row.id, 0);
       }),
     );
     return tally;
+  }
+
+  /** How long after a push that didn't get through each further try comes (ms). */
+  static retryMs = [3000, 20_000];
+  private retries = new Set<ReturnType<typeof setTimeout>>();
+
+  /**
+   * One wake-up to one device's push service: "sent", "gone" (the device unsubscribed, or was signed out meanwhile),
+   * "again" (no answer, or the service is busy: worth another try) or "failed" (it said no).
+   */
+  private async post(s: { endpoint: string; device_id: string }, tag: string): Promise<"sent" | "gone" | "again" | "failed"> {
+    const host = (() => {
+      try {
+        return new URL(s.endpoint).host;
+      } catch {
+        return "its push service";
+      }
+    })();
+    try {
+      const jwt = await this.jwt(new URL(s.endpoint).origin);
+      // A sign-out can happen while signing the request.
+      if (!this.store.getDevice(s.device_id)) return "gone";
+      const res = await fetch(s.endpoint, {
+        method: "POST",
+        headers: {
+          authorization: `vapid t=${jwt}, k=${this.keys!.publicKey}`,
+          ttl: "86400",
+          urgency: "high",
+          // A push service keeps only the newest undelivered push of a topic: one per tag, never two tags sharing one.
+          topic: pushTopic(tag),
+          "content-length": "0",
+        },
+      });
+      if (res.status === 404 || res.status === 410) {
+        this.unsubscribe(s.endpoint);
+        return "gone";
+      }
+      if (res.ok) {
+        this.store.db.query("UPDATE push_subs SET last_ok_at = ? WHERE endpoint = ?").run(Date.now(), s.endpoint);
+        return "sent";
+      }
+      log.warn(`push to ${host} failed: ${res.status} ${(await res.text()).slice(0, 200)}`);
+      return res.status === 429 || res.status >= 500 ? "again" : "failed";
+    } catch (e) {
+      log.warn(`push to ${host} failed: ${e instanceof Error ? e.message : e}`);
+      return "again";
+    }
+  }
+
+  /** Another try a little later, as long as the device hasn't taken the note meanwhile (it opened the app, or a later push woke it). */
+  private again(s: { endpoint: string; device_id: string }, tag: string, noteId: number, n: number) {
+    const wait = Push.retryMs[n];
+    if (wait === undefined) return;
+    const timer = setTimeout(async () => {
+      this.retries.delete(timer);
+      const waiting = this.store.db.query("SELECT 1 FROM push_notes WHERE id = ? AND taken_at IS NULL").get(noteId);
+      if (!waiting) return;
+      const went = await this.post(s, tag).catch(() => "failed" as const);
+      if (went === "again") this.again(s, tag, noteId, n + 1);
+    }, wait);
+    timer.unref?.();
+    this.retries.add(timer);
+  }
+
+  /** No more tries (the hub is stopping, or a test is done). */
+  stopRetries() {
+    for (const t of this.retries) clearTimeout(t);
+    this.retries.clear();
   }
 
   private async jwt(aud: string): Promise<string> {

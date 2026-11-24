@@ -257,7 +257,7 @@ describe("Claude Code keeps the chat's model", () => {
     const { d } = claude(c);
     const r = await turn(d, "HELPER:claude-haiku-4-5-20251001", sink().sink);
     expect(r.ok).toBe(false);
-    expect(r.error).toBe("A helper agent started on Haiku 4.5 instead of Opus 5.5, so Crosstalk stopped this reply. Helpers keep the chat's model unless you pick one for them in the model menu.");
+    expect(r.error).toBe("A helper agent started on Haiku 4.5 instead of Opus 5.5, so Crosstalk stopped this reply. Helpers keep the chat's model unless you pick one for them in Chat settings → Helpers.");
     expect((await turn(d, "HELPER:claude-opus-5-5", sink().sink)).ok).toBe(true);
     await d.dispose();
   });
@@ -320,7 +320,7 @@ describe("Claude Code keeps the chat's model", () => {
       expect(state.rec.session.model).toBe("claude-opus-4-8");
       // A helper on it is fine; one on another model, or a reply that moves to another model, is stopped.
       expect((await turn(d, "HELPER:claude-opus-4-8", sink().sink)).ok).toBe(true);
-      expect((await turn(d, "HELPER:claude-opus-5-5", sink().sink)).error).toBe("A helper agent started on Opus 5.5 instead of Opus 4.8, so Crosstalk stopped this reply. Helpers keep the chat's model unless you pick one for them in the model menu.");
+      expect((await turn(d, "HELPER:claude-opus-5-5", sink().sink)).error).toBe("A helper agent started on Opus 5.5 instead of Opus 4.8, so Crosstalk stopped this reply. Helpers keep the chat's model unless you pick one for them in Chat settings → Helpers.");
       expect((await turn(d, "MODEL:claude-sonnet-4-6", sink().sink)).error).toContain("switched this reply from Opus 4.8 to Sonnet 4.6");
     } finally { await d.dispose(); }
   });
@@ -913,7 +913,7 @@ describe("Codex keeps the chat's model", () => {
     expect(same.rec.activities.some((a) => a.title === "Helper agent: Check the tests")).toBe(true);
     expect((await turn(d, "SPAWN::", sink().sink)).ok).toBe(true); // Codex didn't say: nothing to compare
     const model = await turn(d, "SPAWN:gpt-mini:high", sink().sink);
-    expect(model.error).toBe("Codex started a helper agent on gpt-mini instead of gpt-test, so Crosstalk stopped this reply. Helpers use this chat's model at this chat's effort; pick another model for helpers in the model menu or the chat's settings.");
+    expect(model.error).toBe("Codex started a helper agent on gpt-mini instead of gpt-test, so Crosstalk stopped this reply. Helpers use this chat's model at this chat's effort; pick another model for helpers in Chat settings → Helpers.");
     const effort = await turn(d, "SPAWN:gpt-test:low", sink().sink);
     expect(effort.error).toContain("at low effort instead of high");
     await d.dispose();

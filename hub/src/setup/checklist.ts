@@ -3,8 +3,9 @@
 // item's state is tested from fakes. Only listed fields ever reach the output, never whole objects: the facts hold
 // account emails and server addresses that the checklist must not repeat.
 
-import { CHAT_PROVIDERS, PROVIDER_INFO, isServiceOnlyAgent, type AgentAccount, type BrowserOsConnect, type MacStatus, type MachineInfo, type PoolState, type Provider, type ProviderStatus, type SetupChecklist, type SetupFix, type SetupGroup, type SetupItem, type SetupState } from "@crosstalk/shared";
+import { agentSettingsPath, settingsPath, CHAT_PROVIDERS, PROVIDER_INFO, isServiceOnlyAgent, type AgentAccount, type BrowserOsConnect, type MacStatus, type MachineInfo, type Provider, type ProviderStatus, type SetupChecklist, type SetupFix, type SetupGroup, type SetupItem, type SetupState } from "@crosstalk/shared";
 import { OPENCODE_INSTALL_LINE } from "../providers/opencode";
+import { CODEX_INSTALL_LINE } from "../providers/codex";
 import { MAC_PANES, macFixCommand } from "../mac";
 import { MCP_SERVER_NAME, RESTART_NOTE, addCommand, namesBrowser, newerVersion, removeCommand as mcpRemoveCommand, sameMcpUrl, type BrowserOsFacts, type McpAgent } from "../browseros";
 
@@ -12,7 +13,7 @@ import { MCP_SERVER_NAME, RESTART_NOTE, addCommand, namesBrowser, newerVersion, 
 export const SETUP_PROMPT = "Use the crosstalk-setup tools to finish setting up Crosstalk on this machine; ask me before anything that needs my password.";
 
 /** Every item id the checklist can have, in its order (docs/SETUP-FOR-AGENTS.md has a section for each). */
-export const SETUP_ITEM_IDS = ["service", "version", "tailscale", "https", "public-url", "devices", "push", "agent.claude", "agent.codex", "agent.gemini", "agent.antigravity", "agent.muse", "agent.opencode", "browseros", "services", "mac.autologin", "mac.power", "mac.full-disk", "mac.updates", "mac.dialogs", "machines", "pool"];
+export const SETUP_ITEM_IDS = ["service", "version", "tailscale", "https", "public-url", "devices", "push", "agent.claude", "agent.codex", "agent.gemini", "agent.antigravity", "agent.muse", "agent.opencode", "browseros", "services", "mac.autologin", "mac.power", "mac.full-disk", "mac.updates", "mac.dialogs", "machines"];
 
 /** The agents the checklist knows, in its order. Gemini, Antigravity, Muse and OpenCode show only once installed. */
 export const SETUP_AGENTS: Provider[] = ["claude", "codex", "gemini", "antigravity", "muse", "opencode"];
@@ -20,7 +21,7 @@ export const SETUP_AGENTS: Provider[] = ["claude", "codex", "gemini", "antigravi
 /** Each agent's official install, as one line a person or agent can run (each is part of its provider's installCommand). */
 export const INSTALL_LINES: Record<string, string> = {
   claude: "curl -fsSL https://claude.ai/install.sh | bash",
-  codex: 'npm install -g --prefix "$HOME/.npm-global" @openai/codex@latest',
+  codex: CODEX_INSTALL_LINE,
   gemini: 'npm install -g --prefix "$HOME/.npm-global" @google/gemini-cli@latest',
   antigravity: "curl -fsSL https://antigravity.google/cli/install.sh | bash",
   muse: "curl -fsSL https://dev.meta.ai/install.sh | bash",
@@ -150,8 +151,6 @@ export interface SetupFacts {
   machines: MachineInfo[] | null;
   /** Linked machines' versions, from their /api/health (null: no answer). */
   machineVersions: Record<string, string | null>;
-  /** The model pool, when one is set up. */
-  pool: { configured: boolean; state: PoolState; detail: string | null; alias: string; machines: number } | null;
   /**
    * BrowserOS neo, the person's browser for agents (hub/src/browseros.ts). undefined: not checked here (an in-memory
    * hub, or a build with no probe for it); null: it was checked and nothing could be read.
@@ -179,7 +178,6 @@ export function setupChecklist(f: SetupFacts): SetupChecklist {
     add(servicesItem(f));
     for (const i of macItems(f)) add(i);
     add(machinesItem(f));
-    add(poolItem(f));
   }
   const required = items.filter((i) => !i.optional);
   const count = (s: SetupState) => required.filter((i) => i.state === s).length;
@@ -319,7 +317,7 @@ function offlineWords(f: SetupFacts): string {
   const o = f.offline;
   if (o?.code === "older") return `Crosstalk ${o.version ? `${o.version} ` : ""}runs, and can't show this until it's restarted with the newer build.`;
   if (o?.code === "blocked") return `Crosstalk can't be reached from here: ${triedWords(o)}. ${unreachableWay(f)}`;
-  if (o?.code === "key") return "Crosstalk didn't accept this program's setup key: check that CROSSTALK_HOME is the hub's.";
+  if (o?.code === "key") return "Crosstalk didn't accept this program's setup key: check that CROSSTALK_HOME is the one Crosstalk's service has.";
   if (o?.code === "error") return `Crosstalk couldn't make the checklist${o.detail ? ` (${clean(o.detail, 160)})` : ""}. Check again in a minute.`;
   return "Start Crosstalk first, then check again.";
 }
@@ -328,6 +326,8 @@ const isMac = (f: SetupFacts) => f.hub.platform === "darwin";
 const isLinux = (f: SetupFacts) => f.hub.platform === "linux";
 const localUrl = (f: SetupFacts) => `http://127.0.0.1:${f.hub.port}`;
 const labelOf = (f: SetupFacts) => f.service?.label || (isMac(f) ? "com.crosstalk.hub" : "crosstalk-hub");
+/** The systemd user unit as its commands name it ("crosstalk-hub", unless CROSSTALK_UNIT named another). */
+const unitOf = (f: SetupFacts) => sh((isLinux(f) && f.service?.label ? f.service.label : "crosstalk-hub").replace(/\.service$/, ""));
 
 function installFix(f: SetupFacts): SetupFix {
   const script = isMac(f) ? "install-macos.sh" : "install.sh";
@@ -343,14 +343,19 @@ function installFix(f: SetupFacts): SetupFix {
 
 /** Restarting stops replies that are running: through the idle watcher when it's there, else only with the person's OK. */
 export function restartFix(f: SetupFacts): SetupFix {
-  if (isMac(f) && f.idleRestart)
+  if ((isMac(f) || isLinux(f)) && f.idleRestart) {
+    // What the watcher did goes beside the service's log on a Mac; on Linux that log is the journal, so it goes in the
+    // data folder's logs (made if it isn't there).
+    const logs = `${f.hub.home.replace(/\/+$/, "")}/logs`;
+    const to = isMac(f) ? "~/Library/Logs/Crosstalk/restart-when-idle.log" : `${sh(`${logs}/restart-when-idle.log`)}`;
     return {
       text: "Unless it runs already (pgrep -f restart-when-idle), start the idle watcher: it restarts Crosstalk once no chat has worked for five minutes.",
-      command: `nohup ${sh(f.idleRestart)} >> ~/Library/Logs/Crosstalk/restart-when-idle.log 2>&1 &`,
+      command: `${isMac(f) ? "" : `mkdir -p ${sh(logs)} && `}nohup ${sh(f.idleRestart)} >> ${to} 2>&1 &`,
     };
+  }
   return {
     text: "Restart it when no chat is working: a restart stops replies that are running, so ask the person first.",
-    command: isMac(f) ? `launchctl kickstart -k gui/$(id -u)/${labelOf(f)}` : "systemctl --user restart crosstalk-hub",
+    command: isMac(f) ? `launchctl kickstart -k gui/$(id -u)/${labelOf(f)}` : `systemctl --user restart ${unitOf(f)}`,
   };
 }
 
@@ -359,10 +364,10 @@ function serviceItem(f: SetupFacts): SetupItem {
   const title = "Runs as a service";
   const mk = (state: SetupState, detail: string, fix: SetupFix | null = null) => item("service", "hub", title, state, detail, fix);
   if (!s) return mk("unknown", "Couldn't tell how Crosstalk runs here.");
-  const kind = isMac(f) ? `a LaunchAgent (${s.label})` : "a systemd user service (crosstalk-hub)";
+  const kind = isMac(f) ? `a LaunchAgent (${s.label})` : `a systemd user service (${unitOf(f)})`;
   const startFix: SetupFix = isMac(f)
     ? { text: "Start the service:", command: `launchctl kickstart gui/$(id -u)/${s.label}` }
-    : { text: "Start the service:", command: "systemctl --user start crosstalk-hub" };
+    : { text: "Start the service:", command: `systemctl --user start ${unitOf(f)}` };
   if (f.hub.running && !f.offline) {
     if (s.runningUnder === "launchd")
       return s.fileExists ? mk("done", `Runs as ${kind}: it starts at login and again if it stops.`) : mk("missing", `Runs under launchd, but ${s.file} is gone, so it won't start at the next login.`, installFix(f));
@@ -381,16 +386,16 @@ function serviceItem(f: SetupFacts): SetupItem {
   if (s.loaded === false)
     return isMac(f)
       ? mk("missing", "The LaunchAgent is installed but not loaded, so Crosstalk doesn't run.", { text: "Load it:", command: `launchctl bootstrap gui/$(id -u) ${sh(s.file)}` })
-      : mk("missing", "The service is installed but not enabled, so Crosstalk doesn't run.", { text: "Enable and start it:", command: "systemctl --user enable --now crosstalk-hub" });
+      : mk("missing", "The service is installed but not enabled, so Crosstalk doesn't run.", { text: "Enable and start it:", command: `systemctl --user enable --now ${unitOf(f)}` });
   if (s.active === false) {
-    const log = isMac(f) ? "tail -n 50 ~/Library/Logs/Crosstalk/hub.log" : "journalctl --user -u crosstalk-hub -n 50 --no-pager";
+    const log = isMac(f) ? "tail -n 50 ~/Library/Logs/Crosstalk/hub.log" : `journalctl --user -u ${unitOf(f)} -n 50 --no-pager`;
     return mk("missing", "The service is installed but Crosstalk isn't running: it may be failing to start.", { ...startFix, text: `See why at the end of its log (${log}), then start it:` });
   }
   if (s.active === null || s.loaded === null) return mk("unknown", "Couldn't ask the service manager about Crosstalk.");
   const o = f.offline;
   if (o?.code === "blocked") return mk("unknown", `Crosstalk runs as a service, but nothing here could ask it: ${triedWords(o)}.`, unreachableFix(f));
-  if (o?.code === "key") return mk("unknown", "Crosstalk runs as a service, but didn't accept this program's setup key.", { text: "Run this with the same CROSSTALK_HOME as the hub." });
-  if (o?.code === "stopped") return mk("unknown", `Crosstalk runs as a service, but its socket isn't in ${f.hub.home}/run.`, { text: "Run this with the hub's CROSSTALK_HOME." });
+  if (o?.code === "key") return mk("unknown", "Crosstalk runs as a service, but didn't accept this program's setup key.", { text: "Run this with the same CROSSTALK_HOME as Crosstalk's service." });
+  if (o?.code === "stopped") return mk("unknown", `Crosstalk runs as a service, but its socket isn't in ${f.hub.home}/run.`, { text: "Run this with the CROSSTALK_HOME Crosstalk's service has." });
   return mk("done", `Runs as ${kind}.`);
 }
 
@@ -544,7 +549,7 @@ function publicUrlItem(f: SetupFacts): SetupItem {
     // address its own interfaces have (setup/system.ts), so this hub answering there checks the name another way. A
     // Tailscale that answered it is off or signed out has said what's wrong, and this item waits for the one above.
     const silent = tailscaleSilent(f);
-    if (url && ownHttps(f) && (silent || tailscaleUp(f))) return mk("done", `Crosstalk knows its address: ${clean(url, 120)}, and this hub answers there.${silent ? " Tailscale couldn't be asked to confirm the name." : ""}`);
+    if (url && ownHttps(f) && (silent || tailscaleUp(f))) return mk("done", `Crosstalk knows its address: ${clean(url, 120)}, and this machine answers there.${silent ? " Tailscale couldn't be asked to confirm the name." : ""}`);
     if (!url) return mk("unknown", "Needs Tailscale first (above).");
     const why = silent && t ? "Tailscale couldn't be asked to check it" : "Tailscale isn't up to check it";
     return mk("unknown", `Set to ${clean(url, 120)}; ${why}${f.https && !f.https.answers ? ", and nothing answers there" : ""}.`);
@@ -576,7 +581,7 @@ function publicUrlFix(f: SetupFacts, want: string): { state: SetupState; fix: Se
       state: "missing",
       fix: {
         text: `The service sets it: change CROSSTALK_PUBLIC_URL in ${file}, then restart it when no chat is working.`,
-        command: `sed -i 's#^Environment=CROSSTALK_PUBLIC_URL=.*#Environment=CROSSTALK_PUBLIC_URL=${want}#' ${sh(file)} && systemctl --user daemon-reload && systemctl --user restart crosstalk-hub`,
+        command: `sed -i 's#^Environment=CROSSTALK_PUBLIC_URL=.*#Environment=CROSSTALK_PUBLIC_URL=${want}#' ${sh(file)} && systemctl --user daemon-reload && systemctl --user restart ${unitOf(f)}`,
       },
     };
   return { state: "missing", fix: { text: `Set "publicUrl": "${want}" in ${f.hub.home}/config.json, then restart Crosstalk when no chat is working (see Version).` } };
@@ -592,7 +597,7 @@ function devicesItem(f: SetupFacts): SetupItem {
         ? `Make a one-time code (the pair_code tool, or the command below), then open ${clean(url, 120)} on the phone and type it there.`
         : `A phone can't open ${localUrl(f)} (that only works on this machine), so first set up Tailscale and the HTTPS address (above). Then make a one-time code (the pair_code tool, or the command below), open this machine's https address on the phone and type it there.`,
       command: hubCommand(f, "pair 15"),
-      screen: "Settings → Devices → Pair a new device",
+      screen: settingsPath("devices", "Pair a new device"),
       target: "devices",
     });
   }
@@ -605,10 +610,10 @@ function pushItem(f: SetupFacts): SetupItem {
   if (!p || !f.devices) return mk("unknown", "Couldn't read the notification settings.");
   if (!f.devices.length) return mk("unknown", "Pair a device first (above).");
   const https = /^https:\/\//.test(f.hub.publicUrl ?? "");
-  const screen = { screen: "Settings → Devices", target: "devices" };
+  const screen = { screen: settingsPath("notifications"), target: "notifications" };
   if (!p.devices)
     return mk("user", `No device gets notifications yet, so approvals and finished replies don't reach you.${https ? "" : " They need the https address first (above)."}`, {
-      text: "On the phone, open Crosstalk (on an iPhone from its Home Screen icon: Share, then Add to Home Screen first), then Settings → Devices → Turn on notifications.",
+      text: `On the phone, open Crosstalk (on an iPhone from its Home Screen icon: Share, then Add to Home Screen first), then ${settingsPath("notifications", "Turn on notifications")}.`,
       ...screen,
     });
   if (p.apple && !https) return mk("missing", "iPhones get no notifications until Crosstalk knows its https address.", { text: "Fix Its own address (above), then restart Crosstalk." });
@@ -629,21 +634,21 @@ function agentItems(f: SetupFacts): SetupItem[] {
     if (!chat && !st?.installed) continue;
     const name = PROVIDER_INFO[p].name;
     const mk = (state: SetupState, detail: string, fix: SetupFix | null = null, optional = false) => item(`agent.${p}`, "agents", name, state, detail, fix, optional);
-    const recheck: SetupFix = { text: "Check again: the recheck_agents tool, or Settings → AI services → Check." };
+    const recheck: SetupFix = { text: `Check again: the recheck_agents tool, or ${settingsPath("ai-services", "Test")}.` };
     if (!st || !st.checkedAt) {
       out.push(mk("unknown", "Not checked yet.", recheck, !!any && !st?.installed));
       continue;
     }
-    const screen = chat ? { screen: `Settings → AI services → ${name}`, target: `agent-${p}` } : {};
+    const screen = chat ? { screen: agentSettingsPath(p), target: `agent-${p}` } : {};
     if (!st.installed) {
-      out.push(mk("missing", `${name} isn't installed${any ? ". Optional: another agent is." : "."}`, { text: `Install it with ${PROVIDER_INFO[p].vendor.split(" ·")[0]}'s official installer${p === "codex" ? " (it needs Node.js: brew install node)" : ""}:`, command: INSTALL_LINES[p], ...screen }, any));
+      out.push(mk("missing", `${name} isn't installed${any ? ". Optional: another agent is." : "."}`, { text: `Install it with ${PROVIDER_INFO[p].vendor.split(" ·")[0]}'s official installer:`, command: INSTALL_LINES[p], ...screen }, any));
       continue;
     }
     const version = st.version ? ` ${clean(st.version, 30)}` : "";
     // Nothing to sign in to: it runs on the AI services added for it, with their keys.
     if (isServiceOnlyAgent(p)) {
-      if (st.error) out.push(mk("missing", `${name}${version} can't be used: ${clean(st.error, 200)}`, { text: `Install the version Crosstalk needs: Settings → AI services → ${name}.`, command: INSTALL_LINES[p], screen: `Settings → AI services → ${name}`, target: `agent-${p}` }, true));
-      else out.push(mk("done", `${name}${version} is installed. It runs on AI services, so there's nothing to sign in to.`));
+      if (st.error) out.push(mk("missing", `${name}${version} can't be used: ${clean(st.error, 200)}`, { text: `Install the version Crosstalk needs: ${agentSettingsPath(p)}.`, command: INSTALL_LINES[p], screen: agentSettingsPath(p), target: `agent-${p}` }, true));
+      else out.push(mk("done", `${name}${version} is installed. It runs on accounts you add, so there's nothing to sign in to.`));
       continue;
     }
     const signedIn = !!st.signedIn || (f.accounts ?? []).some((a) => a.provider === p && a.signedIn);
@@ -658,9 +663,9 @@ function signInFix(p: Provider, bin: string | null): SetupFix {
   const cli = bin ? sh(bin) : (p === "antigravity" ? "agy" : p);
   switch (p) {
     case "claude":
-      return { text: "Sign in with the Claude account that has your plan: from the phone, or at the machine with the command.", command: `${cli} auth login`, password: true, screen: "Settings → AI services → Claude Code → Sign in", target: "agent-claude" };
+      return { text: "Sign in with the Claude account that has your plan: from the phone, or at the machine with the command.", command: `${cli} auth login`, password: true, screen: settingsPath("agent-claude", "Sign in"), target: "agent-claude" };
     case "codex":
-      return { text: "Sign in with your ChatGPT account: from the phone, or at the machine with the command.", command: `${cli} login`, password: true, screen: "Settings → AI services → Codex → Sign in", target: "agent-codex" };
+      return { text: "Sign in with your ChatGPT account: from the phone, or at the machine with the command.", command: `${cli} login`, password: true, screen: settingsPath("agent-codex", "Sign in"), target: "agent-codex" };
     case "gemini":
       return { text: "At the machine, run Gemini CLI and choose Login with Google (or use a paid Gemini API key).", command: cli, password: true };
     case "antigravity":
@@ -690,7 +695,7 @@ const until = (ms: number) => new Date(ms).toLocaleTimeString([], { hour: "2-dig
 function browserOsItem(f: SetupFacts): SetupItem | null {
   if (f.browseros === undefined) return null;
   const title = "BrowserOS neo";
-  const screen = { screen: "Settings → Set up with an AI agent", target: "agent-setup" };
+  const screen = { screen: settingsPath("agent-setup"), target: "agent-setup" };
   const mk = (state: SetupState, detail: string, fix: SetupFix | null = null) => item("browseros", "agents", title, state, detail, fix, true);
   const b = f.browseros;
   if (!b) return mk("unknown", "Couldn't check BrowserOS neo on this machine.", { text: "Check again: the setup_status tool, or Check again below.", ...screen });
@@ -714,7 +719,10 @@ function browserOsItem(f: SetupFacts): SetupItem | null {
     if (!b.newest) return mk("unknown", "Not installed, and none of BrowserOS neo's releases has a build for this machine.", null);
     const size = mb(b.newest.asset.size);
     return mk("missing", `Not installed. The newest build for this machine is ${clean(b.newest.version, 20)}${size ? ` (${size})` : ""}.${b.newest.note ? ` ${b.newest.note}` : ""}`, {
-      text: "Install it. Crosstalk checks the download against the SHA-256 GitHub reports, and on a Mac its signature and notarisation, before anything goes in /Applications:",
+      // A Mac's goes in /Applications once its signature is checked too; Linux has neither that folder nor that check.
+      text: isMac(f)
+        ? "Install it. Crosstalk checks the download against the SHA-256 GitHub reports, and on a Mac its signature and notarisation, before anything goes in /Applications:"
+        : "Install it. Crosstalk checks the download against the SHA-256 GitHub reports before anything goes on this machine:",
       command: installCommand,
       ...screen,
     });
@@ -797,23 +805,23 @@ function browserOsItem(f: SetupFacts): SetupItem | null {
 }
 
 function servicesItem(f: SetupFacts): SetupItem {
-  const mk = (state: SetupState, detail: string, fix: SetupFix | null = null) => item("services", "services", "AI services", state, detail, fix, true);
-  const screen = { screen: "Settings → AI services", target: "ai-services" };
-  if (!f.accounts) return mk("unknown", "Couldn't read the AI services.");
+  const mk = (state: SetupState, detail: string, fix: SetupFix | null = null) => item("services", "services", "More accounts", state, detail, fix, true);
+  const screen = { screen: settingsPath("ai-services"), target: "ai-services" };
+  if (!f.accounts) return mk("unknown", "Couldn't read the accounts.");
   const added = f.accounts.filter((a) => a.kind === "endpoint" || a.kind === "apikey");
   const label = (a: AgentAccount) => `${clean(a.label, 40)} (${PROVIDER_INFO[a.provider]?.name ?? a.provider})`;
   const broken = added.filter((a) => a.signedIn === false);
-  if (broken.length) return mk("user", `${names(broken.map(label))}: ${broken.length === 1 ? "its key was refused" : "their keys were refused"}.`, { text: "Replace the key in Settings → AI services (Test says what's wrong).", ...screen });
+  if (broken.length) return mk("user", `${names(broken.map(label))}: ${broken.length === 1 ? "its key was refused" : "their keys were refused"}.`, { text: `Replace the key in ${settingsPath("ai-services")} (Test says what's wrong).`, ...screen });
   const unused = (f.localServers ?? []).filter((s) => !s.used);
-  if (unused.length) return mk("user", `${names(unused.map((s) => clean(s.label, 40)))} ${unused.length === 1 ? "runs" : "run"} on this machine and ${unused.length === 1 ? "isn't" : "aren't"} used yet.`, { text: "Tap New chat and pick it: one tap adds it and starts a chat. Settings → AI services → Use it does it too.", ...screen });
+  if (unused.length) return mk("user", `${names(unused.map((s) => clean(s.label, 40)))} ${unused.length === 1 ? "runs" : "run"} on this machine and ${unused.length === 1 ? "isn't" : "aren't"} used yet.`, { text: `Tap New chat and pick it: one tap adds it and starts a chat. ${settingsPath("found-here", "Use it")} does it too.`, ...screen });
   if (added.length) return mk("done", `${added.length} added: ${names(added.map(label))}.`);
-  return mk("user", "None added. You can add a model that runs on this machine, or an API key.", { text: "Settings → AI services → Add an AI service.", ...screen });
+  return mk("user", "None added. You can add a model that runs on this machine, or an API key.", { text: `${settingsPath("ai-services", "Add an account")}.`, ...screen });
 }
 
 function macItems(f: SetupFacts): SetupItem[] {
   if (!isMac(f) || f.mac === undefined) return [];
   const m = f.mac;
-  const screen = { screen: "Settings → This Mac", target: "this-mac" };
+  const screen = { screen: settingsPath("this-mac"), target: "this-mac" };
   const fixLine = (what: "autologin" | "power") => {
     // As Settings → This Mac runs it, without the script(1) wrapper that gives sudo a terminal there.
     const argv = macFixCommand(what, f.hub.user)?.argv.slice(3) ?? [];
@@ -835,7 +843,7 @@ function macItems(f: SetupFacts): SetupItem[] {
     out.push(item("mac.autologin", "mac", "Starts again after a restart", "user", "FileVault is on, so after a restart the Mac waits for its password, and Crosstalk can't start until someone types it there.", { text: "Only someone at the Mac can change this: turn FileVault off in System Settings → Privacy & Security (then automatic login can go on), or type the password after each restart.", ...screen }));
   else if (m.autoLogin === null && m.fileVault === null) out.push(item("mac.autologin", "mac", "Starts again after a restart", "unknown", "Couldn't tell whether the Mac logs in by itself.", null));
   else
-    out.push(item("mac.autologin", "mac", "Starts again after a restart", "user", "After an update or a power cut the Mac waits at the login screen, and Crosstalk can't start until someone logs in.", { text: "Turn on automatic login with the Mac's password, from the phone or at the Mac. Anyone at the Mac can then use it.", command: fixLine("autologin"), password: true, ...screen, screen: "Settings → This Mac → Turn on automatic login" }));
+    out.push(item("mac.autologin", "mac", "Starts again after a restart", "user", "After an update or a power cut the Mac waits at the login screen, and Crosstalk can't start until someone logs in.", { text: "Turn on automatic login with the Mac's password, from the phone or at the Mac. Anyone at the Mac can then use it.", command: fixLine("autologin"), password: true, ...screen, screen: settingsPath("this-mac", "Turn on automatic login") }));
   const sleeps = m.sleepMinutes !== null && m.sleepMinutes > 0;
   const off = m.restartsAfterPowerCut === false;
   if (m.sleepMinutes === null) out.push(item("mac.power", "mac", "Stays on", "unknown", "Couldn't read the Mac's power settings.", null));
@@ -846,7 +854,7 @@ function macItems(f: SetupFacts): SetupItem[] {
         command: fixLine("power"),
         password: true,
         ...screen,
-        screen: "Settings → This Mac → Keep it on",
+        screen: settingsPath("this-mac", "Keep it on"),
       }),
     );
   else out.push(item("mac.power", "mac", "Stays on", "done", `It never sleeps${m.restartsAfterPowerCut ? " and starts up again after a power cut" : ""}.`, null));
@@ -873,31 +881,19 @@ function macItems(f: SetupFacts): SetupItem[] {
 
 function machinesItem(f: SetupFacts): SetupItem {
   const mk = (state: SetupState, detail: string, fix: SetupFix | null = null) => item("machines", "machines", "Linked machines", state, detail, fix, true);
-  const screen = { screen: "Settings → Machines", target: "machines" };
+  const screen = { screen: settingsPath("machines"), target: "machines" };
   if (!f.machines) return mk("unknown", "Couldn't read the linked machines.");
   const links = f.machines.filter((m) => m.agents !== "removing");
-  if (!links.length) return mk("user", "None linked. Link a Linux box or another Mac, and one app reaches both.", { text: "Settings → Machines → Link a machine, or Set up a Linux machine.", ...screen });
+  if (!links.length) return mk("user", "None linked. Link a Linux box or another Mac, and one app reaches both.", { text: `${settingsPath("machines", "Add a machine that runs Crosstalk")}, or Set up a Linux machine.`, ...screen });
   for (const m of links) {
     const name = clean(m.name, 40);
     const v = f.machineVersions[m.id];
     if (m.agents === "needs-update" || (v && newerThan(f.hub.version, v)))
-      return mk("user", `${name} runs an older Crosstalk${v ? ` (${clean(v, 20)})` : ""}.`, { text: `Update Crosstalk on ${name}. For a Linux machine, Settings → Machines → Set up a Linux machine gives the command that installs this version there.`, ...screen });
-    if (m.agents === "signed-out") return mk("user", `${name} no longer accepts this machine's sign-in.`, { text: "Link it again in Settings → Machines.", ...screen });
-    if (m.agents === "failed" || m.error) return mk("user", `Couldn't reach ${name}${m.error ? `: ${clean(m.error, 160)}` : ""}.`, { text: `Check that ${name} is on and on your tailnet, then Connect it in Settings → Machines.`, ...screen });
+      return mk("user", `${name} runs an older Crosstalk${v ? ` (${clean(v, 20)})` : ""}.`, { text: `Update Crosstalk on ${name}. For a Linux machine, ${settingsPath("machines", "Set up a Linux machine")} gives the command that installs this version there.`, ...screen });
+    if (m.agents === "signed-out") return mk("user", `${name} no longer accepts this machine.`, { text: `Link it again in ${settingsPath("machines")}.`, ...screen });
+    if (m.agents === "failed" || m.error) return mk("user", `Couldn't reach ${name}${m.error ? `: ${clean(m.error, 160)}` : ""}.`, { text: `Check that ${name} is on and on your tailnet, then Connect it in ${settingsPath("machines")}.`, ...screen });
   }
   return mk("done", `Linked: ${names(links.map((m) => clean(m.name, 40)))}.`);
-}
-
-function poolItem(f: SetupFacts): SetupItem | null {
-  const p = f.pool;
-  if (!p?.configured) return null;
-  const screen = { screen: "Settings → Model pool", target: "model-pool" };
-  const name = clean(p.alias, 60) || "The pool's model";
-  const mk = (state: SetupState, detail: string, fix: SetupFix | null = null, optional = false) => item("pool", "pool", "Model pool", state, detail, fix, optional);
-  if (p.state === "running") return mk("done", `${name} runs on ${p.machines} machine${p.machines === 1 ? "" : "s"}.`);
-  if (p.state === "error") return mk("missing", p.detail ? clean(p.detail, 300) : "It stopped with an error.", { text: "Fix what it says, then press Start in Settings → Model pool.", ...screen });
-  if (p.state === "off") return mk("missing", "Set up, but not running.", { text: "Start it in Settings → Model pool.", ...screen }, true);
-  return mk("unknown", `${p.state[0].toUpperCase()}${p.state.slice(1)}${p.detail ? `: ${clean(p.detail, 200)}` : ""}. Check again in a minute.`);
 }
 
 // ---- words ----

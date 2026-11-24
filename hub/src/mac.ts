@@ -15,7 +15,7 @@
 // once, and This Mac shows for a week what happened, what to change, and how long Crosstalk was off.
 
 import { createHash } from "node:crypto";
-import { MAC_LOGIN_WAIT_MS, type MacCrash, type MacDialog, type MacStatus } from "@crosstalk/shared";
+import { settingsPath, MAC_LOGIN_WAIT_MS, type MacCrash, type MacDialog, type MacStatus } from "@crosstalk/shared";
 import { HttpError } from "./engine/engine";
 import { logger } from "./util/log";
 
@@ -310,7 +310,7 @@ export function crashNote(c: MacCrash, name: string, login: Pick<MacStatus, "aut
       ? ": it waited at the login screen."
       : login.fileVault
         ? ": it waited at the login screen for its FileVault password."
-        : ": it waited at the login screen. Turn on automatic login in Settings → This Mac.";
+        : `: it waited at the login screen. Turn on automatic login in ${settingsPath("this-mac")}.`;
   const off = `Crosstalk was off until ${clock(c.backAt, now)}${why}`;
   return c.kind === "crash"
     ? { title: `${name} crashed and restarted`, body: `At ${clock(c.at, now)} (${c.cause ?? "a kernel panic"}). ${off}` }

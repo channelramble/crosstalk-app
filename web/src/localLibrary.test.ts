@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import type { LocalDownload, LocalFolder, LocalMachine, LocalStarted } from "@crosstalk/shared";
-import { capacity, contextsFor, startChoice, downloadLine, downloadPct, downloadsText, downloadWayOut, fileTitle, fitOf, folderLine, lookFor, lowQuality, machineText, needOf, ollamaNameProblem, paramsText, ramRoom, roomFor, roomProblem, startedLine, startedTitle, suggestedFile } from "./localLibrary";
+import { bytesText, capacity, contextLabel, contextsFor, startChoice, downloadLine, downloadText, modelName, parseHfLink, portProblem, timeLeftText, downloadPct, downloadsText, downloadWayOut, fileTitle, fitOf, folderLine, lookFor, lowQuality, machineText, needOf, ollamaNameProblem, paramsText, ramRoom, roomFor, roomProblem, startedLine, startedTitle, suggestedFile } from "./localLibrary";
 
 const GiB = 1024 ** 3;
 const MiB = 1024 ** 2;
@@ -194,4 +194,52 @@ test("the verdict can be asked about the machine as it is, not an empty one: wha
   expect(fitOf(5 * GiB, mac(), "Mac mini", 2 * GiB).line).toBe("Fits on Mac mini: needs about 5.0 GB, and 9.8 GB of the 11.8 GB models can use is free.");
   // Nothing running: word for word what it always said.
   expect(fitOf(6 * GiB, mac(), "Mac mini", 0)).toEqual(fitOf(6 * GiB, mac(), "Mac mini"));
+});
+
+test("model names read like the model, not the repo", () => {
+  expect(modelName("unsloth/Qwen3.8-27B-GGUF")).toBe("Qwen3.8-27B");
+  expect(modelName("orcarouter/Qwen3.8-27B-GGUF")).toBe("Qwen3.8-27B");
+  expect(modelName("ggml-org/gpt-oss-20b-GGUF")).toBe("gpt-oss-20b");
+  expect(modelName("bartowski/moonshotai_Kimi-Linear-48B-A3B-Instruct-GGUF")).toBe("Kimi-Linear-48B-A3B-Instruct");
+  expect(modelName("someone/plain-model")).toBe("plain-model");
+  expect(bytesText(640 * 1024 ** 2)).toBe("640 MB");
+});
+
+test("Hugging Face links: pages, files, llama.cpp's repo:quant, and not datasets or other sites", () => {
+  expect(parseHfLink("https://huggingface.co/unsloth/Qwen3.8-27B-GGUF")).toEqual({ repo: "unsloth/Qwen3.8-27B-GGUF", file: null, quant: null });
+  expect(parseHfLink("  hf.co/unsloth/Qwen3.8-27B-GGUF/  ")).toEqual({ repo: "unsloth/Qwen3.8-27B-GGUF", file: null, quant: null });
+  expect(parseHfLink("unsloth/Qwen3.6-35B-A3B-GGUF")?.repo).toBe("unsloth/Qwen3.6-35B-A3B-GGUF");
+  expect(parseHfLink("https://huggingface.co/ggml-org/gpt-oss-20b-GGUF/blob/main/gpt-oss-20b-mxfp4.gguf?download=true")).toEqual({ repo: "ggml-org/gpt-oss-20b-GGUF", file: "gpt-oss-20b-mxfp4.gguf", quant: null });
+  expect(parseHfLink("https://huggingface.co/unsloth/X-GGUF/resolve/main/UD-Q4_K_XL/X-UD-Q4_K_XL-00001-of-00002.gguf")?.file).toBe("UD-Q4_K_XL/X-UD-Q4_K_XL-00001-of-00002.gguf");
+  expect(parseHfLink("https://huggingface.co/unsloth/X-GGUF/tree/main")).toEqual({ repo: "unsloth/X-GGUF", file: null, quant: null });
+  expect(parseHfLink("unsloth/Qwen3.8-27B-GGUF:Q4_K_M")).toEqual({ repo: "unsloth/Qwen3.8-27B-GGUF", file: null, quant: "Q4_K_M" });
+  expect(parseHfLink("https://huggingface.co/models/unsloth/Qwen3.8-27B-GGUF")?.repo).toBe("unsloth/Qwen3.8-27B-GGUF");
+  expect(parseHfLink("https://huggingface.co/datasets/foo/bar")).toBeNull();
+  expect(parseHfLink("https://huggingface.co/spaces/foo/bar")).toBeNull();
+  expect(parseHfLink("https://github.com/ggml-org/llama.cpp")).toBeNull();
+  expect(parseHfLink("just-a-name")).toBeNull();
+  expect(parseHfLink("")).toBeNull();
+  expect(parseHfLink("https://huggingface.co/unsloth/X-GGUF/discussions/3")).toBeNull();
+});
+
+test("download progress says how much, how fast and how long", () => {
+  expect(downloadText({ doneBytes: 7.1 * GiB, totalBytes: 16.8 * GiB, bytesPerSec: 38 * 1024 ** 2 })).toBe("42% · 7.1 GB of 16.8 GB · 38 MB/s · about 4 min left");
+  expect(downloadText({ doneBytes: 0, totalBytes: 0, bytesPerSec: null })).toBe("1 KB");
+  expect(downloadText({ doneBytes: 1 * GiB, totalBytes: 2 * GiB, bytesPerSec: null })).toBe("50% · 1.0 GB of 2.0 GB");
+  expect(timeLeftText(30)).toBe("under a minute left");
+  expect(timeLeftText(2 * 3600 + 10 * 60)).toBe("about 2 h 10 min left");
+  expect(timeLeftText(3600)).toBe("about 1 h left");
+});
+
+test("context sizes read like the menu", () => {
+  expect([16384, 32768, 65536, 131072, 262144].map(contextLabel)).toEqual(["16k", "32k", "64k", "128k", "256k"]);
+  expect(contextLabel(1048576)).toBe("1M");
+  expect(contextLabel(39936)).toBe("39k");
+});
+
+test("a server's port: 1024 to 65535", () => {
+  expect(portProblem("8080")).toBeNull();
+  expect(portProblem("80")).not.toBeNull();
+  expect(portProblem("70000")).not.toBeNull();
+  expect(portProblem("")).not.toBeNull();
 });

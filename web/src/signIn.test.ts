@@ -33,7 +33,7 @@ const need = (over: Partial<SignInNeed> = {}): SignInNeed => ({
   machine: MACHINE,
   since: NOW - 60_000,
   rooms: ["r_enmyh53k9w2s"],
-  words: "Claude Code is signed out on Mac mini, so it couldn't answer. Sign in to it again (Settings → Agents → Claude Code → Sign in), then tap Try again.",
+  words: "Claude Code is signed out on Mac mini, so it couldn't answer. Sign in to it again (Settings → Accounts → Claude Code → Sign in), then tap Try again.",
   ...over,
 });
 
@@ -205,21 +205,21 @@ describe("the sign-in sheet, step by step", () => {
 
   test("a sign-in that couldn't start says why, with the way out that answer leaves", () => {
     const problem = (status: number, code: string | undefined, message: string) => view(null, { problem: { status, code, message } });
-    expect(problem(409, "terminal", "Antigravity CLI asks how to sign in on a screen of its own first, so it signs in from its terminal: Settings → AI services → Antigravity CLI → Sign in.")).toMatchObject({
+    expect(problem(409, "terminal", "Antigravity CLI asks how to sign in on a screen of its own first, so it signs in from its terminal: Settings → Accounts → Antigravity CLI → Sign in.")).toMatchObject({
       phase: "problem",
       tone: "alert",
       words: "Claude Code signs in on a screen of its own, so it can't sign in from this sheet. Use its terminal sign-in instead: it runs on Mac mini and shows here.",
       actions: ["close", "terminal"],
     });
-    expect(problem(409, "not_installed", "Claude Code isn't installed on Mac mini. Install it under Settings → AI services first.")).toMatchObject({ words: "Claude Code isn't installed on Mac mini. Install it under Settings → AI services first.", actions: ["close", "settings"] });
-    expect(problem(409, "not_signin", "This account runs on an API key or a model server of your own: there's nothing to sign in to. Change its key in Settings → AI services.")).toMatchObject({ actions: ["close", "settings"] });
+    expect(problem(409, "not_installed", "Claude Code isn't installed on Mac mini. Install it under Settings → Accounts → Claude Code first.")).toMatchObject({ words: "Claude Code isn't installed on Mac mini. Install it under Settings → Accounts → Claude Code first.", actions: ["close", "settings"] });
+    expect(problem(409, "not_signin", "This account runs on an API key or one of your own models: there's nothing to sign in to. Change its key in Settings → Accounts.")).toMatchObject({ actions: ["close", "settings"] });
     expect(problem(429, "too_many", "Several sign-ins are already running here. Finish or stop one of them first.")).toMatchObject({ actions: ["close", "retry"] });
     expect(problem(404, "account", "There's no Claude Code account like that on Mac mini any more")).toMatchObject({ words: "There's no Claude Code account like that on Mac mini any more.", actions: ["close"] });
     // A hub from before sign-ins from the phone: "not found", no code. Its terminal sign-in still works.
     expect(problem(404, undefined, "not found")).toMatchObject({ words: "Crosstalk on Mac mini can't sign agents in from here until it's updated. Use its terminal sign-in instead.", actions: ["close", "terminal"] });
     // The hub couldn't be reached: try again.
-    expect(problem(0, undefined, "Can't reach the hub. Check that it's running and that this device is on your Tailscale network.")).toMatchObject({
-      words: "Claude Code's sign-in didn't start: Can't reach the hub. Check that it's running and that this device is on your Tailscale network.",
+    expect(problem(0, undefined, "Can't reach the machine. Check that Crosstalk is running on it and that this device is on your Tailscale network.")).toMatchObject({
+      words: "Claude Code's sign-in didn't start: Can't reach the machine. Check that Crosstalk is running on it and that this device is on your Tailscale network.",
       actions: ["close", "retry"],
     });
     expect(problem(403, "person_only", "Only your own devices can sign agents in. This sign-in belongs to another machine's hub.")).toMatchObject({ actions: ["close"] });
@@ -232,8 +232,8 @@ describe("the sign-in sheet, step by step", () => {
   test("a code that couldn't go: the hub's words and what to do, never the code", () => {
     expect(codeProblemWords({ status: 409, code: "not_waiting", message: "This sign-in isn't waiting for a code right now." })).toBe("This sign-in isn't waiting for a code right now. Wait for the box to be ready, then paste it again.");
     expect(codeProblemWords({ status: 400, code: "code", message: "Paste just the code from the sign-in page: one line, nothing else." })).toBe("Paste just the code from the sign-in page: one line, nothing else.");
-    expect(codeProblemWords({ status: 0, message: "Can't reach the hub. Check that it's running and that this device is on your Tailscale network." })).toBe(
-      "Couldn't send the code: Can't reach the hub. Check that it's running and that this device is on your Tailscale network. Paste it again and tap Sign in.",
+    expect(codeProblemWords({ status: 0, message: "Can't reach the machine. Check that Crosstalk is running on it and that this device is on your Tailscale network." })).toBe(
+      "Couldn't send the code: Can't reach the machine. Check that Crosstalk is running on it and that this device is on your Tailscale network. Paste it again and tap Sign in.",
     );
   });
 });
@@ -248,7 +248,7 @@ describe("the hub's note in a reply whose agent picked itself back up", () => {
   });
 
   test("other notes and steps aren't", () => {
-    expect(isStaleSignInNote({ kind: "notice", title: "Compacted the conversation (142k → 31k tokens)" })).toBe(false);
+    expect(isStaleSignInNote({ kind: "notice", title: "Summarized the earlier messages (142k → 31k tokens)" })).toBe(false);
     expect(isStaleSignInNote({ kind: "notice", title: "Claude Code started on Opus 5, not Opus 5.5" })).toBe(false);
     // The same words as a command's title (an agent can run anything) aren't Crosstalk's note.
     expect(isStaleSignInNote({ kind: "command", title: staleSignInWords("Claude Code", "Mac mini", "carried") })).toBe(false);

@@ -38,4 +38,33 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="${GITHUB_REF_NAME}"
-          gh release create "$TAG" dist/* --title "Crosstalk ${TAG#v}" --notes-file CHANGELOG.md --verify-tag || gh release upload "$TAG" dist/* --clobber
+          # The release says what's new in this version: its own section of the changelog, not the whole history.
+          awk -v v="## ${TAG#v}" '$0 == v { on = 1; next } on && /^## / { exit } on' CHANGELOG.md > notes.md
+          [ -s notes.md ] || cp CHANGELOG.md notes.md
+          gh release create "$TAG" dist/* --title "Crosstalk ${TAG#v}" --notes-file notes.md --verify-tag || gh release upload "$TAG" dist/* --clobber
+
+  # Crosstalk Hub, the menu-bar app for Apple silicon Macs: the Mac installer adds it when this release has one.
+  # It's an extra: if it doesn't build, the release above still stands and installs go on without it.
+  hub-app:
+    needs: build
+    runs-on: macos-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - name: Build the app (without a copy of Crosstalk inside: the installer has put that in place already)
+        run: |
+          cd native && bun install
+          cd hub-tray && ../node_modules/.bin/tauri build --bundles app
+          APP="target/release/bundle/macos/Crosstalk Hub.app"
+          codesign --force --deep --sign - "$APP"
+          codesign -v --strict "$APP"
+          ditto -c -k --keepParent "$APP" "$GITHUB_WORKSPACE/Crosstalk-Hub-macos-arm64.zip"
+          cd "$GITHUB_WORKSPACE" && shasum -a 256 Crosstalk-Hub-macos-arm64.zip > Crosstalk-Hub-macos-arm64.zip.sha256
+      - name: Add it to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${GITHUB_REF_NAME}" Crosstalk-Hub-macos-arm64.zip Crosstalk-Hub-macos-arm64.zip.sha256 --clobber
+

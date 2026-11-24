@@ -4,17 +4,16 @@
 // its progress here and in the section, and can be stopped and picked up again.
 import { useEffect, useRef, useState } from "react";
 import { ChevronLeft, Download, Loader2 } from "lucide-react";
-import type { LocalDownload, LocalLibrary, LocalOllamaInfo, LocalRepoFiles, LocalSearchHit, PoolModel } from "@crosstalk/shared";
+import type { LocalDownload, LocalLibrary, LocalOllamaInfo, LocalRepoFiles, LocalSearchHit, HfModel } from "@crosstalk/shared";
 import { api, ApiError } from "../api";
-import { contextsFor, contextText, downloadLine, downloadPct, downloadsText, fitOf, lookFor, lowQuality, machineText, needOf, ollamaNameProblem, paramsText, roomProblem, suggestedFile, type Fit } from "../localLibrary";
-import { bytesText, contextLabel, fileName, hfModelUrl, modelName } from "../pool";
+import { bytesText, contextLabel, contextsFor, contextText, downloadLine, downloadPct, downloadsText, fileName, fitOf, hfModelUrl, lookFor, lowQuality, machineText, modelName, needOf, ollamaNameProblem, paramsText, roomProblem, suggestedFile, type Fit } from "../localLibrary";
 import { errorMessage } from "../services";
 import { useStore } from "../store";
 import { ConfirmButton, Dialog, Seg } from "../ui";
 import { HelpTip } from "./HelpTip";
 
 type Source = "huggingface" | "ollama";
-const hfId = (m: Pick<PoolModel, "repo" | "files">) => `hf:${m.repo}/${m.files[0]}`;
+const hfId = (m: Pick<HfModel, "repo" | "files">) => `hf:${m.repo}/${m.files[0]}`;
 
 /** A refusal from the hub with its reason code, so the way out can be offered. */
 interface Problem {
@@ -149,7 +148,7 @@ function HuggingFace({ library, machine, context, onLibrary, onFolder }: { libra
     }
   };
 
-  const fits = (m: PoolModel): Fit => fitOf(needOf(m.sizeBytes, repo?.kvBytesPerToken ?? null, context, repo?.contextLength ?? null).bytes, library.machine, machine);
+  const fits = (m: HfModel): Fit => fitOf(needOf(m.sizeBytes, repo?.kvBytesPerToken ?? null, context, repo?.contextLength ?? null).bytes, library.machine, machine);
   const suggestion = repo ? suggestedFile(repo.models, (m) => fits(m).kind) : null;
   const showToken = !!repo && (repo.gated || tokenAsk > 0);
 
@@ -158,16 +157,16 @@ function HuggingFace({ library, machine, context, onLibrary, onFolder }: { libra
       {!repo ? (
         <>
           <form
-            className="pool-link-form"
+            className="get-form"
             onSubmit={(e) => {
               e.preventDefault();
               submit();
             }}
           >
-            <label className="pool-label" htmlFor="local-get-search">
+            <label className="get-label" htmlFor="local-get-search">
               Search Hugging Face, or paste a link
             </label>
-            <div className="pool-link-row">
+            <div className="get-row">
               <input id="local-get-search" className="input" value={text} onChange={(e) => setText(e.target.value)} placeholder="qwen3 8b, or owner/model-GGUF" inputMode="search" autoCapitalize="off" autoCorrect="off" spellCheck={false} />
               <button className="btn" type="submit" disabled={!text.trim() || looking !== null}>
                 {looking === "search" ? "Searching…" : "Search"}
@@ -188,7 +187,7 @@ function HuggingFace({ library, machine, context, onLibrary, onFolder }: { libra
               {hits.map((h) => (
                 <div key={h.repo} role="listitem" className="local-hit">
                   <button type="button" className="choice-card" onClick={() => void open(h.repo)} disabled={looking !== null}>
-                    <span className="choice-card-title pool-wrap">
+                    <span className="choice-card-title get-wrap">
                       {modelName(h.repo)}
                       {h.gated && <span className="pill orange">Gated</span>}
                     </span>
@@ -201,13 +200,13 @@ function HuggingFace({ library, machine, context, onLibrary, onFolder }: { libra
         </>
       ) : (
         <section aria-label={`${modelName(repo.repo)} files`}>
-          <button type="button" className="btn small ghost pool-back" onClick={back}>
+          <button type="button" className="btn small ghost get-back" onClick={back}>
             <ChevronLeft size={14} aria-hidden="true" /> {hits ? "Results" : "Search"}
           </button>
-          <div className="pool-model-name">
+          <div className="get-model-name">
             {modelName(repo.repo)} {repo.gated && <span className="pill orange">Gated</span>}
           </div>
-          <a className="help mono pool-repo" href={hfModelUrl(repo.repo)} target="_blank" rel="noreferrer noopener">
+          <a className="help mono get-repo" href={hfModelUrl(repo.repo)} target="_blank" rel="noreferrer noopener">
             {repo.repo}
           </a>
           <p className="help">
@@ -298,7 +297,7 @@ function Ollama({ library, servers, machine, context, onLibrary }: { library: Lo
   if (!servers.length) {
     return (
       <p className="help local-get-empty" role="status">
-        Ollama isn't running on {machine}. Start it under Start a server (or open the Ollama app), then press Rescan.
+        Ollama isn't running on {machine}. Start it under Start Ollama or llama.cpp (or open the Ollama app), then press Rescan.
       </p>
     );
   }
@@ -338,16 +337,16 @@ function Ollama({ library, servers, machine, context, onLibrary }: { library: Lo
   return (
     <div className="local-get">
       <form
-        className="pool-link-form"
+        className="get-form"
         onSubmit={(e) => {
           e.preventDefault();
           void lookUp();
         }}
       >
-        <label className="pool-label" htmlFor="local-get-ollama">
+        <label className="get-label" htmlFor="local-get-ollama">
           Model name
         </label>
-        <div className="pool-link-row">
+        <div className="get-row">
           <input id="local-get-ollama" className="input mono" value={name} onChange={(e) => (setName(e.target.value), setInfo(null), setProblem(null))} placeholder="qwen3:8b" autoCapitalize="off" autoCorrect="off" spellCheck={false} />
           <button className="btn" type="submit" disabled={!name.trim() || looking}>
             {looking ? "Looking…" : "Look up"}
@@ -363,7 +362,7 @@ function Ollama({ library, servers, machine, context, onLibrary }: { library: Lo
       </form>
       {servers.length > 1 && (
         <div className="field">
-          <label className="pool-label" htmlFor="local-get-ollama-server">
+          <label className="get-label" htmlFor="local-get-ollama-server">
             Into
           </label>
           <select id="local-get-ollama-server" className="select" value={serverId} onChange={(e) => setServerId(e.target.value)}>
@@ -410,9 +409,9 @@ function Ollama({ library, servers, machine, context, onLibrary }: { library: Lo
 export function DownloadBar({ d }: { d: LocalDownload }) {
   const line = downloadLine(d);
   return (
-    <div className="pool-download local-download-bar">
+    <div className="download-progress local-download-bar">
       {d.state !== "failed" && (
-        <div className="pool-bar" role="progressbar" aria-label={`Download of ${d.name}`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.floor(downloadPct(d))} aria-valuetext={line}>
+        <div className="fill-bar" role="progressbar" aria-label={`Download of ${d.name}`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.floor(downloadPct(d))} aria-valuetext={line}>
           <span style={{ ["--fill" as string]: downloadPct(d) / 100 }} />
         </div>
       )}
@@ -452,7 +451,7 @@ function Problem({ text, again }: { text: string; again?: () => void }) {
 }
 
 /**
- * The Hugging Face token gated models need: the model pool's (one per hub, kept in its secrets, never shown again).
+ * The Hugging Face token gated models need (one per hub, kept in its secrets, never shown again).
  * Each `ask` opens the field and puts the cursor in it.
  */
 export function TokenField({ has, repo, ask = 0, onSaved }: { has: boolean; repo: string | null; ask?: number; onSaved: (has: boolean) => void }) {
@@ -472,13 +471,11 @@ export function TokenField({ has, repo, ask = 0, onSaved }: { has: boolean; repo
     setBusy(true);
     setError("");
     try {
-      const r = await api<{ hasHfToken: boolean }>("PUT", "/api/pool/hf-token", { token: value }, conn);
-      // The model pool shows the same token.
-      if (useStore.getState().conn === conn) useStore.setState((s) => (s.pool ? { pool: { ...s.pool, hasHfToken: r.hasHfToken } } : {}));
+      const r = await api<{ hasHfToken: boolean }>("PUT", "/api/local-models/hf-token", { token: value }, conn);
       setToken("");
       setReplacing(false);
       onSaved(r.hasHfToken);
-      toast("info", value ? "Hugging Face token saved on the hub." : "Hugging Face token removed.");
+      toast("info", value ? "Hugging Face token saved on the machine." : "Hugging Face token removed.");
     } catch (e) {
       setError(errorMessage(e));
     } finally {
@@ -487,14 +484,14 @@ export function TokenField({ has, repo, ask = 0, onSaved }: { has: boolean; repo
   };
   const editing = !has || replacing;
   return (
-    <div className="pool-token local-token">
-      <div className="pool-token-head">
-        <span className="pool-label">Hugging Face token</span>
+    <div className="hf-token local-token">
+      <div className="hf-token-head">
+        <span className="get-label">Hugging Face token</span>
         {has && <span className="pill green">Saved</span>}
       </div>
       {editing ? (
         <form
-          className="pool-token-form"
+          className="hf-token-form"
           onSubmit={(e) => {
             e.preventDefault();
             if (token.trim()) void put(token.trim());
@@ -536,7 +533,7 @@ export function TokenField({ has, repo, ask = 0, onSaved }: { has: boolean; repo
         <a href="https://huggingface.co/settings/tokens" target="_blank" rel="noreferrer noopener">
           huggingface.co/settings/tokens
         </a>
-        . The Model pool uses the same one.
+        .
       </p>
     </div>
   );

@@ -1,6 +1,6 @@
 import type { Page, Route } from "@playwright/test";
 import type { ProviderStatus, PtyInfo, ServiceFunds, ServiceTestResult } from "@crosstalk/shared";
-import { test, expect, noHorizontalOverflow } from "./fixtures";
+import { test, expect, noHorizontalOverflow, addAnotherService, moreOf, chatSettingsAll, effortSteps, modelCards, pickModel, modelInForce, pickEffort, effortInForce } from "./fixtures";
 
 // Adding Refuseless and its abliterated models on a phone screen (390px), with OpenCode to run them: installed from the
 // sheet itself when it isn't there yet. The hub's answers are played here: the shared test hub's accounts and settings stay
@@ -119,18 +119,18 @@ async function hub(page: Page, opencode: ProviderStatus = OPENCODE) {
   return state;
 }
 
-const sheet = (page: Page) => page.getByRole("dialog", { name: "Add an AI service", exact: true });
+const sheet = (page: Page) => page.getByRole("dialog", { name: /^Add (another service|a model on this machine)$/ });
 /** Scrolls so the element starts at the top of the screen (a phone screenshot of just what's being shown). */
 const atTop = (target: ReturnType<Page["getByRole"]>) => target.evaluate((el) => el.scrollIntoView({ block: "start" }));
 const settings = async (page: Page) => {
   await phone(page);
-  await page.goto("/#/settings");
-  await expect(page.getByRole("heading", { name: "AI services", exact: true })).toBeVisible();
+  await page.goto("/#/settings/accounts");
+  await expect(page.getByRole("button", { name: "Add an account", exact: true })).toBeVisible();
 };
 /** The sheet on Refuseless with its key in and its check back. */
 const checkedSheet = async (page: Page) => {
   await settings(page);
-  await page.getByRole("button", { name: "Add an AI service", exact: true }).click();
+  await addAnotherService(page);
   const dialog = sheet(page);
   await dialog.getByRole("button", { name: /^Refuseless/ }).click();
   await dialog.getByLabel("API key", { exact: true }).fill("abl_test_key");
@@ -142,7 +142,7 @@ const checkedSheet = async (page: Page) => {
 test("Refuseless: a key, its credit, its abliterated models ticked with their names and prices, OpenCode to run them, and the account's credit after", async ({ page }) => {
   const h = await hub(page);
   await settings(page);
-  await page.getByRole("button", { name: "Add an AI service", exact: true }).click();
+  await addAnotherService(page);
   const dialog = sheet(page);
   // In the list, what it is in a line; picked, what you pay for and what runs it, and where the key comes from.
   await expect(dialog.getByRole("button", { name: /^Refuseless/ })).toContainText("refusals taken out of the weights");
@@ -206,13 +206,13 @@ test("Refuseless: a key, its credit, its abliterated models ticked with their na
   await expect(dialog).toHaveCount(0);
   await expect(page.getByText("Added. Start a chat on Refuseless from New chat.", { exact: true })).toBeVisible();
   const added = page.getByRole("group", { name: "OpenCode · Refuseless", exact: true });
-  await expect(added.getByText("OpenCode · Custom model · api.refuseless.com", { exact: true })).toBeVisible();
+  await expect(added.getByText("api.refuseless.com · runs with OpenCode", { exact: true })).toBeVisible();
   await expect(added.getByText("Balance $41.30 · $1.20 held by replies still running", { exact: true })).toBeVisible();
   await expect(added.getByRole("button", { name: "Remove", exact: true })).toBeVisible();
-  await expect(added.getByText("Change its address, key or models with Change, or take it away with Remove.", { exact: true })).toBeVisible();
   expect(h.fundsReads).toBeGreaterThan(0);
-  // The Agents line says what runs it, and it has no "Accounts below" to go to.
-  await expect(page.getByText("Claude Code and Codex run the other services above. OpenCode runs Refuseless, with the key above, and needs no sign-in. Install Claude Code or Codex, sign in to your plan or add accounts here.", { exact: true })).toBeVisible();
+  // It's under Other services, and what changes it is on its own row: nothing sends you to another card.
+  await expect(page.getByRole("region", { name: "Other services", exact: true }).getByRole("group", { name: "OpenCode · Refuseless", exact: true })).toBeVisible();
+  await expect(added).not.toContainText("below");
   await atTop(added);
   await noHorizontalOverflow(page);
   await page.screenshot({ ...shot("r3-refuseless-row.png"), animations: "disabled" });
@@ -328,8 +328,8 @@ test("OpenCode's card says if it's installed and which version, offers Install o
   const h = await hub(page, NO_OPENCODE);
   await settings(page);
   const card = page.getByRole("region", { name: "OpenCode", exact: true });
-  await expect(card.getByRole("heading", { name: "OpenCode", exact: true })).toBeVisible();
-  await expect(card.getByText("Not installed", { exact: true })).toBeVisible();
+  // One line: the agent, and that it isn't here.
+  await expect(card.getByText("OpenCode · not installed", { exact: true })).toBeVisible();
   await expect(card).not.toContainText(/sign|plan/i);
   // After Codex's card, as the Agents part below the list.
   await card.evaluate((el) => el.scrollIntoView({ block: "center" }));
@@ -346,8 +346,7 @@ test("OpenCode's card says if it's installed and which version, offers Install o
   h.opencode = OPENCODE;
   h.ended = { exitCode: 0, output: "Installed: 2.2.5\r\n" };
   await expect(card.locator(".svc-install-line")).toHaveText("OpenCode 2.2.5 is installed.");
-  await expect(card.getByText("Installed", { exact: true })).toBeVisible();
-  await expect(card.getByText("Open source, from Anomaly · v2.2.5", { exact: true })).toBeVisible();
+  await expect(card.getByText("OpenCode 2.2.5 · installed", { exact: true })).toBeVisible();
   // The version Crosstalk was checked with has nothing to press but Check.
   await expect(card.getByRole("button", { name: "Install", exact: true })).toHaveCount(0);
   await expect(card.getByRole("button", { name: "Update", exact: true })).toHaveCount(0);
@@ -358,7 +357,7 @@ test("OpenCode's card says if it's installed and which version, offers Install o
   // Another version: Update puts the checked one on it, and Check reads the hub again.
   h.opencode = { ...OPENCODE, version: "2.2.4" };
   await card.getByRole("button", { name: "Check", exact: true }).click();
-  await expect(card.getByText("Other version", { exact: true })).toBeVisible();
+  await expect(card.getByText("OpenCode 2.2.4 · other version", { exact: true })).toBeVisible();
   await expect(card.getByText("Crosstalk was checked with OpenCode 2.2.5. This machine has 2.2.4. Update puts 2.2.5 on it.", { exact: true })).toBeVisible();
   const installs = h.installs;
   await card.getByRole("button", { name: "Update", exact: true }).click();
@@ -369,12 +368,12 @@ test("OpenCode's card says if it's installed and which version, offers Install o
   await page.screenshot({ ...shot("r13-card-update.png"), animations: "disabled" });
   h.opencode = OPENCODE;
   h.ended = { exitCode: 0, output: "Installed: 2.2.5\r\n" };
-  await expect(card.getByText("Installed", { exact: true })).toBeVisible();
+  await expect(card.getByText("OpenCode 2.2.5 · installed", { exact: true })).toBeVisible();
 
   // A version 1 can't run these chats: the hub's words, with the button they name.
   h.opencode = { ...OPENCODE, version: "1.14.0", signedIn: null, error: "OpenCode 1.14.0 is installed, and Crosstalk needs version 2. Press Install to get it." };
   await card.getByRole("button", { name: "Check", exact: true }).click();
-  await expect(card.getByText("Can't be used", { exact: true })).toBeVisible();
+  await expect(card.getByText("OpenCode 1.14.0 · can't be used", { exact: true })).toBeVisible();
   await expect(card.getByText("OpenCode 1.14.0 is installed, and Crosstalk needs version 2. Press Install to get it.", { exact: true })).toBeVisible();
   await expect(card.getByRole("button", { name: "Install", exact: true })).toBeVisible();
 });
@@ -390,7 +389,7 @@ test("an install already running there is taken up rather than started again, an
   await expect(card.getByRole("button", { name: "Install", exact: true })).toHaveCount(0);
   expect(h.installs).toBe(0);
   // The same one in the sheet opened over it.
-  await page.getByRole("button", { name: "Add an AI service", exact: true }).click();
+  await addAnotherService(page);
   const dialog = sheet(page);
   await dialog.getByRole("button", { name: /^Refuseless/ }).click();
   await dialog.getByLabel("API key", { exact: true }).fill("abl_test_key");
@@ -402,7 +401,7 @@ test("an install already running there is taken up rather than started again, an
   await expect(dialog.getByRole("button", { name: "Add it", exact: true })).toBeEnabled();
   await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
   await page.getByRole("button", { name: "Discard changes", exact: true }).click();
-  await expect(card.getByText("Installed", { exact: true })).toBeVisible();
+  await expect(card.getByText("OpenCode 2.2.5 · installed", { exact: true })).toBeVisible();
 
   // The test hub on its own lists no OpenCode, as a hub older than it wouldn't.
   await page.unrouteAll({ behavior: "ignoreErrors" });
@@ -422,21 +421,22 @@ test("a service saved under Crosstalk's agent moves to OpenCode without its key 
   };
   await settings(page);
   const old = page.getByRole("group", { name: "Crosstalk agent · Refuseless", exact: true });
-  await expect(page.getByText(/Crosstalk's own agent runs Refuseless itself/)).toBeVisible();
+  await expect(old).toContainText("runs with Crosstalk agent");
   await atTop(old);
   await noHorizontalOverflow(page);
   await page.screenshot({ ...shot("r14-switch-offered.png"), animations: "disabled" });
+  await moreOf(old);
   await old.getByRole("button", { name: "Run it with OpenCode", exact: true }).click();
   await expect(page.getByText("Refuseless now runs with OpenCode, with the same key.", { exact: true })).toBeVisible();
   expect(h.moves).toEqual([{ path: "/api/accounts/builtin/rl0/agent", body: { to: "opencode" } }]);
   // The row is OpenCode's now: there's no Crosstalk agent row left, and the way back is one tap.
   const moved = page.getByRole("group", { name: "OpenCode · Refuseless", exact: true });
-  await expect(moved.getByText("OpenCode · Custom model · api.refuseless.com", { exact: true })).toBeVisible();
+  await expect(moved.getByText("api.refuseless.com · runs with OpenCode", { exact: true })).toBeVisible();
   await expect(old).toHaveCount(0);
-  await expect(page.getByText(/OpenCode runs Refuseless/)).toBeVisible();
   await atTop(moved);
   await noHorizontalOverflow(page);
   await page.screenshot({ ...shot("r15-switched.png"), animations: "disabled" });
+  await moreOf(moved);
   await moved.getByRole("button", { name: "Run it with Crosstalk agent", exact: true }).click();
   await expect(old).toBeVisible();
   expect(h.moves[1]).toEqual({ path: "/api/accounts/opencode/rl2/agent", body: { to: "builtin" } });
@@ -446,15 +446,16 @@ test("a move says when chats keep the old row, and why it failed", async ({ page
   const h = await hub(page);
   h.accounts.push(saved());
   // The hub's own words, then a hub too old to have the route, then chats still on the old account (it stays beside the new one).
-  h.move = () => ({ status: 400, error: "OpenCode isn't installed on this machine yet. Install it under Settings → AI services first." });
+  h.move = () => ({ status: 400, error: "OpenCode isn't installed on this machine yet. Install it under Settings → Accounts first." });
   await settings(page);
   const old = page.getByRole("group", { name: "Crosstalk agent · Refuseless", exact: true });
+  await moreOf(old);
   const button = old.getByRole("button", { name: "Run it with OpenCode", exact: true });
   await button.click();
-  await expect(old.getByRole("alert")).toHaveText("Couldn't move it: OpenCode isn't installed on this machine yet. Install it under Settings → AI services first. Press Run it with OpenCode to try again.");
+  await expect(old.getByRole("alert")).toHaveText("Couldn't move it: OpenCode isn't installed on this machine yet. Install it under Settings → Accounts first. Press Run it with OpenCode to try again.");
   h.move = () => ({ status: 404, error: "not found" });
   await button.click();
-  await expect(old.getByRole("alert")).toHaveText("This machine's hub is too old to move a service to another agent. Update it first.");
+  await expect(old.getByRole("alert")).toHaveText("This machine runs an older Crosstalk that can't move an account to another agent. Update Crosstalk on it first.");
   await expect(page.getByRole("group", { name: "OpenCode · Refuseless", exact: true })).toHaveCount(0);
   h.move = () => {
     const now = saved({ provider: "opencode", id: "rl2" });
@@ -467,7 +468,10 @@ test("a move says when chats keep the old row, and why it failed", async ({ page
   await expect(old).toBeVisible();
   await expect(page.getByRole("group", { name: "OpenCode · Refuseless", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: /^Run it with/ })).toHaveCount(0);
-  await expect(page.getByText("Claude Code and Codex run the other services above. OpenCode runs Refuseless and Crosstalk's own agent runs Refuseless itself, with the keys above, and need no sign-in. Install Claude Code or Codex, sign in to your plan or add accounts here.", { exact: true })).toBeVisible();
+  // Both rows are under Other services, each saying which agent runs it.
+  const services = page.getByRole("region", { name: "Other services", exact: true });
+  await expect(services.getByRole("group", { name: "OpenCode · Refuseless", exact: true })).toContainText("runs with OpenCode");
+  await expect(services.getByRole("group", { name: "Crosstalk agent · Refuseless", exact: true })).toContainText("runs with Crosstalk agent");
 });
 
 test("the move waits for OpenCode to be installed, and says so", async ({ page }) => {
@@ -475,9 +479,10 @@ test("the move waits for OpenCode to be installed, and says so", async ({ page }
   h.accounts.push(saved());
   await settings(page);
   const old = page.getByRole("group", { name: "Crosstalk agent · Refuseless", exact: true });
+  await moreOf(old);
   const button = old.getByRole("button", { name: "Run it with OpenCode", exact: true });
   await expect(button).toBeDisabled();
-  await expect(old.getByText("OpenCode isn't installed on this machine yet. Press Install under OpenCode below, then run it with OpenCode.", { exact: true })).toBeVisible();
+  await expect(old.getByText("OpenCode isn't installed on this machine yet. Tap Install on OpenCode's line under Other services, then run it with OpenCode.", { exact: true })).toBeVisible();
   await atTop(old);
   await noHorizontalOverflow(page);
   await page.screenshot({ ...shot("r16-switch-waits.png"), animations: "disabled" });
@@ -541,22 +546,22 @@ test("a Refuseless service on OpenCode is a row in New chat, its chat is Refusel
 
     const dialog = page.getByRole("dialog", { name: "New chat with Refuseless", exact: true });
     await expect(dialog.getByText(/driven by OpenCode$/)).toBeVisible();
-    const model = dialog.getByRole("combobox", { name: "Model", exact: true });
-    await expect(model).toHaveValue(PICK);
-    // The levels the model takes, in plain words; none for a model that lists none.
-    const effort = dialog.getByRole("combobox", { name: "Effort", exact: true });
-    await expect(effort.getByRole("option")).toHaveText(["Default (High)", "Off", "Low", "High", "Max"]);
-    await model.selectOption("glm-5.3-abliterated");
+    await expect(modelInForce(dialog)).toHaveAttribute("data-value", PICK);
+    // The levels the model takes, in plain words (its own default lit); none for a model that lists none.
+    const effort = effortSteps(dialog);
+    await expect(effort.getByRole("radio")).toHaveText(["Off", "Low", /^High/, "Max"]);
+    await expect(effort.getByRole("radio", { name: "High (default)", exact: true })).toHaveAttribute("aria-checked", "true");
+    await pickModel(dialog, "glm-5.3-abliterated");
     await expect(effort).toHaveCount(0);
-    await model.selectOption(PICK);
-    await effort.selectOption("low");
+    await pickModel(dialog, PICK);
+    await pickEffort(dialog, "low");
     // What it may do without asking is said as OpenCode's own rules, not as another agent's.
-    await expect(dialog.getByText("Can read the project. Asks you before reading elsewhere, and before file edits, commands, web fetches and the browser, except ones you've already allowed.", { exact: true })).toBeVisible();
+    await expect(dialog.getByText("Can read the chat's folder. Asks you before reading elsewhere, and before file edits, commands, web fetches and the browser, except ones you've already allowed.", { exact: true })).toBeVisible();
     await noHorizontalOverflow(page);
     await page.screenshot({ ...shot("r19-new-chat-dialog.png"), animations: "disabled" });
     // OpenCode has nothing of the helpers Claude Code and Codex have, and no account to swap the chat out from under itself.
     await expect(dialog.getByRole("combobox", { name: "Helper agents use", exact: true })).toHaveCount(0);
-    await expect(dialog.getByRole("combobox", { name: "Account", exact: true })).toHaveCount(0);
+    await expect(dialog.getByRole("radiogroup", { name: "Account", exact: true })).toHaveCount(0);
 
     // Started like any chat: on its account, with OpenCode, and the effort picked.
     const started = page.waitForResponse((r) => new URL(r.url()).pathname === "/api/chats" && r.request().method() === "POST");
@@ -580,32 +585,31 @@ test("a Refuseless service on OpenCode is a row in New chat, its chat is Refusel
     // The row under the message box shows the effort, and changes it the way it does for Claude Code and Codex.
     const memberId = ((await (await request.get(`${HUB}/api/state`, { headers })).json()).members as { id: string; roomId: string }[]).find((m) => m.roomId === roomId)!.id;
     const bar = page.locator(".chat-controls");
-    await expect(bar.getByRole("button", { name: "Low", exact: true })).toBeVisible();
-    await bar.getByRole("button", { name: "Low", exact: true }).click();
+    await expect(bar.locator(".ctl-model")).toContainText("· Low");
+    await bar.locator(".ctl-model").click();
     const patched = page.waitForRequest((r) => r.url().endsWith(`/api/members/${memberId}`) && r.method() === "PATCH");
-    await page.locator(".effort-ticks").getByRole("button", { name: "Max", exact: true, includeHidden: true }).click();
+    await pickEffort(page.getByRole("dialog", { name: "Chat settings", exact: true }), "max");
     expect((await patched).postDataJSON()).toMatchObject({ config: { effort: "max", account: made.id } });
-    await expect(bar.getByRole("button", { name: "Max", exact: true })).toBeVisible();
     await page.keyboard.press("Escape");
+    await expect(bar.locator(".ctl-model")).toContainText("· Max");
 
     // So do the chat's settings: what drives it in a line, and the same Effort.
-    await page.getByRole("button", { name: "Chat settings", exact: true }).click();
+    await chatSettingsAll(page);
     const chatSettings = page.getByRole("dialog", { name: "Chat settings", exact: true });
     await expect(chatSettings.getByText(/· driven by OpenCode\.$/)).toBeVisible();
     await expect(chatSettings.getByText(/helper agents follow/)).toHaveCount(0);
-    const chatEffort = chatSettings.getByRole("combobox", { name: "Effort", exact: true });
-    await expect(chatEffort).toHaveValue("max");
-    await chatEffort.selectOption("off");
+    const chatEffort = effortSteps(chatSettings);
+    await expect(effortInForce(chatSettings)).toHaveAttribute("data-value", "max");
     await noHorizontalOverflow(page);
     await page.screenshot({ ...shot("r20-chat-settings.png"), animations: "disabled" });
+    // A pick is saved as it's made.
     const saved = page.waitForRequest((r) => r.url().endsWith(`/api/members/${memberId}`) && r.method() === "PATCH");
-    await chatSettings.getByRole("button", { name: "Save", exact: true }).click();
-    expect((await saved).postDataJSON()).toMatchObject({ model: PICK, config: { effort: "off", account: made.id } });
-    await expect(chatSettings).toHaveCount(0);
+    await pickEffort(chatSettings, "off");
+    expect((await saved).postDataJSON()).toMatchObject({ config: { effort: "off", account: made.id } });
+    await expect(effortInForce(chatSettings)).toHaveAttribute("data-value", "off");
 
     // A model that lists no levels has no Effort there either.
-    await page.getByRole("button", { name: "Chat settings", exact: true }).click();
-    await chatSettings.getByRole("combobox", { name: "Model", exact: true }).selectOption("glm-5.3-abliterated");
+    await pickModel(chatSettings, "glm-5.3-abliterated");
     await expect(chatEffort).toHaveCount(0);
 
     // Deleted, it goes Home: OpenCode has no screen of its own to go back to, and is never asked for one.
@@ -624,7 +628,7 @@ test("a Refuseless service on OpenCode is a row in New chat, its chat is Refusel
   }
 });
 
-test("a service on OpenCode isn't offered in New chat while OpenCode isn't installed; its chat's heading says what to do and goes to the card", async ({ page, request, token }) => {
+test("a service on OpenCode isn't offered in New chat while OpenCode isn't installed; a New chat dialog for it says what to do and goes to the card", async ({ page, request, token }) => {
   const HUB = "http://127.0.0.1:8451";
   const headers = { authorization: `Bearer ${token}` };
   await phone(page);
@@ -644,8 +648,12 @@ test("a service on OpenCode isn't offered in New chat while OpenCode isn't insta
     await expect(menu.getByRole("menuitem", { name: /Claude Code/ })).toBeVisible();
     await expect(menu.getByRole("menuitem", { name: /Refuseless/ })).toHaveCount(0);
     await list.getByRole("button", { name: "New chat", exact: true }).click();
-    // The chat already there keeps its heading, and starting another there says what it needs, with the way to it.
-    await list.getByRole("button", { name: /^New chat with Refuseless/ }).click();
+    // The chat already there is still listed (as the service's, by its avatar). The list has no heading to start
+    // another from any more; a New chat dialog for the service, however it's opened, says what it needs, with the way
+    // to it.
+    await expect(list.locator(".csb-chat > .svc-avatar")).toHaveCount(1);
+    await expect(list.getByRole("button", { name: /^New chat with Refuseless/ })).toHaveCount(0);
+    await page.evaluate(async ({ account, model }) => (await import("/src/sidebar.ts")).useSidebar.getState().setCreating({ kind: "service", provider: "opencode", account, model, label: "Refuseless", machine: "" }), { account: made.id, model: PICK });
     const dialog = page.getByRole("dialog", { name: "New chat with Refuseless", exact: true });
     const missing = dialog.getByRole("alert");
     await expect(missing).toContainText("OpenCode isn't installed on");

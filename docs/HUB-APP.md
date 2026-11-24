@@ -12,6 +12,12 @@ It never uses the hub's own names (`com.crosstalk.hub`, `crosstalk-hub`): macOS 
 
 ![The window](images/hub-app-window.png)
 
+## Getting it
+
+On an Apple silicon Mac, Crosstalk's install line adds it for you the first time (to `/Applications`, or
+`~/Applications` when that isn't yours to write) and opens it. To skip it: `CROSSTALK_NO_APP=1` before the install line.
+On Linux, or to build it yourself, see [Building](#building).
+
 ## It never starts the hub itself
 
 The hub stays what the installers made it: a LaunchAgent on macOS (`~/Library/LaunchAgents/com.crosstalk.hub.plist`),

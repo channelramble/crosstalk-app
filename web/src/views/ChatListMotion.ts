@@ -24,8 +24,8 @@ import { layoutZoom, zoomFactor } from "../zoom";
  * `data-flip` on each.
  */
 
-/** The list's lines: a chat's row, a group's heading, "No chats yet.", Show all, what a folded group holds, and the
- *  lines above the groups (a machine down or linked elsewhere, requests waiting). */
+/** The list's lines: a chat's row, a section's heading, Show all, what a folded section holds, and the lines with a
+ *  name of their own (a machine down or linked elsewhere, "Hold a chat to pin it", "No chats yet."). */
 export const LINES = ".csb-item, .csb-group-head, .csb-empty, .csb-more, .csb-fold-said, [data-line]";
 
 /** Lines moving at once, at most (a phone shows about 15), and lines leaving with a copy. */
@@ -36,10 +36,10 @@ const LIFT_ROWS = 1.5;
 
 /**
  * What a line of the list is called, the same in the list's `order` (ChatSidebar.tsx): `r:` a chat's row (its
- * machine/room), `g:` a group's heading, `e:` its "No chats yet.", `a:` its Show all, `s:` what it holds folded (`g`
- * and the rest by the group's key, GroupFold.tsx), and a line's own `data-line` (`m:` a machine down, `l:` one linked
- * elsewhere, `w` requests waiting). `t:` (a row's options open) is in the order only: the row grows, nothing new is
- * drawn as a line. Null for anything else (search results).
+ * machine/room), `g:` a section's heading, `a:` its Show all, `s:` what it holds folded (`g` and the rest by the
+ * section's key, GroupFold.tsx), and a line's own `data-line` (`m:` a machine down, `l:` one linked elsewhere, `h` the
+ * long-press hint, `e` "No chats yet."). `t:` (a row's options open) is in the order only: the row grows, nothing new
+ * is drawn as a line. Null for anything else (message search results).
  */
 export function lineKey(el: Element): string | null {
   const own = (el as HTMLElement).dataset;

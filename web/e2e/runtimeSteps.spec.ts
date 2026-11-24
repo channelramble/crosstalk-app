@@ -1,15 +1,18 @@
-// Steps that stream as deltas and load whole when opened, "Read it now" under a message handed to a long step, and
-// "Always allow" saying what it allows. A real chat and sign-in, with the hub's answers controlled.
+// Steps that stream as deltas and load whole when opened, Interrupt under a message handed to a long step ("Read it now"
+// on a hub from before the one rule), and "Always allow" saying what it allows. A real chat and sign-in, with the hub's
+// answers controlled.
 import type { APIRequestContext, Page, WebSocketRoute } from "@playwright/test";
 import type { Activity, Approval, Member, Message, StateSnapshot, Turn } from "@crosstalk/shared";
-import { test, expect, noHorizontalOverflow } from "./fixtures";
+import { test, expect, noHorizontalOverflow, chatSettingsAll } from "./fixtures";
 
 const hub = "http://127.0.0.1:8451";
 
-async function scenario(page: Page, request: APIRequestContext, token: string) {
+/** `older`: the hub is one from before the one rule (no HubInfo.flowsIn): Send now hands a message over, and its note is a card. */
+async function scenario(page: Page, request: APIRequestContext, token: string, opts: { older?: boolean } = {}) {
   const headers = { authorization: `Bearer ${token}` };
   const room = await (await request.post(`${hub}/api/chats`, { headers, data: { provider: "claude", name: "Runtime checks" } })).json();
   const snapshot: StateSnapshot = await (await request.get(`${hub}/api/state`, { headers })).json();
+  if (opts.older) delete snapshot.hub.flowsIn;
   const member = snapshot.members.find((m) => m.roomId === room.id)!;
   const history = { room, messages: [] as Message[], turns: [] as Turn[], activities: [] as Activity[], approvals: [] as Approval[], tasks: {}, totals: null, hasMore: false };
   const sockets: WebSocketRoute[] = [];
@@ -34,8 +37,62 @@ async function scenario(page: Page, request: APIRequestContext, token: string) {
   return { room, member, snapshot, history, message, turn, step, send, open, cleanup: () => request.delete(`${hub}/api/rooms/${room.id}`, { headers }) };
 }
 
-test("a message handed to a reply inside a long step says so, and Read it now asks the hub to stop that step", async ({ page, request, token }) => {
+test("a message handed to a reply inside a long step says it's read after that step, and Interrupt asks the hub to stop the step", async ({ page, request, token }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
   const s = await scenario(page, request, token);
+  Object.assign(s.member as Member, { status: "working", statusDetail: "npm test -- --runInBand" });
+  const ask = s.message("human", "Run the tests, then ship it.");
+  const reply = s.message("agent", "Running the full suite first.", "long", "streaming");
+  const later = s.message("human", "Also bump the version to 2.3.12.");
+  s.history.messages.push(ask, reply, later);
+  const running = s.turn("long", { triggerMessageId: ask.id, replyMessageId: reply.id, unread: [later.id] });
+  s.history.turns.push(running);
+  s.history.activities.push(s.step("cmd", "long"));
+  let asked = 0;
+  // The first time, the hub can't stop the step.
+  await page.route(`**/api/rooms/${s.room.id}/read-now`, (r) => (++asked === 1 ? r.fulfill({ status: 409, json: { error: "Couldn't stop the step: Claude Code reads this after it." } }) : r.fulfill({ json: { reading: true } })));
+  const asks: string[] = [];
+  page.on("dialog", (d) => {
+    asks.push(d.message());
+    void d.accept();
+  });
+  try {
+    await s.open();
+    // One quiet line under the message it's about, with one button: no card, no Read it now.
+    const note = page.locator(".your-msg").filter({ hasText: "Also bump the version to 2.3.12." }).locator(".msg-quiet");
+    await expect(note.locator(".msg-quiet-text")).toHaveText("Claude Code reads this after its current step.");
+    await expect(page.locator(".read-now")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: /^(Read it now|Stop it and read now)$/ })).toHaveCount(0);
+    const box = (await note.boundingBox())!;
+    const msg = (await page.getByText("Also bump the version to 2.3.12.").boundingBox())!;
+    expect(box.y).toBeGreaterThan(msg.y);
+    await noHorizontalOverflow(page);
+    // Interrupt stops the step; a command is cut off where it is, so that's asked first.
+    await note.getByRole("button", { name: "Interrupt", exact: true }).click();
+    await expect.poll(() => asked).toBe(1);
+    expect(asks[0]).toBe('Stop "npm test -- --runInBand" now? It\'s cut off where it is, and Claude Code reads your message right away.');
+    // It couldn't: that's what the line says (not "it has just read it"), in the same place, with Try again.
+    await expect(note.getByRole("alert")).toHaveText("Couldn't stop the step: Claude Code reads this after it.");
+    await expect(note.getByRole("button", { name: "Interrupt", exact: true })).toHaveCount(0);
+    expect((await note.boundingBox())!.y).toBe(box.y);
+    await noHorizontalOverflow(page);
+    await note.getByRole("button", { name: "Try again", exact: true }).click();
+    await expect.poll(() => asked).toBe(2);
+    s.send({ t: "turn", turn: { ...running, readingNow: true } });
+    await expect(note.locator(".msg-quiet-text")).toHaveText("Stopping npm test -- --runInBand so Claude Code reads this now…");
+    await expect(note.locator("code")).toHaveText("npm test -- --runInBand");
+    await expect(note.getByRole("button")).toHaveCount(0);
+    await noHorizontalOverflow(page);
+    // Read: the line goes.
+    s.send({ t: "turn", turn: { ...running, unread: null, readingNow: false } });
+    await expect(note).toHaveCount(0);
+  } finally {
+    await s.cleanup();
+  }
+});
+
+test("on a hub from before the one rule, a message Send now handed to a reply inside a long step says so in a card, and Stop it and read now asks the hub to stop that step", async ({ page, request, token }) => {
+  const s = await scenario(page, request, token, { older: true });
   Object.assign(s.member as Member, { status: "working", statusDetail: "npm test -- --runInBand" });
   const ask = s.message("human", "Run the tests, then ship it.");
   const reply = s.message("agent", "Running the full suite first.", "long", "streaming");
@@ -126,13 +183,13 @@ test("a long step's output comes short in history and loads whole when it's open
   const full = `${"PASS src/case.test.ts\n".repeat(250)}Tests: 412 passed, 412 total\n`;
   s.history.activities.push(s.step("big", "done-turn", { status: "done", detail: full.slice(0, 1200), detailLength: full.length }));
   let fail = true;
-  await page.route("**/api/activities/big", (r) => (fail ? r.fulfill({ status: 503, json: { error: "The hub is restarting." } }) : r.fulfill({ json: { ...s.history.activities[0], detail: full, detailLength: undefined } })));
+  await page.route("**/api/activities/big", (r) => (fail ? r.fulfill({ status: 503, json: { error: "Crosstalk is restarting." } }) : r.fulfill({ json: { ...s.history.activities[0], detail: full, detailLength: undefined } })));
   try {
     await s.open();
     await page.locator(".activity > summary").click();
     await page.locator(".act-row > summary").click();
     const row = page.locator(".act-row");
-    await expect(row.getByRole("alert")).toContainText("Couldn't load the rest. The hub is restarting.");
+    await expect(row.getByRole("alert")).toContainText("Couldn't load the rest. Crosstalk is restarting.");
     await expect(row.locator("pre")).toContainText("PASS src/case.test.ts"); // the start shows meanwhile
     fail = false;
     await row.getByRole("button", { name: "Try again" }).click();
@@ -185,7 +242,7 @@ test("chat settings list what's always allowed in the chat, and Remove takes one
   });
   try {
     await s.open();
-    await page.getByRole("button", { name: "Chat settings", exact: true }).click();
+    await chatSettingsAll(page);
     const dialog = page.getByRole("dialog", { name: "Chat settings", exact: true });
     const field = dialog.locator(".field").filter({ hasText: "Always allowed" });
     await expect(field).toContainText("Claude Code doesn't ask before these in this chat. Stricter permissions take them all back.");

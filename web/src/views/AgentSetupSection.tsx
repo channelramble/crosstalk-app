@@ -1,15 +1,17 @@
-// Settings → Set up with an AI agent: what's left to set up on the machine on screen (the hub's checklist, GET
-// /api/setup), and how to let an AI agent there do it: the command that adds its setup tools (or "Add for me"), and
-// what to tell it. docs/SETUP-FOR-AGENTS.md is the agent's side.
+// Settings → Machines → Advanced → Set up with an AI agent: what's left to set up on the machine on screen (the hub's
+// checklist, GET /api/setup), and how to let an AI agent there do it. One button first, "Let Claude Code finish setup":
+// it adds the setup tools the way "Add for me" does and starts a chat with the prompt. The commands and the prompt
+// themselves are behind "Do it by hand". docs/SETUP-FOR-AGENTS.md is the agent's side.
 import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { ChevronDown, ChevronRight, CircleCheck, Loader2 } from "lucide-react";
-import type { PtyInfo, SetupChecklist, SetupItem } from "@crosstalk/shared";
+import { PROVIDER_INFO, type PtyInfo, type Room, type SetupChecklist, type SetupItem } from "@crosstalk/shared";
 import { api, ApiError } from "../api";
 import { addOutcome, agentPrompt, allDone, browserosNote, browserosRows, connectRows, goThere, linkLabel, parts, removeCommand, stateWord, summaryText, type AddOutcome, type SetupAgent } from "../agentSetup";
 import { useStore } from "../store";
 import { plainText } from "../terminalText";
 import { copyText, thisDevice, timeAgo } from "../ui";
 import { checklistAgent, checklistPromptLine } from "../signIn";
+import { sendFirstMessage } from "../templateApi";
 import { SignInPrompt } from "./SignIn";
 import { useReconnected } from "../useReconnected";
 import { HelpTip } from "./HelpTip";
@@ -132,11 +134,69 @@ export function AgentSetupSection() {
 
   useKeepFocus(card);
 
+  // The agent that can finish setup by itself: one that's installed and signed in on that machine, Claude Code first.
+  const finisher = useStore((s) => (["claude", "codex"] as const).find((p) => s.providers[p]?.installed && (s.providers[p]?.signedIn || Object.values(s.accounts).some((a) => a.provider === p && a.kind !== "endpoint" && a.signedIn))) ?? null);
+  const [finishing, setFinishing] = useState<"tools" | "chat" | null>(null);
+  const [finishError, setFinishError] = useState("");
+  const finishingNow = useRef(false);
+  /**
+   * "Let Claude Code finish setup": the agent's own command adds the setup tools (the same one "Add for me" runs),
+   * then a chat with that agent starts on the prompt. A command that didn't work says so, with the by-hand steps
+   * right under it; nothing is started twice.
+   */
+  const finish = async () => {
+    if (!list || !finisher || finishingNow.current || adding) return;
+    finishingNow.current = true;
+    const name = PROVIDER_INFO[finisher].name;
+    const conn = useStore.getState().conn;
+    const key = useStore.getState().active;
+    setFinishError("");
+    setFinishing("tools");
+    try {
+      const pty = await api<PtyInfo>("POST", "/api/setup/connect", { agent: finisher });
+      let outcome: AddOutcome | null = null;
+      for (let i = 0; i < 90 && !outcome; i++) {
+        const r = await api<{ info: PtyInfo; scrollback: string }>("GET", `/api/pty/${pty.id}`);
+        if (!r.info.alive) outcome = addOutcome(finisher, r.info.exitCode, plainText(r.scrollback));
+        else await new Promise((done) => setTimeout(done, 700));
+      }
+      if (outcome !== "added" && outcome !== "already") throw new Error(`${name} couldn't add the setup tools on ${machine}. Open “Do it by hand” below and use its command instead.`);
+      setFinishing("chat");
+      const signedIn = Object.values(useStore.getState().accounts).find((a) => a.provider === finisher && a.kind !== "endpoint" && a.signedIn);
+      const room = await api<Room>("POST", "/api/chats", { provider: finisher, account: signedIn?.id ?? "default", name: `Finish setting up ${machine}` }, conn);
+      const unsent = conn ? await sendFirstMessage(conn, room.id, agentPrompt(list), name) : null;
+      useStore.getState().activate(key);
+      useStore.getState().openRoom(room.id);
+      if (unsent) toast("warn", unsent);
+    } catch (e) {
+      setFinishError(message(e));
+    } finally {
+      finishingNow.current = false;
+      setFinishing(null);
+    }
+  };
+  const finishBox = finisher && (
+    <div className="as-finish">
+      <button className="btn primary block" onClick={() => void finish()} aria-disabled={!!finishing || undefined} aria-busy={!!finishing || undefined}>
+        {finishing && <Loader2 size={15} className="spin" aria-hidden />}
+        {finishing === "tools" ? "Adding the setup tools…" : finishing === "chat" ? "Starting the chat…" : `Let ${PROVIDER_INFO[finisher].name} finish setup`}
+      </button>
+      <p className="help">
+        Starts a chat with {PROVIDER_INFO[finisher].name} on {machine} that does the rest with you. It asks before anything that needs your password, and you type passwords yourself.
+      </p>
+      {finishError && (
+        <p className="small as-error" role="alert">
+          {finishError}
+        </p>
+      )}
+    </div>
+  );
+
   return (
     <>
-      <h2 className="settings-heading" id="agent-setup">
+      <h3 className="settings-subheading" id="agent-setup">
         Set up with an AI agent
-      </h2>
+      </h3>
       <div className="card agent-setup" ref={card}>
         {older ? (
           <p className="help" tabIndex={-1} data-focus-here>
@@ -163,7 +223,7 @@ export function AgentSetupSection() {
             </button>
           </div>
         ) : (
-          <Checklist list={list} machine={machine} checking={checking} onCheck={() => void load("recheck")} onAdd={addFor} starting={starting} installedThere={{ claude: claudeThere, codex: codexThere }} signIn={signIn} />
+          <Checklist list={list} machine={machine} checking={checking} onCheck={() => void load("recheck")} onAdd={addFor} starting={starting} installedThere={{ claude: claudeThere, codex: codexThere }} signIn={signIn} finish={allDone(list) ? null : finishBox} />
         )}
       </div>
       {adding && (
@@ -297,12 +357,13 @@ export function AddResult({ outcome, agent, name, machine, command, prompt }: { 
 }
 
 /**
- * The list once loaded: the two steps for an agent, what's left, the optional and done items folded, Check again.
+ * The list once loaded: the one button that lets an agent finish (`finish`), what's left, the optional and done items
+ * folded, the two steps for doing it by hand (the commands and the prompt) folded too, and Check again.
  * `starting`: the agent whose "Add for me" is on its way to the hub (no other add is taken meanwhile); `installedThere`:
  * that machine's own word on whether each agent's program is there (connectRows); `signIn`: that machine signs agents
  * in from the phone (an agent item waiting on a sign-in offers it).
  */
-export function Checklist({ list, machine, checking, onCheck, onAdd, starting = null, installedThere = {}, signIn = false }: { list: SetupChecklist; machine: string; checking: boolean; onCheck: () => void; onAdd: (agent: "claude" | "codex", name: string) => void; starting?: SetupAgent | null; installedThere?: Partial<Record<"claude" | "codex", boolean>>; signIn?: boolean }) {
+export function Checklist({ list, machine, checking, onCheck, onAdd, starting = null, installedThere = {}, signIn = false, finish = null }: { list: SetupChecklist; machine: string; checking: boolean; onCheck: () => void; onAdd: (agent: "claude" | "codex", name: string) => void; starting?: SetupAgent | null; installedThere?: Partial<Record<"claude" | "codex", boolean>>; signIn?: boolean; finish?: ReactNode }) {
   const { left, optional, done } = parts(list);
   const [open, setOpen] = useState<string | null>(null);
   const toggle = (id: string) => setOpen((o) => (o === id ? null : id));
@@ -312,39 +373,7 @@ export function Checklist({ list, machine, checking, onCheck, onAdd, starting = 
       <p className="as-summary" role="status" tabIndex={-1} data-focus-here>
         {summaryText(list)}
       </p>
-      <p className="help as-intro">
-        An AI agent on {machine}, like Claude Code or Codex, can do the rest with you. It asks you before anything that needs your password, and you type passwords yourself.{" "}
-        <HelpTip label="What are setup tools?">
-          Setup tools let an agent on {machine} see what's left to set up here and help do it, from a terminal or app there. They never give it your passwords, sign-ins or keys.
-        </HelpTip>
-      </p>
-      <ol className="as-steps">
-        <li>
-          <div className="as-step-title">Add the setup tools to your agent on {machine}, once</div>
-          {connectRows(list, installedThere).map((r) => (
-            <div key={r.agent} className="as-connect">
-              <div className="as-agent">{r.name}</div>
-              <Command text={r.command} label={`Copy the ${r.name} command`}>
-                {r.installed && (
-                  // Off from the tap until the hub has started the command (a round trip over the tailnet): a button
-                  // that looks untouched meanwhile invites the second tap that would start a second one. aria-disabled,
-                  // not disabled: a browser drops the focus of a button it disables, so a keyboard or screen-reader user
-                  // would lose their place, and the dialog that opens would hand the focus back to the top of the page
-                  // when it closes. The tap that comes meanwhile is refused by onAdd (addFor) itself.
-                  <button className="btn small" onClick={() => onAdd(r.agent, r.name)} aria-disabled={!!starting || undefined} aria-busy={starting === r.agent || undefined}>
-                    {starting === r.agent && <Loader2 size={13} className="spin" aria-hidden />}
-                    Add for me
-                  </button>
-                )}
-              </Command>
-            </div>
-          ))}
-        </li>
-        <li>
-          <div className="as-step-title">Then tell it</div>
-          <Command text={prompt} label="Copy the prompt" prose />
-        </li>
-      </ol>
+      {finish}
       {left.length > 0 && (
         <>
           <div className="as-group-title">What's left</div>
@@ -357,6 +386,42 @@ export function Checklist({ list, machine, checking, onCheck, onAdd, starting = 
       )}
       <Fold title={`Optional (${optional.length})`} items={optional} list={list} open={open} onToggle={toggle} signIn={signIn} />
       <Fold title={`Done (${done.length})`} items={done} list={list} open={open} onToggle={toggle} />
+      <details className="as-byhand">
+        <summary>Do it by hand</summary>
+        <p className="help as-intro">
+          An AI agent on {machine}, like Claude Code or Codex, can do the rest with you. It asks you before anything that needs your password, and you type passwords yourself.{" "}
+          <HelpTip label="What are setup tools?">
+            Setup tools let an agent on {machine} see what's left to set up here and help do it, from a terminal or app there. They never give it your passwords, sign-ins or keys.
+          </HelpTip>
+        </p>
+        <ol className="as-steps">
+          <li>
+            <div className="as-step-title">Add the setup tools to your agent on {machine}, once</div>
+            {connectRows(list, installedThere).map((r) => (
+              <div key={r.agent} className="as-connect">
+                <div className="as-agent">{r.name}</div>
+                <Command text={r.command} label={`Copy the ${r.name} command`}>
+                  {r.installed && (
+                    // Off from the tap until the hub has started the command (a round trip over the tailnet): a button
+                    // that looks untouched meanwhile invites the second tap that would start a second one. aria-disabled,
+                    // not disabled: a browser drops the focus of a button it disables, so a keyboard or screen-reader user
+                    // would lose their place, and the dialog that opens would hand the focus back to the top of the page
+                    // when it closes. The tap that comes meanwhile is refused by onAdd (addFor) itself.
+                    <button className="btn small" onClick={() => onAdd(r.agent, r.name)} aria-disabled={!!starting || undefined} aria-busy={starting === r.agent || undefined}>
+                      {starting === r.agent && <Loader2 size={13} className="spin" aria-hidden />}
+                      Add for me
+                    </button>
+                  )}
+                </Command>
+              </div>
+            ))}
+          </li>
+          <li>
+            <div className="as-step-title">Then tell it</div>
+            <Command text={prompt} label="Copy the prompt" prose />
+          </li>
+        </ol>
+      </details>
       <div className="row wrap as-footer">
         <button className="btn small" onClick={onCheck} disabled={checking}>
           {checking ? "Checking…" : "Check again"}

@@ -20,6 +20,9 @@ import { spendRoutes } from "./spend";
 import { serviceRoutes } from "./services";
 import { searchRoutes } from "./search";
 import { bookmarkRoutes } from "./bookmarks";
+import { screenRoutes } from "./screen/routes";
+import { compressedFile, compressedJson } from "./compress";
+import { ScreenViewer } from "./screen/proxy";
 import { localModelRoutes } from "./localModels";
 import { templateRoutes } from "./templates";
 import { macFixCommand } from "./mac";
@@ -36,6 +39,9 @@ interface WsData {
   visible?: boolean;
   /** Older apps: when each step was last sent whole, and the send waiting to catch up (see legacyStep). */
   steps?: Map<string, { at: number; timer: ReturnType<typeof setTimeout> | null }>;
+  /** The live view of this machine's screen, not the app's own socket (screen/proxy.ts). */
+  screen?: boolean;
+  viewer?: ScreenViewer;
 }
 
 /** An older app gets a step whole at most this often while it streams (it can't add deltas to what it has). */
@@ -60,7 +66,7 @@ export function buildRoutes(app: App): Route[] {
     route("GET", "/api/state", ({ device }) => app.snapshot(device)),
     route("GET", "/api/rooms/:id/history", async ({ params, url }) => {
       const room = app.store.getRoom(params.id);
-      if (!room) throw new HttpError(404, "room not found");
+      if (!room) throw new HttpError(404, "That chat isn't here any more.");
       const before = Number(url.searchParams.get("before") || 0) || undefined;
       // A chat that continues a conversation from the agent's own app brings in what was said there since. Not waited
       // for (reading a Codex thread can take seconds): what it brings in goes out as live messages.
@@ -98,7 +104,7 @@ export function buildRoutes(app: App): Route[] {
     route("POST", "/api/rooms/:id/messages", async ({ params, body, device }) => {
       const b = await body();
       const room = app.store.getRoom(params.id);
-      if (!room) throw new HttpError(404, "room not found");
+      if (!room) throw new HttpError(404, "That chat isn't here any more.");
       const text = (String(b.text ?? "").trim() + attachmentText(room, b.attachments)).trim();
       if (!text) throw new HttpError(400, "empty message");
       if (text.length > MESSAGE_MAX) throw new HttpError(413, messageTooLongWords(text.length));
@@ -110,7 +116,7 @@ export function buildRoutes(app: App): Route[] {
     }),
     route("POST", "/api/rooms/:id/uploads", async ({ params, req, url }) => {
       const room = app.store.getRoom(params.id);
-      if (!room) throw new HttpError(404, "room not found");
+      if (!room) throw new HttpError(404, "That chat isn't here any more.");
       const folder = url.searchParams.get("folder");
       if (folder) return saveFolderFile(room, req, folder, url.searchParams.get("path") ?? "");
       if (url.searchParams.get("unzip") === "1") return saveZipFolder(room, req, url.searchParams.get("name") ?? "folder.zip");
@@ -170,7 +176,7 @@ export function buildRoutes(app: App): Route[] {
     route("DELETE", "/api/computers/:name", ({ params }) => app.computers.remove(params.name)),
     route("GET", "/api/rooms/:id/files", ({ params, url }) => {
       const room = app.store.getRoom(params.id);
-      if (!room) throw new HttpError(404, "room not found");
+      if (!room) throw new HttpError(404, "That chat isn't here any more.");
       // Downloads only: never render project content as a page on the hub's origin.
       const f = projectFile(room, url.searchParams.get("path") ?? "");
       return new Response(Bun.file(f.path), { headers: {
@@ -183,7 +189,7 @@ export function buildRoutes(app: App): Route[] {
     }),
     route("GET", "/api/rooms/:id/folders/:folder/:name", ({ params, url }) => {
       const room = app.store.getRoom(params.id);
-      if (!room) throw new HttpError(404, "room not found");
+      if (!room) throw new HttpError(404, "That chat isn't here any more.");
       const rel = url.searchParams.get("file");
       if (!rel) return listFolder(room, params.folder, params.name, Number(url.searchParams.get("offset") ?? 0));
       // Downloads only: never render uploaded content as a page on the hub's origin.
@@ -197,7 +203,7 @@ export function buildRoutes(app: App): Route[] {
     }),
     route("GET", "/api/rooms/:id/uploads/:filename", ({ params }) => {
       const room = app.store.getRoom(params.id);
-      if (!room) throw new HttpError(404, "room not found");
+      if (!room) throw new HttpError(404, "That chat isn't here any more.");
       const upload = getUpload(room, params.filename);
       return new Response(Bun.file(upload.path), { headers: {
         "content-type": upload.mimeType,
@@ -209,27 +215,34 @@ export function buildRoutes(app: App): Route[] {
     }),
     route("POST", "/api/rooms/:id/stop", async ({ params, body }) => {
       const b = await body().catch(() => ({}));
-      // keepWaiting: "Stop and answer my message" (the messages you sent meanwhile are answered next).
+      // keepWaiting: the app's Interrupt under a message that waits for the reply's end, "Stop and answer my message" in
+      // older apps (the messages you sent meanwhile are answered next).
       await app.engine.stop(params.id, b.memberId || undefined, { keepWaiting: b.keepWaiting === true });
       return { ok: true };
     }),
-    // "Try again" on a failed reply, and "Answer now" on a message nothing answered (see Engine.retry).
+    // "Stop helpers": what an agent still runs after its reply ended (Engine.stopHelpers). `memberId` in a group chat.
+    route("POST", "/api/rooms/:id/helpers/stop", async ({ params, body }) => {
+      if (!app.store.getRoom(params.id)) throw new HttpError(404, "That chat isn't here any more.");
+      const b = await body().catch(() => ({}));
+      return { ok: true, stopped: await app.engine.stopHelpers(params.id, typeof b.memberId === "string" ? b.memberId : undefined) };
+    }),
+    // "Try again" on a failed reply, and on a message nothing answered (see Engine.retry).
     // In a group chat, `memberId` says whose failed reply to try again (without it: your newest message is answered).
-    // `currentSettings`: it's "Answer now", as on the send-now route.
+    // (An older app's "Answer now" sends `currentSettings` with it: the same thing now, and nothing reads it.)
     route("POST", "/api/rooms/:id/retry", async ({ params, body }) => {
-      if (!app.store.getRoom(params.id)) throw new HttpError(404, "room not found");
-      const b = ((await body().catch(() => ({}))) ?? {}) as { memberId?: unknown; currentSettings?: unknown };
-      return { turn: app.engine.retry(params.id, typeof b.memberId === "string" && b.memberId ? b.memberId : null, { currentSettings: b.currentSettings === true }) };
+      if (!app.store.getRoom(params.id)) throw new HttpError(404, "That chat isn't here any more.");
+      const b = ((await body().catch(() => ({}))) ?? {}) as { memberId?: unknown };
+      return { turn: app.engine.retry(params.id, typeof b.memberId === "string" && b.memberId ? b.memberId : null) };
     }),
     // A chat waiting for a usage limit to reset (Turn.wait): carry on now, or leave it as a failed reply with Try again.
     // In a group chat, `memberId` says which agent's wait.
     route("POST", "/api/rooms/:id/limit-wait/now", async ({ params, body }) => {
-      if (!app.store.getRoom(params.id)) throw new HttpError(404, "room not found");
+      if (!app.store.getRoom(params.id)) throw new HttpError(404, "That chat isn't here any more.");
       const b = ((await body().catch(() => ({}))) ?? {}) as { memberId?: unknown };
       return { turn: app.engine.tryNow(params.id, typeof b.memberId === "string" && b.memberId ? b.memberId : null) };
     }),
     route("POST", "/api/rooms/:id/limit-wait/cancel", async ({ params, body }) => {
-      if (!app.store.getRoom(params.id)) throw new HttpError(404, "room not found");
+      if (!app.store.getRoom(params.id)) throw new HttpError(404, "That chat isn't here any more.");
       const b = ((await body().catch(() => ({}))) ?? {}) as { memberId?: unknown };
       return { turn: app.engine.dontWait(params.id, typeof b.memberId === "string" && b.memberId ? b.memberId : null) };
     }),
@@ -238,7 +251,7 @@ export function buildRoutes(app: App): Route[] {
       const b = ((await body().catch(() => ({}))) ?? {}) as { at?: unknown };
       const at = typeof b.at === "number" && Number.isFinite(b.at) && b.at > 0 ? Math.min(Math.floor(b.at), Date.now()) : Date.now();
       const room = app.store.markRead(params.id, at);
-      if (!room) throw new HttpError(404, "room not found");
+      if (!room) throw new HttpError(404, "That chat isn't here any more.");
       app.bus.emit({ t: "room", room });
       return room;
     }),
@@ -275,15 +288,12 @@ export function buildRoutes(app: App): Route[] {
     }),
     // Back to just after one of the agent's replies: everything after it leaves the chat, and the agent forgets it.
     route("POST", "/api/messages/:id/rewind", async ({ params, device }) => app.rewindTo(params.id, device.name)),
-    // "Send now": a message waiting behind a chat's running reply goes into that reply. In a group chat, `memberId` says
-    // whose reply (two can work at once). Not sent, it says why (SendNowResult). `currentSettings`: "Answer now" while new
-    // settings wait for the agent's helpers, which only holds a message with "Keep going while helpers work" off: with it
-    // on the message has gone by itself, and this is ignored.
-    route("POST", "/api/rooms/:id/send-now", async ({ params, body }) => {
-      const b = await body().catch(() => null);
-      return app.engine.sendNowWhy(params.id, memberIdOf(b), { currentSettings: (b as { currentSettings?: unknown } | null)?.currentSettings === true });
-    }),
-    // "Read it now": the step the agent is on stops, so it reads what "Send now" handed over at once.
+    // "Send now", from an older app: a message waiting behind a chat's running reply goes into that reply. The hub does
+    // that by itself as the message comes in (Engine.flowIn), so this mostly says why there's nothing to send
+    // (SendNowResult). In a group chat, `memberId` says whose reply (two can work at once). `currentSettings` (that app's
+    // "Answer now") meant something only with "Keep going while helpers work" off, which is gone: nothing reads it.
+    route("POST", "/api/rooms/:id/send-now", async ({ params, body }) => app.engine.sendNowWhy(params.id, memberIdOf(await body().catch(() => null)))),
+    // "Read it now" (the app's Interrupt): the step the agent is on stops, so it reads what went into its reply at once.
     route("POST", "/api/rooms/:id/read-now", async ({ params, body }) => ({ reading: await app.engine.readNow(params.id, memberIdOf(await body().catch(() => null))) })),
     route("POST", "/api/members/:id/reset", async ({ params }) => {
       const m = app.store.getMember(params.id);
@@ -322,7 +332,7 @@ export function buildRoutes(app: App): Route[] {
       return { ok: true };
     }),
     peerRoute("DELETE", "/api/devices/:id", ({ params, device }) => {
-      if (device.scope === "peer" && params.id !== device.id) throw new HttpError(403, "This sign-in can only sign itself out.", "peer_scope");
+      if (device.scope === "peer" && params.id !== device.id) throw new HttpError(403, "A linked machine can only unlink itself.", "peer_scope");
       app.auth.revoke(params.id);
       return { ok: true };
     }),
@@ -344,7 +354,7 @@ export function buildRoutes(app: App): Route[] {
     // machine itself telling this one it unlinked it.
     peerRoute("DELETE", "/api/machines/:id", async ({ params, url, device }) => {
       if (url.searchParams.get("peer") === "1") app.machines.peerRemove(device, params.id);
-      else if (device.scope === "peer") throw new HttpError(403, "This sign-in belongs to another machine's agents and can't use this.", "peer_scope");
+      else if (device.scope === "peer") throw new HttpError(403, "This came from a linked machine's agents, which can't use this.", "peer_scope");
       else if (device.hubId) await app.machines.removeIntroduced(device, params.id);
       else await app.machines.remove(params.id);
       return { ok: true };
@@ -376,29 +386,9 @@ export function buildRoutes(app: App): Route[] {
       return { ok: true };
     }),
 
-    // ---- Model pool: this hub as one of the pool's machines (pool/node.ts), for the hub that runs the pool. Full-scope
-    // sign-ins only (route, not peerRoute): a linked machine's agents can't start processes or downloads here. ----
-    route("GET", "/api/pool/node", ({ url }) => app.poolNode.infoFor(url.searchParams)),
-    route("GET", "/api/pool/node/helpers", ({ url }) => app.poolNode.helperGpus(url.searchParams)),
-    route("POST", "/api/pool/node/install", async ({ body }) => app.poolNode.handle("install", await body().catch(() => null))),
-    route("POST", "/api/pool/node/helper", async ({ body }) => app.poolNode.handle("helper", await body().catch(() => null))),
-    route("POST", "/api/pool/node/model", async ({ body }) => app.poolNode.handle("model", await body().catch(() => null))),
-    route("POST", "/api/pool/node/server", async ({ body }) => app.poolNode.handle("server", await body().catch(() => null))),
-    // ---- Model pool: the pool set up on this hub (pool/pool.ts), as docs/MODEL-POOL.md describes. People's devices
-    // and full-scope hub sign-ins only (route, not peerRoute). ----
-    route("GET", "/api/pool", () => app.pool.view()),
-    route("PUT", "/api/pool", async ({ body }) => app.pool.update(((await body().catch(() => null)) as { config?: unknown } | null)?.config)),
-    route("POST", "/api/pool/check", () => app.pool.check()),
-    route("POST", "/api/pool/start", () => app.pool.start()),
-    route("POST", "/api/pool/stop", () => app.pool.stop()),
-    route("GET", "/api/pool/models", ({ url }) => app.pool.models(url.searchParams.get("repo") ?? "")),
-    route("PUT", "/api/pool/hf-token", async ({ body }) => app.pool.setHfToken(await body().catch(() => null))),
-    route("GET", "/api/pool/helper-command", ({ url }) => app.pool.helperCommand(url.searchParams, app.config.publicUrl || url.origin)),
-    route("GET", "/api/pool/tailscale", () => app.pool.tailscale()),
-    route("POST", "/api/pool/model/remove", async ({ body }) => app.pool.removeModel(((await body().catch(() => null)) as { files?: unknown } | null)?.files)),
     // ---- This Mac as a server (mac.ts): what keeps it from running unattended; its dialogs; System Settings opened.
     route("GET", "/api/mac", () => {
-      if (process.platform !== "darwin") throw new HttpError(404, "This hub isn't on a Mac.", "not_mac");
+      if (process.platform !== "darwin") throw new HttpError(404, "This machine isn't a Mac.", "not_mac");
       return app.mac.status();
     }),
     route("POST", "/api/mac/open", async ({ body }) => app.mac.open(((await body().catch(() => null)) as { pane?: unknown } | null)?.pane)),
@@ -410,7 +400,7 @@ export function buildRoutes(app: App): Route[] {
     // has it): automatic login (the Mac starts Crosstalk again by itself after an update or a power cut), or never
     // sleeping and starting up after a power cut. Fixed commands only.
     route("POST", "/api/mac/fix", async ({ body }) => {
-      if (process.platform !== "darwin") throw new HttpError(404, "This hub isn't on a Mac.", "not_mac");
+      if (process.platform !== "darwin") throw new HttpError(404, "This machine isn't a Mac.", "not_mac");
       const b = (await body().catch(() => ({}))) as { what?: unknown; cols?: number; rows?: number };
       const user = userInfo().username;
       if (!/^[a-z_][a-z0-9_.-]*$/i.test(user)) throw new HttpError(400, "This Mac's user name can't be used here.");
@@ -557,7 +547,8 @@ export function buildRoutes(app: App): Route[] {
     }),
     route("POST", "/api/pty", async ({ body }) => {
       const b = await body().catch(() => ({}));
-      const shell = process.env.SHELL || "/bin/bash";
+      // The person's own shell; a service's environment may name none, and a small Linux system has no bash.
+      const shell = process.env.SHELL || (existsSync("/bin/bash") ? "/bin/bash" : "/bin/sh");
       return app.pty.spawn([shell, "-l"], {
         title: "Shell",
         purpose: "shell",
@@ -573,7 +564,7 @@ export function buildRoutes(app: App): Route[] {
     }),
   ];
   // 0.4 features each own their routes (docs/SPEC-0.4.md): ask others, spend and limits, AI services.
-  return [...core, ...askRoutes(app), ...spendRoutes(app), ...serviceRoutes(app), ...searchRoutes(app), ...bookmarkRoutes(app), ...localModelRoutes(app), ...setupRoutes(app), ...templateRoutes(app), ...signInRoutes(app)];
+  return [...core, ...askRoutes(app), ...spendRoutes(app), ...serviceRoutes(app), ...searchRoutes(app), ...bookmarkRoutes(app), ...screenRoutes(app), ...localModelRoutes(app), ...setupRoutes(app), ...templateRoutes(app), ...signInRoutes(app)];
 }
 
 /** A request's `memberId` (a group chat's agent), null when it names none. */
@@ -701,23 +692,6 @@ export function startServer(app: App) {
           }
         }
 
-        // A computer's short helper command fetches its long one here: it isn't paired, so its token is the permission
-        // (and what it gets is no secret: the build, its address and port). Wrong tokens count like wrong codes.
-        const helper = url.pathname.match(/^\/api\/pool\/helper\/([a-z0-9]{16,64})$/);
-        if (helper && req.method === "GET") {
-          const text = (body: string, status = 200) => new Response(body, { status, headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" } });
-          if (tooManyFailures("pool-helper")) return text(`${TOO_MANY}\n`, 429);
-          try {
-            return text(app.pool.helperScript(helper[1]));
-          } catch (e) {
-            const status = e instanceof HttpError ? e.status : 500;
-            if (status !== 404) return text(`${e instanceof Error ? e.message : String(e)}\n`, status);
-            recordFailure("pool-helper");
-            // The computer's window runs what it's sent (PowerShell and sh alike): what to do, as words to show.
-            return text(`echo "${(e as Error).message.replace(/[^\w .,:()'-]/g, "")}"\n`);
-          }
-        }
-
         // A linked machine's hub passes on a notification; its own key (not a device sign-in) is the permission.
         if (url.pathname === "/api/push/relay" && req.method === "POST") {
           if (tooManyFailures("relay")) return json({ error: TOO_MANY }, 429, cors);
@@ -750,6 +724,15 @@ export function startServer(app: App) {
           return new Response("upgrade failed", { status: 400 });
         }
 
+        // The live view of this machine's screen (screen/proxy.ts): people's own devices only.
+        if (url.pathname === "/api/screen/ws") {
+          const device = await app.auth.verify(tokenFromRequest(req, url));
+          if (!device) return new Response("unauthorized", { status: 401 });
+          if (!isPersonDevice(device)) return new Response("forbidden", { status: 403 });
+          if (srv.upgrade(req, { data: { device, v: 0, screen: true } })) return undefined;
+          return new Response("upgrade failed", { status: 400 });
+        }
+
         if (url.pathname.startsWith("/api/")) {
           const device = await app.auth.verify(tokenFromRequest(req, url));
           if (!device) return json({ error: "unauthorized" }, 401, cors);
@@ -757,7 +740,7 @@ export function startServer(app: App) {
             if (r.method !== req.method) continue;
             const m = r.pattern.exec(url.pathname);
             if (!m) continue;
-            if (device.scope === "peer" && !r.peer) return json({ error: "This sign-in belongs to another machine's agents and can't use this.", code: "peer_scope" }, 403, cors);
+            if (device.scope === "peer" && !r.peer) return json({ error: "This came from a linked machine's agents, which can't use this.", code: "peer_scope" }, 403, cors);
             const params: Record<string, string> = {};
             r.keys.forEach((k, i) => (params[k] = decodeURIComponent(m[i + 1])));
             const out = await r.handler({
@@ -774,12 +757,16 @@ export function startServer(app: App) {
               for (const [key, value] of Object.entries(cors)) out.headers.set(key, value);
               return out;
             }
+            // A big answer (a chat's history) goes out compressed where the app takes it (compress.ts).
+            const text = JSON.stringify(out ?? { ok: true });
+            const packed = compressedJson(text, req.headers.get("accept-encoding"));
+            if (packed) return new Response(packed.body, { status: 200, headers: { "content-type": "application/json", "content-encoding": packed.encoding, vary: "accept-encoding", ...cors } });
             return json(out ?? { ok: true }, 200, cors);
           }
           return json({ error: "not found" }, 404, cors);
         }
 
-        return serveStatic(webDir, url.pathname);
+        return serveStatic(webDir, url.pathname, req.headers.get("accept-encoding"));
       } catch (e) {
         if (e instanceof HttpError) return json({ error: e.message, ...(e.code ? { code: e.code } : {}) }, e.status, cors);
         const msg = e instanceof Error ? e.message : String(e);
@@ -791,6 +778,15 @@ export function startServer(app: App) {
       idleTimeout: 120,
       sendPings: true,
       open(ws) {
+        if (ws.data.screen) {
+          ws.binaryType = "uint8array";
+          ws.data.viewer = new ScreenViewer(
+            { send: (b) => void ws.send(b), close: (why) => ws.close(1000, why?.slice(0, 120)), buffered: () => ws.getBufferedAmount() },
+            () => app.screen.attachViewer(),
+            (c) => app.screen.detachViewer(c),
+          );
+          return;
+        }
         if (!allowed(ws)) return;
         sockets.add(ws);
         const send = (e: ServerEvent) => { if (allowed(ws)) ws.send(JSON.stringify(e)); };
@@ -805,6 +801,12 @@ export function startServer(app: App) {
         });
       },
       message(ws, raw) {
+        if (ws.data.screen) {
+          // A device signed out meanwhile loses the view with everything else.
+          if (!app.store.getDevice(ws.data.device.id)) return ws.data.viewer?.close();
+          if (typeof raw !== "string") ws.data.viewer?.message(raw instanceof Uint8Array ? raw : new Uint8Array(raw as ArrayBuffer));
+          return;
+        }
         if (!allowed(ws)) return;
         let e: ClientEvent;
         try {
@@ -820,6 +822,7 @@ export function startServer(app: App) {
         } else if (e.t === "ping") ws.send(JSON.stringify({ t: "pong" }));
       },
       close(ws) {
+        if (ws.data.screen) return ws.data.viewer?.close();
         disconnect(ws);
       },
     },
@@ -920,23 +923,32 @@ const SECURITY_HEADERS = {
   "x-frame-options": "DENY",
 };
 
-async function serveStatic(webDir: string | null, pathname: string): Promise<Response> {
+async function serveStatic(webDir: string | null, pathname: string, acceptEncoding: string | null = null): Promise<Response> {
   const clean = normalize(decodeURIComponent(pathname)).replace(/^(\.\.[/\\])+/, "");
   const rel = clean === "/" ? "/index.html" : clean;
   const type = (p: string) => MIME[extname(p)] ?? "application/octet-stream";
   const cache = (p: string) => (p.includes("/assets/") ? "public, max-age=31536000, immutable" : "no-cache");
+  // The app's text files go out compressed where the browser takes it (compress.ts): about a quarter of the size.
+  const send = async (file: Blob, path: string, key: string, cacheControl: string) => {
+    const headers = { "content-type": type(path), "cache-control": cacheControl, vary: "accept-encoding", ...SECURITY_HEADERS };
+    const packed = await compressedFile(key, path, async () => new Uint8Array(await file.arrayBuffer()), acceptEncoding);
+    return packed ? new Response(packed.bytes, { headers: { ...headers, "content-encoding": packed.encoding } }) : new Response(file, { headers });
+  };
 
   const emb = embeddedAsset(rel);
-  if (emb) return new Response(emb, { headers: { "content-type": type(rel), "cache-control": cache(rel), ...SECURITY_HEADERS } });
+  if (emb) return send(emb, rel, `emb:${rel}`, cache(rel));
   if (webDir) {
     const full = join(webDir, rel);
     if (full.startsWith(webDir) && existsSync(full) && statSync(full).isFile()) {
-      return new Response(Bun.file(full), { headers: { "content-type": type(full), "cache-control": cache(rel), ...SECURITY_HEADERS } });
+      const st = statSync(full);
+      return send(Bun.file(full), full, `${full}:${st.size}:${st.mtimeMs}`, cache(rel));
     }
   }
   // SPA fallback
-  const index = embeddedAsset("/index.html") ?? (webDir && existsSync(join(webDir, "index.html")) ? Bun.file(join(webDir, "index.html")) : null);
-  if (index && !extname(rel)) return new Response(index, { headers: { "content-type": MIME[".html"], "cache-control": "no-cache", ...SECURITY_HEADERS } });
+  const embIndex = embeddedAsset("/index.html");
+  const diskIndex = !embIndex && webDir && existsSync(join(webDir, "index.html")) ? join(webDir, "index.html") : null;
+  const index = embIndex ?? (diskIndex ? Bun.file(diskIndex) : null);
+  if (index && !extname(rel)) return send(index, "/index.html", embIndex ? "emb:/index.html" : `${diskIndex}:${statSync(diskIndex!).size}:${statSync(diskIndex!).mtimeMs}`, "no-cache");
   if (!index) return new Response("Crosstalk hub is running. The web app hasn't been built (run `bun run build:web`).", { status: 200, headers: { "content-type": "text/plain" } });
   return new Response("not found", { status: 404 });
 }

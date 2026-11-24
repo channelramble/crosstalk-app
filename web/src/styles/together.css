@@ -1,0 +1,197 @@
+/* Agents together (the overhaul of 2026-11). Two sections, each with its own owner: group chats first, then helpers
+   and Settings → Agents together below it. Colours only through the theme's variables; nothing here moves (every
+   animation and transition lives in motion.css). */
+
+/* ==== Group chats: New group chat and a group chat's settings ==== */
+
+/* "Add an agent": every account that can answer, a row each, in the page (nothing floats over the dialog). */
+.group-add-list {
+  display: flex;
+  flex-direction: column;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--sep-strong);
+  border-radius: 12px;
+  background: var(--surface);
+  overflow: hidden;
+}
+.group-add-list > li + li {
+  border-top: 0.5px solid var(--sep);
+}
+.group-add-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 52px;
+  padding: 6px 12px;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.group-add-row:disabled {
+  cursor: default;
+}
+.group-add-row:disabled .avatar,
+.group-add-row:disabled .group-add-title {
+  opacity: 0.5;
+}
+@media (hover: hover) {
+  .group-add-row:not(:disabled):hover {
+    background: var(--surface-2);
+  }
+}
+.group-add-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.group-add-title {
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.group-add-help {
+  overflow: hidden;
+  font-size: 12px;
+  color: var(--text-2);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.group-left-out {
+  margin: 8px 0 0;
+}
+p.group-add {
+  margin-bottom: 0;
+}
+
+/* What the choice still needs (a review with one agent). */
+.group-how-note {
+  color: var(--orange);
+}
+
+/* "More": who leads, review rounds, working at the same time. One row that says what they are now, and opens. */
+.group-more {
+  margin: -4px 0 14px;
+  border: 1px solid var(--sep-strong);
+  border-radius: 12px;
+  background: var(--surface);
+}
+.group-more-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 48px;
+  padding: 6px 12px;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.group-more-title {
+  flex: none;
+  font-weight: 600;
+}
+.group-more-sub {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12.5px;
+  color: var(--text-2);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.group-more-body {
+  padding: 6px 12px 2px;
+  border-top: 0.5px solid var(--sep);
+}
+.group-more-switch {
+  gap: 12px;
+  margin: 0 0 12px;
+}
+
+/* ==== Helpers on another account, and Settings → Agents together ==== */
+
+/* The "Helpers run on" control (HelpersOn.tsx). */
+.helpers-on {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.helpers-on .select {
+  max-width: 100%;
+  min-width: 0;
+}
+/* The one tick under it: a whole row to tap, 44 px tall. */
+.helpers-on-tick {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  margin: 0 0 8px;
+  font-size: 14px;
+  color: var(--text);
+  cursor: pointer;
+}
+.helpers-on.compact .helpers-on-tick {
+  margin: 0;
+  padding: 0 8px;
+}
+.helpers-on-tick input {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+.helpers-on-tick span {
+  min-width: 0;
+}
+
+/* Settings → Agents together: three cards, each a title, one sentence and its control. */
+.together-card + .together-card {
+  margin-top: 12px;
+}
+.together-card .helpers-on {
+  margin-top: 10px;
+}
+.together-card .helpers-on .field:last-of-type {
+  margin-bottom: 0;
+}
+.together-who {
+  display: flex;
+  flex-direction: column;
+  margin: 10px 0 0;
+  padding: 6px 0 0;
+  list-style: none;
+  border-top: 0.5px solid var(--sep);
+}
+.together-who-title {
+  font-size: 13px;
+  color: var(--text-2);
+  margin: 4px 0 2px;
+}
+.together-who label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  cursor: pointer;
+}
+.together-who input {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  accent-color: var(--accent);
+}

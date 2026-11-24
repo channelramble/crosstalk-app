@@ -9,7 +9,7 @@ const shot = (name: string) => (process.env.CT_SHOTS ? { path: `${process.env.CT
 const phone = (page: Page) => page.setViewportSize({ width: 390, height: 844 });
 /** The machine this app opens from (the test hub), as requests to it are addressed. */
 const home = (path: string) => (url: URL) => url.origin === "http://127.0.0.1:5198" && url.pathname === path;
-const machines = (page: Page) => page.getByRole("heading", { name: "Machines", exact: true });
+const machines = (page: Page) => page.locator("#machines").getByRole("heading", { name: "Machines", exact: true });
 
 async function homeName(page: Page, token: string): Promise<string> {
   return (await (await page.request.get(`${HUB}/api/state`, { headers: { authorization: `Bearer ${token}` } })).json()).hub.name;
@@ -134,7 +134,7 @@ test("a machine just added says what's next there, and Sign in opens its agent c
   // It switches to that machine and opens Claude Code's card there.
   await signIn.click();
   await expect(page.getByRole("combobox", { name: "Machine", exact: true })).toHaveValue(linux.base);
-  await expect(page.locator(".topbar .sub")).toHaveText("Linux box");
+  await expect(page.locator(".topbar .sub")).toHaveText("Settings · Linux box");
   const card = page.locator("#agent-claude");
   await expect(card).toContainText("Not signed in");
   await expect(card).toBeInViewport();
@@ -189,7 +189,7 @@ test("a link the other machine stopped accepting gets Link again, with a code fr
   await page.routeWebSocket("ws://127.0.0.1:5198/api/ws?**", pong);
   const linux = await otherMachine(page, token, { port: 8455 });
   let agents = "signed-out";
-  await page.route(home("/api/machines"), (route) => route.fulfill({ json: [{ id: "h_linux", name: "Linux box", url: linux.base, addedAt: Date.now(), scope: "full", agents, error: "This machine no longer accepts this hub's sign-in: link it again.", introducedBy: null }] }));
+  await page.route(home("/api/machines"), (route) => route.fulfill({ json: [{ id: "h_linux", name: "Linux box", url: linux.base, addedAt: Date.now(), scope: "full", agents, error: "This machine no longer accepts the link: link it again.", introducedBy: null }] }));
   // This device is paired with the Linux box, so it gets a code from it…
   const cors = { "access-control-allow-origin": "http://127.0.0.1:5198", "access-control-allow-headers": "authorization, content-type", "access-control-allow-methods": "GET, POST, OPTIONS" };
   await page.route(`${linux.base}/api/pairing-codes`, (route) => (route.request().method() === "OPTIONS" ? route.fulfill({ status: 204, headers: cors }) : route.fulfill({ headers: cors, json: { code: "WXYZ-2345", expiresAt: Date.now() + 600_000, url: null } })));
@@ -203,7 +203,7 @@ test("a link the other machine stopped accepting gets Link again, with a code fr
   await page.goto("/#/settings/machines");
   const row = page.locator(".machine-row").filter({ hasText: "Linux box" });
   await row.scrollIntoViewIfNeeded();
-  await expect(row).toContainText(`It no longer accepts ${await homeName(page, token)}'s sign-in · Link again`);
+  await expect(row).toContainText(`It no longer accepts ${await homeName(page, token)} · Link again`);
   await noHorizontalOverflow(page);
   await page.screenshot({ ...shot("machine-link-again.png"), animations: "disabled" });
   expect((await row.getByRole("button", { name: "Link again", exact: true }).boundingBox())!.height).toBeGreaterThanOrEqual(44);
@@ -216,10 +216,10 @@ test("a link the other machine stopped accepting gets Link again, with a code fr
 test("linked machines that couldn't be checked say so, with Retry", async ({ page, token }) => {
   await phone(page);
   let fail = true;
-  await page.route(home("/api/machines"), (route) => (fail ? route.fulfill({ status: 503, json: { error: "The hub is restarting." } }) : route.fulfill({ json: [{ id: "h_linux", name: "Linux box", url: "https://linux-box.example.ts.net", addedAt: Date.now(), scope: "full", agents: "one-way", error: null, introducedBy: null }] })));
+  await page.route(home("/api/machines"), (route) => (fail ? route.fulfill({ status: 503, json: { error: "Crosstalk is restarting." } }) : route.fulfill({ json: [{ id: "h_linux", name: "Linux box", url: "https://linux-box.example.ts.net", addedAt: Date.now(), scope: "full", agents: "one-way", error: null, introducedBy: null }] })));
   await page.goto("/#/settings/machines");
   const failed = page.getByRole("alert").filter({ hasText: "Couldn't check which machines" });
-  await expect(failed).toHaveText(`Couldn't check which machines ${await homeName(page, token)} links: The hub is restarting.Retry`);
+  await expect(failed).toHaveText(`Couldn't check which machines ${await homeName(page, token)} links: Crosstalk is restarting.Retry`);
   fail = false;
   await failed.getByRole("button", { name: "Retry", exact: true }).click();
   // The one not on this device yet shows up, with Add.
@@ -244,7 +244,7 @@ test("Remove on the home machine asks twice", async ({ page, token }) => {
   await dialog.getByRole("button", { name: "Continue", exact: true }).click();
   const sure = page.getByRole("dialog", { name: "Are you sure?", exact: true });
   // How to get it back, before it goes.
-  await expect(sure).toContainText(`To get ${name} back, you'll need a pairing code from it: on a device that still has it, Settings → Pair a new device. Then here, Settings → Machines → Add a machine that runs Crosstalk, with its address: 127.0.0.1:5198.`);
+  await expect(sure).toContainText(`To get ${name} back, you'll need a pairing code from it: on a device that still has it, Settings → This device → Paired devices → Pair a new device. Then here, Settings → Machines → Add a machine that runs Crosstalk, with its address: 127.0.0.1:5198.`);
   await page.screenshot({ ...shot("remove-home-step-2.png"), animations: "disabled" });
   // Cancel at the second step keeps it.
   await sure.getByRole("button", { name: "Cancel", exact: true }).click();

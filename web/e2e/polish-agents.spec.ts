@@ -9,7 +9,7 @@
 // `bunx playwright test e2e/polish-agents.spec.ts --project chromium-390` for a phone, `--project webkit-320` for the
 // smallest screen, `--project chromium-1440` for a desktop. The two that matter most on a phone are the helper
 // drop-down with nothing picked in it and the model shown as a name typed into "Other…".
-import { test, expect, openGroupAgent } from "./fixtures";
+import { test, expect, chatSettings, effortSteps, modelCards, modelInForce, openFold, openGroupAgent, pickModel, pickPermission } from "./fixtures";
 import type { APIRequestContext, Page, WebSocketRoute } from "@playwright/test";
 
 const hub = "http://127.0.0.1:8451";
@@ -55,13 +55,6 @@ async function chat(page: Page, request: APIRequestContext, token: string, provi
   return { room, member, history, patches, open, cleanup: () => request.delete(`${hub}/api/rooms/${room.id}`, { headers }) };
 }
 
-const chatSettings = async (page: Page) => {
-  await page.getByRole("button", { name: "Chat settings", exact: true }).click();
-  const settings = page.getByRole("dialog", { name: "Chat settings", exact: true });
-  await expect(settings).toBeVisible();
-  return settings;
-};
-
 // EXPECTED TO FAIL. ChatControls.chooseModel saves the concrete model (`model: next?.resolvedModel ?? id`), while
 // AgentOptions judges a saved model against the list by `m.id` only (AgentOptions.tsx line 52, web/src/models.ts
 // isCustomModel line 10). So a model picked under the message box comes back in the chat's settings as a name you
@@ -72,22 +65,22 @@ test("a model picked under the message box is the same model in the chat's setti
   await page.route("**/api/providers/claude/models**", (r) => r.fulfill({ json: CLAUDE_MODELS }));
   try {
     await s.open();
+    // The chip under the message box opens the chat's settings at Answers with.
     await page.locator(".chat-controls .ctl-model").click();
-    const menu = page.getByRole("dialog", { name: "Model", exact: true });
-    await menu.getByRole("menuitemradio").filter({ hasText: "Haiku 4.5" }).click();
+    const answers = page.getByRole("dialog", { name: "Chat settings", exact: true }).getByRole("region", { name: "Answers with", exact: true });
+    await pickModel(answers, "Haiku 4.5");
     await expect.poll(() => s.patches.length).toBe(1);
     // What the hub is told today: the concrete model behind the alias.
     expect(s.patches.at(-1)).toMatchObject({ model: "claude-haiku-4-5-20251001" });
     await expect(page.locator(".chat-controls .ctl-model .ellipsis")).toHaveText("Haiku 4.5");
 
-    const settings = await chatSettings(page);
-    const model = settings.getByRole("combobox", { name: "Model", exact: true });
-    // The same model the row shows, picked in the list — not a name typed into "Other…".
-    await expect(settings.getByPlaceholder("Model name, as the agent's CLI takes it")).toHaveCount(0);
-    await expect(model).not.toHaveValue("__custom__");
-    await expect(settings.locator(".field").filter({ has: page.getByRole("combobox", { name: "Model", exact: true }) }).locator(".help")).toHaveText("Fastest for quick answers · 200k context");
-    // Haiku takes no effort levels, so there is no Effort menu to set one from.
-    await expect(settings.getByRole("combobox", { name: "Effort", exact: true })).toHaveCount(0);
+    // The same model the row shows, lit in the list with its own line — not a name typed in by hand.
+    await expect(modelInForce(answers)).toHaveCount(1);
+    await expect(modelInForce(answers).locator(".pop-item-title")).toHaveText("Haiku 4.5");
+    await expect(modelInForce(answers).locator(".pop-item-help")).toHaveText("Fastest for quick answers · 200k context");
+    await expect(answers.getByPlaceholder("Model name, as the agent takes it")).toHaveCount(0);
+    // Haiku takes no effort levels, so there are no Effort steps to set one from.
+    await expect(effortSteps(answers)).toHaveCount(0);
   } finally {
     await s.cleanup();
   }
@@ -105,18 +98,15 @@ test("picking the model the helpers were on takes the helper pick off", async ({
   await page.route("**/api/providers/claude/models**", (r) => r.fulfill({ json: CLAUDE_MODELS }));
   try {
     await s.open();
-    await page.locator(".chat-controls .ctl-model").click();
-    const menu = page.getByRole("dialog", { name: "Model", exact: true });
-    const helpers = menu.getByRole("combobox", { name: "Helper agents use", exact: true });
+    const helpers = (await chatSettings(page, "Helpers")).getByRole("combobox", { name: "Helper agents use", exact: true });
     await expect(helpers.locator("option:checked")).toHaveText("Haiku 4.5");
     // The chat moves onto the model its helpers were already on.
-    await menu.getByRole("menuitemradio").filter({ hasText: "Haiku 4.5" }).click();
+    await pickModel(await chatSettings(page, "Answers with"), "Haiku 4.5");
     await expect.poll(() => s.patches.length).toBe(1);
     expect(s.patches.at(-1)!.config).not.toHaveProperty("helperModel");
 
-    await page.locator(".chat-controls .ctl-model").click();
     // Something is picked in the drop-down: with the pick gone it reads "The same model as this agent".
-    await expect(menu.getByRole("combobox", { name: "Helper agents use", exact: true }).locator("option:checked")).toHaveText("The same model as this agent");
+    await expect(helpers.locator("option:checked")).toHaveText("The same model as this agent");
     // And the row no longer marks a separate model for helpers.
     await expect(page.locator('.chat-controls [aria-label="Helper agents use Haiku 4.5"]')).toHaveCount(0);
   } finally {
@@ -151,9 +141,10 @@ test("moving an agent to another account doesn't carry the other account's model
   });
   try {
     await page.goto(`/#/room/${room.id}`);
-    const dialog = await openGroupAgent(page, "builder");
-    await dialog.getByRole("combobox", { name: "Account", exact: true }).selectOption("local");
-    await dialog.getByRole("button", { name: "Save", exact: true }).click();
+    const answers = await openFold(await openGroupAgent(page, "builder"), "Answers with");
+    await answers.getByRole("radiogroup", { name: "Account", exact: true }).locator('[role="radio"][data-value="local"]').click();
+    // Asked once, since it starts the agent fresh.
+    await page.getByRole("dialog", { name: /^Switch to / }).getByRole("button", { name: "Switch account", exact: true }).click();
     await expect.poll(() => patches.length).toBe(1);
     // The new account has no Opus: the chat is started on that account's own model instead of one it can't run.
     expect(patches.at(-1)!.model).not.toBe("opus");
@@ -177,17 +168,14 @@ test("the @name the agent dialog promises is the @name the agent gets", async ({
   try {
     await page.goto(`/#/room/${room.id}`);
     for (const typed of ["Build Bot", "Клод"]) {
-      const dialog = await openGroupAgent(page, typed === "Build Bot" ? "builder" : "build-bot");
-      await dialog.getByText("Advanced: name, model, effort, instructions", { exact: true }).click();
-      const handle = dialog.getByRole("textbox", { name: "Handle" });
+      const dialog = await openFold(await openGroupAgent(page, typed === "Build Bot" ? "builder" : "build-bot"), "Name and role");
+      const handle = dialog.getByRole("textbox", { name: "Name", exact: true });
       await handle.fill(typed);
       const promised = ((await dialog.getByText(/^Others mention it as @/).textContent()) ?? "").replace(/^Others mention it as @/, "").replace(/\.$/, "").trim();
-      await dialog.getByRole("button", { name: "Save", exact: true }).click();
-      await expect(dialog).toHaveCount(0);
-      // The chat's list of agents says what the agent is really called: the dialog must have promised that name.
-      const settings = page.getByRole("dialog", { name: "Group chat settings", exact: true });
-      await expect(settings.getByRole("button", { name: `Change @${promised}`, exact: true })).toBeVisible();
-      await settings.getByRole("button", { name: "Cancel", exact: true }).click();
+      await dialog.getByRole("button", { name: "Save name and role", exact: true }).click();
+      // The chat's list of agents says what the agent is really called: the line under the box must have promised that name.
+      const settings = page.getByRole("dialog", { name: "Chat settings", exact: true });
+      await expect(settings.getByRole("region", { name: `@${promised}`, exact: true })).toBeVisible();
     }
   } finally {
     await request.delete(`${hub}/api/rooms/${room.id}`, { headers });
@@ -249,10 +237,9 @@ test("the agent dialog's Model and Effort are named for a screen reader", async 
   await page.route("**/api/providers/codex/models*", (r) => r.fulfill({ json: { provider: "codex", accountId: "default", live: true, error: null, models: [{ id: "codex-model", label: "Codex model", description: null, isDefault: true, efforts: ["low", "high"], defaultEffort: "low" }] } }));
   try {
     await page.goto(`/#/room/${room.id}`);
-    const dialog = await openGroupAgent(page, "builder");
-    await dialog.getByText("Advanced: name, model, effort, instructions", { exact: true }).click();
-    await expect(dialog.getByRole("combobox", { name: "Model", exact: true })).toHaveCount(1);
-    await expect(dialog.getByRole("combobox", { name: "Effort", exact: true })).toHaveCount(1);
+    const dialog = await openFold(await openGroupAgent(page, "builder"), "Answers with");
+    await expect(modelCards(dialog)).toHaveCount(1);
+    await expect(effortSteps(dialog)).toHaveCount(1);
   } finally {
     await request.delete(`${hub}/api/rooms/${room.id}`, { headers });
   }
@@ -287,10 +274,10 @@ test("saving one setting in the agent dialog doesn't undo what changed meanwhile
     // While the dialog is open, the agent is given another model for its helpers (the user said yes in the chat).
     await expect.poll(() => !!socket).toBe(true);
     socket!.send(JSON.stringify({ t: "member", member: { ...member, config: { ...member.config, helperModel: "claude-haiku-4-5-20251001" } } }));
-    await dialog.getByRole("radio", { name: /Can edit/ }).click();
-    await dialog.getByRole("button", { name: "Save", exact: true }).click();
+    await pickPermission(await openFold(dialog, "May do"), "edits");
     await expect.poll(() => patches.length).toBe(1);
-    expect((patches.at(-1)!.config as Record<string, unknown>).helperModel).toBe("claude-haiku-4-5-20251001");
+    // Only what was changed is sent: nothing here can write the helper model back to what it was.
+    expect(patches.at(-1)).toEqual({ permissionMode: "edits" });
   } finally {
     await request.delete(`${hub}/api/rooms/${room.id}`, { headers });
   }
@@ -311,7 +298,7 @@ test("a group chat's agent shows what it is always allowed, and can be taken bac
     r.fulfill({ json: r.request().method() === "DELETE" ? [] : [{ id: "rule:Bash(rm:*)", label: "`rm` commands" }] }));
   try {
     await page.goto(`/#/room/${room.id}`);
-    const dialog = await openGroupAgent(page, "builder");
+    const dialog = await openFold(await openGroupAgent(page, "builder"), "May do");
     await expect(dialog.getByText("Always allowed", { exact: true })).toBeVisible();
     await dialog.getByRole("button", { name: "Remove: rm commands", exact: true }).click();
     await expect(dialog.getByText("rm", { exact: true })).toHaveCount(0);

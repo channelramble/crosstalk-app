@@ -44,7 +44,7 @@ test("the Featherless preset: where it lives, where its key comes from, and whic
   // Said where it's added, before any key is checked (the plan is picked on Featherless before the key is made): the
   // plan agents need and what it costs, the plan they can't use and what using it anyway risks, and its plans linked.
   expect(p.plan).toBe(FEATHERLESS_TERMS);
-  expect(p.plan).toBe("Agents need Featherless's Developer plan. It's paid per token from monthly credits, so set a spending limit in Settings → Costs. The $25 Chat plan doesn't allow agents or API use: Featherless can cancel an account used that way without a refund.");
+  expect(p.plan).toBe("Agents need Featherless's Developer plan. It's paid per token from monthly credits, so set a spending limit in Settings → Usage & costs → Costs. The $25 Chat plan doesn't allow agents or API use: Featherless can cancel an account used that way without a refund.");
   expect(p.pricing).toEqual({ label: "featherless.ai/pricing", url: "https://featherless.ai/pricing" });
   expect(p.pricing).toBe(FEATHERLESS_PRICING);
   for (const words of [p.help, p.plan, p.note]) expect(words).not.toMatch(/flat|unlimited|as many requests/i);
@@ -129,7 +129,7 @@ test("a key on the flat Chat plan shows no price for a reply, and its card says 
   expect(chatSpendLine(chat, false, true)).toBe("This chat: — · included in your plan");
   expect(chatSpendLine(chat, false, false)).toBe("This chat: $0.00");
   expect(chatSpendLine({ ...chat, replies: 0 }, false, true)).toBeNull();
-  // What its card in Settings → Costs says where another account would have a limit: why there's no figure, that the
+  // What its card in Settings → Usage & costs → Costs says where another account would have a limit: why there's no figure, that the
   // plan doesn't allow agents, and what does.
   expect(FLAT_RATE_NOTE).toBe("This key is on Featherless's Chat plan: one flat fee for the month, so replies have no price here and nothing for a limit to count. That plan doesn't allow agents or API use. Agents need its Developer plan, paid per token, which a limit here can count.");
 });
@@ -149,7 +149,7 @@ test("which plan a checked key is on, in plain words: the Chat plan warned, the 
   });
   // The Developer plan: allowed, and paid per token, so a limit is worth setting — no warning about terms that allow it.
   // Featherless's own list calls it "Request Pricing"; it's said as its pricing page says it.
-  expect(planWords(DEVELOPER)).toEqual({ tone: "ok", text: "This key is on Featherless's Developer plan, which allows agents. Each reply is paid per token from your credits, so set a spending limit in Settings → Costs." });
+  expect(planWords(DEVELOPER)).toEqual({ tone: "ok", text: "This key is on Featherless's Developer plan, which allows agents. Each reply is paid per token from your credits, so set a spending limit in Settings → Usage & costs → Costs." });
   expect(planWords({ ...DEVELOPER, id: "feather_payg", name: "Pay-As-You-Go" }).text).toContain("Featherless's Pay-As-You-Go plan, which allows agents");
   // A name that's only an id still reads as a plan.
   expect(planWords({ ...DEVELOPER, name: "feather_request_pricing" }).text).toContain("Featherless's Developer plan");
@@ -205,9 +205,9 @@ test("the key's own plan decides how much of a chat a model is saved with, and w
 
 test("Crosstalk's note in a chat links Featherless's plans: the whole address is the link, the full stop after it isn't", () => {
   // What the hub says in a chat on a key it read as on the Chat plan (hub/src/featherless.ts chatNotice).
-  const note = "Featherless says this key is on its Chat plan, which doesn't allow agents or API use: Featherless can cancel an account used that way without a refund. Agents need its Developer plan: paid per token, so set a spending limit in Settings → Costs. See https://featherless.ai/pricing.";
+  const note = "Featherless says this key is on its Chat plan, which doesn't allow agents or API use: Featherless can cancel an account used that way without a refund. Agents need its Developer plan: paid per token, so set a spending limit in Settings → Usage & costs → Costs. See https://featherless.ai/pricing.";
   expect(noteParts(note)).toEqual([
-    { text: "Featherless says this key is on its Chat plan, which doesn't allow agents or API use: Featherless can cancel an account used that way without a refund. Agents need its Developer plan: paid per token, so set a spending limit in Settings → Costs. See " },
+    { text: "Featherless says this key is on its Chat plan, which doesn't allow agents or API use: Featherless can cancel an account used that way without a refund. Agents need its Developer plan: paid per token, so set a spending limit in Settings → Usage & costs → Costs. See " },
     { url: "https://featherless.ai/pricing", label: "featherless.ai/pricing" },
     { text: "." },
   ]);

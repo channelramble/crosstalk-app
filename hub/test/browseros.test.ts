@@ -365,7 +365,7 @@ describe("downloading the asset", () => {
     }
   });
 
-  test("a disk with no room for it is told so before the first byte, in the words the pool uses", async () => {
+  test("a disk with no room for it is told so before the first byte, in the words model downloads use", async () => {
     const dir = scratch();
     try {
       // The real sizes: 165 MB for the arm64 dmg, and the install copies the bundle out of it, so the peak is twice.

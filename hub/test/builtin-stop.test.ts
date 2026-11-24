@@ -247,7 +247,7 @@ test("a hub that stopped during a command: the chat goes on, /compact too, and w
   expect(disk().turns.map((t) => t.at)).toEqual([0, 2, 4]);
   const { sink, out } = sinkFor();
   expect(await d.runTurn(turn("/compact"), sink)).toEqual({ ok: true });
-  expect(out.text).toBe("Done: the conversation so far is summarised, and the chat goes on from the summary.");
+  expect(out.text).toBe("Done: the chat so far is summarised, and it goes on from the summary.");
   expect(strict.refused).toEqual([]);
 });
 
@@ -395,27 +395,28 @@ test("under the engine's watchdog: a reply that hangs on its third model call st
   await engine.whenIdle();
 });
 
-// ------------------------------------------------------------------------------------- Send now
+// ------------------------------------------------------------------------------------- a message sent while it works
 
-test("Send now during the reply's last answer: read and answered in the same turn, in order, and it can be taken back", async () => {
+test("a message sent during the reply's last answer goes in by itself: read and answered in the same turn, in order, and it can be taken back", async () => {
   const fake = rl([{ text: "First answer." }, { text: "Second answer." }]);
   const gate = holding((n) => n === 1);
   const h = await chatOn(fake, { deps: { fetch: gate.get } });
   h.app.engine.postHumanMessage(h.room.id, "First question", "Phone");
   await until(() => gate.held() === 1);
   const second = h.app.engine.postHumanMessage(h.room.id, "Second question", "Phone");
-  expect(await h.app.engine.sendNowWhy(h.room.id)).toEqual({ sent: true });
+  // In the reply by itself: an older app's Send now finds it there.
+  expect(await h.app.engine.sendNowWhy(h.room.id)).toEqual({ sent: false, why: "answering" });
   gate.let();
   await h.app.engine.whenIdle();
   expect(fake.state.chats).toHaveLength(2);
   expect(rolesOf(fake.state.chats[1].messages).slice(1)).toEqual(["user: First question", "assistant", "user: Second question"]);
   expect(h.app.store.listMessages(h.room.id).at(-1)?.text).toBe("Second answer.");
-  // It went in with its turn, so it can be unsent: not "that message isn't in this conversation any more".
+  // It went in with its turn, so it can be unsent: not "that message isn't in what the agent remembers any more".
   await h.app.engine.reviseMessage(second.id, null, "Phone");
   expect(rolesOf(h.kept().messages)).toEqual([]);
 });
 
-test("Send now keeps the other reasons to go on: a cut-off answer is still told to continue, and a leaked call still told it didn't run", async () => {
+test("a message handed over mid-reply keeps the other reasons to go on: a cut-off answer is still told to continue, and a leaked call still told it didn't run", async () => {
   const cutOff = rl([{ text: "Half", finish: "length" }, { text: " of it." }]);
   const gate = holding((n) => n === 1);
   const d = driverOn(cutOff, folder(), { fetch: gate.get });
@@ -436,7 +437,7 @@ test("Send now keeps the other reasons to go on: a cut-off answer is still told 
   expect(rolesOf(leak.state.chats[1].messages).slice(1)).toEqual(["user: Go", "assistant", `user: ${TEXT_TOOL_CALL_NUDGE}`, "user: And this"]);
 });
 
-test("Send now during /compact isn't taken: the waiting turn answers the message once the summary is made", async () => {
+test("a message sent during /compact isn't taken, by itself or on an older app's Send now: the waiting turn answers it once the summary is made", async () => {
   const work = Array.from({ length: 5 }, (_, i) => run(`echo ${i}`));
   const fake = rl([...work, { text: "Done." }, { text: "SUMMARY" }, { text: "The answer." }]);
   const gate = holding((n) => n === 7);
@@ -455,7 +456,7 @@ test("Send now during /compact isn't taken: the waiting turn answers the message
   expect(h.app.store.listMessages(h.room.id).at(-1)?.text).toBe("The answer.");
 });
 
-test("Send now as a /compact starts, before it has shown anything: it says the message waits for the reply after it, never to try again", async () => {
+test("a message sent as a /compact starts, before it has shown anything: an older app's Send now says it waits for the reply after it, never to try again", async () => {
   const work = Array.from({ length: 5 }, (_, i) => run(`echo ${i}`));
   const fake = rl([...work, { text: "Done." }, { text: "SUMMARY" }, { text: "The answer." }]);
   let hold: Promise<void> | null = null;
@@ -516,7 +517,8 @@ test("through the hub: stopped before it read the message, it's unread again and
   h.app.engine.postHumanMessage(h.room.id, "First question", "Phone");
   await until(() => gate.held() === 1);
   const second = h.app.engine.postHumanMessage(h.room.id, "Second question", "Phone");
-  expect(await h.app.engine.sendNowWhy(h.room.id)).toEqual({ sent: true });
+  // In the reply by itself: an older app's Send now finds it there.
+  expect(await h.app.engine.sendNowWhy(h.room.id)).toEqual({ sent: false, why: "answering" });
   await h.app.engine.stop(h.room.id);
   gate.let();
   await h.app.engine.whenIdle();
@@ -539,7 +541,8 @@ test("through the hub: a fresh session after a failure still gets the message it
   h.app.engine.postHumanMessage(h.room.id, "First question", "Phone");
   await until(() => gate.held() === 1);
   h.app.engine.postHumanMessage(h.room.id, "Second question", "Phone");
-  expect(await h.app.engine.sendNowWhy(h.room.id)).toEqual({ sent: true });
+  // In the reply by itself: an older app's Send now finds it there.
+  expect(await h.app.engine.sendNowWhy(h.room.id)).toEqual({ sent: false, why: "answering" });
   gate.let();
   await h.app.engine.whenIdle();
   expect(h.app.store.listTurns(h.room.id).map((t) => t.status)).toContain("error");
@@ -558,7 +561,8 @@ test("through the hub: one handed over and never read is edited like any unread 
   h.app.engine.postHumanMessage(h.room.id, "First question", "Phone");
   await until(() => gate.held() === 1);
   const second = h.app.engine.postHumanMessage(h.room.id, "Second question", "Phone");
-  expect(await h.app.engine.sendNowWhy(h.room.id)).toEqual({ sent: true });
+  // In the reply by itself: an older app's Send now finds it there.
+  expect(await h.app.engine.sendNowWhy(h.room.id)).toEqual({ sent: false, why: "answering" });
   await h.app.engine.stop(h.room.id);
   gate.let();
   await h.app.engine.whenIdle();

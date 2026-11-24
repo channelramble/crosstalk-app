@@ -71,7 +71,7 @@ test("a chat on a service you've added: its agent runs on that account, with the
   // A service that isn't here any more says so, with where to add it again, and makes no chat.
   const gone = await call("POST", "/api/chats/service", { account: "nothing" });
   expect(gone.status).toBe(404);
-  expect(gone.body.error).toContain("Settings → AI services");
+  expect(gone.body.error).toContain("Settings → Accounts");
   expect(app.store.listRooms()).toHaveLength(2);
 });
 
@@ -87,7 +87,7 @@ test("a server on this machine that isn't added yet: one call checks it, adds it
   // The same account Settings → AI services makes from Found on this machine → Use it: the name the scan gave it, every
   // model it listed, the context its /props reported, and the lane that preset pins — the translator, even though this
   // server's Responses address answered too (a model's chat template can refuse what an agent sends there).
-  expect(started.body.account).toMatchObject({ provider: "codex", kind: "endpoint", label: `llama.cpp (port ${llama.port})`, plan: "Custom model" });
+  expect(started.body.account).toMatchObject({ provider: "codex", kind: "endpoint", label: `llama.cpp (port ${llama.port})`, plan: "Your own model" });
   expect(started.body.account.endpoint).toMatchObject({ baseUrl: llama.url, models: ["qwen3.8-27b"], contextWindow: 65536, contexts: { "qwen3.8-27b": 65536 }, hasKey: false });
   expect(started.body.account.endpoint.protocol).toBe("chat");
   expect(app.providers.endpointOf("codex", started.body.account.id)).toMatchObject({ baseUrl: llama.url });

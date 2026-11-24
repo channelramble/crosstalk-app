@@ -1,13 +1,13 @@
 // Settings → Local models (docs/SPEC-0.5.md, track T10): what model servers run on this machine, the memory they use, and a
-// switch per model that frees its memory or loads it again (hub/src/localModels.ts). The image editor and the model pool keep
-// their own sections: a line for each here jumps to it and says whether it's on. Below the servers: starting one (Ollama, or
-// llama.cpp with a downloaded model) and the models on this machine, with Get a model (LocalModelsLibrary.tsx, LocalModelsGet.tsx).
+// switch per model that frees its memory or loads it again (hub/src/localModels.ts). The image editor keeps its own
+// section: a line here jumps to it and says whether it's on. Below the servers: starting one (Ollama, or llama.cpp with a
+// downloaded model) and the models on this machine, with Get a model (LocalModelsLibrary.tsx, LocalModelsGet.tsx).
 import { useEffect, useRef, useState } from "react";
 import { ChevronRight, Loader2 } from "lucide-react";
 import type { LocalLibrary, LocalModel, LocalModelServer, LocalModelsView, LocalModelSwitch, LocalServerStart } from "@crosstalk/shared";
 import { api, ApiError } from "../api";
 import { imageEditorLine } from "../imageEditor";
-import { endMove, failMove, moveKey, poolLine, rowView, serverMemory, sortModels, startMove, whyNotes, type Moves } from "../localModels";
+import { endMove, failMove, moveKey, rowView, serverMemory, sortModels, startMove, whyNotes, type Moves } from "../localModels";
 import { errorMessage, noDot } from "../services";
 import { useStore } from "../store";
 import { ConfirmButton, Switch } from "../ui";
@@ -43,23 +43,23 @@ function ServerCard({ server: s, moves, actions, machine, busy, stop }: { server
     <section className="card local-server" aria-label={`${s.label} on ${host(s)}`}>
       <div className="local-head">
         <div className="local-head-text">
-          <div className="pool-setting-title">{s.label}</div>
+          <div className="setting-title">{s.label}</div>
           <div className="help mono">{host(s)}</div>
         </div>
         {s.accountIds.length ? (
-          <span className="pill green">In AI services</span>
+          <span className="pill green">In Accounts</span>
         ) : (
           <button type="button" className="btn small primary" onClick={() => actions.add(s)}>
-            Add to AI services
+            Add to Accounts
           </button>
         )}
       </div>
       <div className="local-memory">
         <span>Memory in use</span>
-        <HelpTip label="What does memory mean?">What the server is holding in {machine}'s memory right now.</HelpTip>
+        <HelpTip label="What does memory mean?">What it's holding in {machine}'s memory right now.</HelpTip>
         <span className="local-memory-value">{serverMemory(s)}</span>
       </div>
-      {!s.models.length && <p className="help">This server lists no models yet. Load or pull one in it, then press Rescan.</p>}
+      {!s.models.length && <p className="help">It lists no models yet. Load or pull one in it, then press Rescan.</p>}
       <ul className="local-models">
         {sortModels(s.models).map((m) => {
           const key = moveKey(s.id, m.id);
@@ -124,14 +124,11 @@ function ServerCard({ server: s, moves, actions, machine, busy, stop }: { server
   );
 }
 
-/** The image editor and the model pool have their own sections: one line each that jumps there, with its on/off state when the hub has said. */
+/** The image editor has its own section: a line that jumps there, with its on/off state when the hub has said. Nothing when it isn't installed. */
 function AlsoHere({ machine }: { machine: string }) {
   const editor = useStore((s) => s.imageEditor);
-  const pool = useStore((s) => s.pool);
-  const rows = [
-    ...(editor?.installed ? [{ id: "image-editor", name: "Image editor", state: imageEditorLine(editor, machine) }] : []),
-    { id: "model-pool", name: "Model pool", state: poolLine(pool?.status.state) },
-  ];
+  const rows = editor?.installed ? [{ id: "image-editor", name: "Image editor", state: imageEditorLine(editor, machine) }] : [];
+  if (!rows.length) return null;
   return (
     <section aria-label="Also on this machine">
       <h3 className="svc-sub local-also">Also on this machine</h3>
@@ -139,7 +136,7 @@ function AlsoHere({ machine }: { machine: string }) {
         {rows.map((r) => (
           <button key={r.id} type="button" className="local-link" aria-label={`Go to ${r.name}${r.state ? `: ${r.state}` : ""}`} onClick={() => jump(r.id)}>
             <span className="local-link-text">
-              <span className="pool-setting-title">{r.name}</span>
+              <span className="setting-title">{r.name}</span>
               {r.state && <span className="help local-link-state">{r.state}</span>}
             </span>
             <ChevronRight size={18} aria-hidden />
@@ -347,10 +344,10 @@ export function LocalModelsSection() {
       </div>
       {error && (
         <p className="svc-problem" role="alert">
-          Couldn't look for local models: {noDot(error)}. Press Rescan to try again.
+          Couldn't look for models on {machine}: {noDot(error)}. Press Rescan to try again.
         </p>
       )}
-      {!view && scanning && <p className="help">Looking for model servers…</p>}
+      {!view && scanning && <p className="help">Looking for models running on {machine}…</p>}
       {view && !servers.length && (
         <div className="card">
           <p className="help local-empty">Nothing is running here. Start Ollama, LM Studio or llama.cpp, then press Rescan.</p>

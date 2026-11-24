@@ -40,8 +40,8 @@ const log = logger("browseros");
 export const BROWSEROS_REPO = "browseros-ai/BrowserOS";
 /**
  * Its releases, newest tag first. One page is plenty: the browser ships far more often than 100 releases apart.
- * `CROSSTALK_GITHUB_API` points this at a stand-in, the way the model pool's llama.cpp releases already do, so no
- * test and no browser-suite hub ever asks the real GitHub (and no test spends the person's 60 checks an hour).
+ * `CROSSTALK_GITHUB_API` points this at a stand-in, so no test and no browser-suite hub ever asks the real GitHub (and
+ * no test spends the person's 60 checks an hour).
  */
 export const releasesUrl = () => `${(process.env.CROSSTALK_GITHUB_API ?? "https://api.github.com").replace(/\/+$/, "")}/repos/${BROWSEROS_REPO}/releases?per_page=100`;
 /** What the browser's own MCP server calls itself (`serverInfo.name`), and the name we give its entry in an agent. */
@@ -817,7 +817,7 @@ export interface InstallDeps extends SystemDeps {
 /** How many times a download that died half way is carried on from where it stopped before giving up. */
 export const DOWNLOAD_TRIES = 3;
 
-/** A size a person reads, as the pool's downloads say it. */
+/** A size a person reads, as model downloads say it (local/llama.ts). */
 const gb = (n: number) => (n >= 1024 ** 3 ? `${(n / 1024 ** 3).toFixed(1)} GB` : n >= 1024 ** 2 ? `${Math.ceil(n / 1024 ** 2)} MB` : `${Math.ceil(n / 1024)} KB`);
 
 /**
@@ -859,7 +859,7 @@ const outOfSpace = (text: string) => /enospc|no space left|disk (is )?full/i.tes
  * gives nothing to check a 165 MB download against, and installing an unchecked browser is not something to do quietly.
  *
  * **And it is refused before the first byte when the disk hasn't got room for it**, keeping the same 2 GB the hub keeps
- * free for everything else (`diskReserve`, as the model pool's downloads and uploads do). Without that, a 165-304 MB
+ * free for everything else (`diskReserve`, as model downloads and uploads do). Without that, a 165-304 MB
  * asset on a nearly-full disk failed three times, each try filling what was left, and ENOSPC came out as "check the
  * network" with the hub's own reserve eaten by a dead download.
  */
@@ -939,7 +939,7 @@ export async function downloadAsset(build: Build, file: string, d: InstallDeps =
 
 export interface SignatureCheck {
   ok: boolean;
-  /** "Developer ID Application: Nikhil Venkat Sonti (8YMKWU47S5)", when the signature named one. */
+  /** "Developer ID Application: Example Developer (ABCDE12345)", when the signature named one. */
   authority: string | null;
   notarised: boolean;
   detail: string;

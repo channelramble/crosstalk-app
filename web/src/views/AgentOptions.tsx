@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { EFFORT_LABELS, PERMISSION_MODES, PROVIDER_INFO, leanToolsWords, permissionInfo, smallWindowWords, type ModelCatalog, type ModelOption, type PermissionMode, type Provider } from "@crosstalk/shared";
+import { EFFORT_LABELS, PERMISSION_MODES, PROVIDER_INFO, leanToolsWords, permissionInfo, smallWindowWords, type HelpersOn, type ModelCatalog, type ModelOption, type PermissionMode, type Provider } from "@crosstalk/shared";
 import type { Connection } from "../api";
 import { accountDescription } from "../accounts";
 import { listedModel, modelHelp, toolCostLine } from "../models";
@@ -9,6 +9,8 @@ import { useCatalog } from "../useCatalog";
 import { Seg } from "../ui";
 import { Tip } from "./Tip";
 import { ModelSelectOptions } from "./ModelChoices";
+import { AccountCards, EffortSteps, ModelPicker, Part, PermissionCards } from "./AgentChoices";
+import { HelpersOnControl, useHelpersDefault } from "./HelpersOn";
 
 /** How a chat's agent runs: which account pays, the model, how hard it thinks, and what it may do without asking. */
 export interface AgentChoice {
@@ -18,6 +20,11 @@ export interface AgentChoice {
   permissionMode: PermissionMode;
   /** The model its helper agents (subagents, spawned agents) use; "" for the same model as the agent itself. */
   helperModel?: string;
+  /**
+   * Who does its helper work when that isn't its own helpers ("Helpers run on", HelpersOn.tsx); null: its own.
+   * Left out: not chosen here, so a new chat gets what Settings → Agents together says.
+   */
+  helpers?: HelpersOn | null;
 }
 
 /** Agents whose helper agents Crosstalk holds to a model: Claude Code's subagents and workflows, Codex's spawned agents. */
@@ -32,9 +39,10 @@ const CUSTOM = "__custom__";
  * template's "Your default": New chat's). `offer`: models to pick from instead of asking the hub, for a server that
  * isn't an account yet (there's nothing to ask about). `starting`: a chat is about to start, so a model that can't run
  * tools says that it still can be started. `other: false` leaves out "Other…" (a typed name): Ask others offers only
- * models it can say the cost and size of.
+ * models it can say the cost and size of. `cards`: drawn with the same building blocks as a chat's settings sheet, under
+ * its section names ("Answers with", "Helpers", "May do"), so a choice reads the same where a chat starts as where it runs.
  */
-export function AgentOptions({ provider, value, onChange, showPermissions = true, showAccount = true, showHelpers = true, connection, accountList, onCatalog, unset, offer, starting = false, other = true }: { provider: Provider; value: AgentChoice; onChange: (v: AgentChoice) => void; showPermissions?: boolean; showAccount?: boolean; showHelpers?: boolean; connection?: Connection; accountList?: ReturnType<typeof useStore.getState>["accounts"]; onCatalog?: (c: ModelCatalog | null) => void; unset?: string; offer?: ModelOption[]; starting?: boolean; other?: boolean }) {
+export function AgentOptions({ provider, value, onChange, showPermissions = true, showAccount = true, showHelpers = true, cards = false, helpersOn = false, connection, accountList, onCatalog, unset, offer, starting = false, other = true }: { provider: Provider; value: AgentChoice; onChange: (v: AgentChoice) => void; showPermissions?: boolean; showAccount?: boolean; showHelpers?: boolean; /** The big choices a chat's settings sheet has (AgentChoices.tsx) instead of drop-downs: New chat and Settings → New chats. */ cards?: boolean; /** Offer "Helpers run on" (another account for helper work), with the helper model inside it. */ helpersOn?: boolean; connection?: Connection; accountList?: ReturnType<typeof useStore.getState>["accounts"]; onCatalog?: (c: ModelCatalog | null) => void; unset?: string; offer?: ModelOption[]; starting?: boolean; other?: boolean }) {
   const accounts = useStore((s) => s.accounts);
   const list = Object.values(accountList ?? accounts).filter((a) => a.provider === provider);
   // Nothing to ask the hub about while the models are given (a server found running here, not added yet).
@@ -60,6 +68,9 @@ export function AgentOptions({ provider, value, onChange, showPermissions = true
     }
   }, [catalog, failed, listFor]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Who does helper work: what was picked here, else what new chats on this machine start with (never the chat's own account).
+  const helpersDefault = useHelpersDefault(helpersOn ? connection : null, helpersOn);
+  const shownHelpers = value.helpers !== undefined ? value.helpers : helpersDefault && !(helpersDefault.provider === provider && helpersDefault.account === value.account) ? helpersDefault : null;
   const models = offer ?? catalog?.models ?? [];
   const def = models.find((m) => m.isDefault);
   const chosen = custom ? undefined : value.model ? listedModel(models, value.model) : def;
@@ -83,6 +94,110 @@ export function AgentOptions({ provider, value, onChange, showPermissions = true
     if (catalog && chosen && value.effort && !chosen.efforts.includes(value.effort)) onChange({ ...value, effort: "" });
   }, [catalog, chosen, value.effort]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const agentName = PROVIDER_INFO[provider].name;
+  const helpers = showHelpers && HELPER_PROVIDERS.includes(provider) && models.length > 0;
+  if (cards)
+    return (
+      <div className="cs-form">
+        <div className="cs-form-title">Answers with</div>
+        {showAccount && list.length > 1 && (
+          <Part title="Account">
+            <AccountCards accounts={list} value={value.account} onChange={(id) => { setCustom(false); set({ account: id, model: "", effort: "", ...(value.helperModel !== undefined ? { helperModel: "" } : {}) }); }} />
+          </Part>
+        )}
+        <Part title="Model">
+          {!offer && !catalog && !failed && <p className="cs-note">Asking {agentName} for its models…</p>}
+          {catalog && !catalog.live && <p className="cs-note">{agentName} couldn't be asked for its models{catalog.error ? ` (${catalog.error})` : ""}.</p>}
+          <ModelPicker
+            models={models}
+            current={chosen?.id ?? null}
+            typed={custom ? value.model : null}
+            live
+            note={account?.kind === "endpoint" ? `${account.label} lists these too.` : `${agentName} keeps these out of its usual list.`}
+            // A tap on a card picks that model by name, the default's too (until one is picked, the default's card is the one lit).
+            onChoose={(id) => { setCustom(false); set({ model: id }); }}
+            onType={other ? (name) => { setCustom(true); set({ model: name }); } : undefined}
+          />
+          {/* A model the service says can't run tool calls: an agent on it can only talk, which is said before it's used
+            rather than found out in the chat. */}
+          {chosen?.noTools && (
+            <p className="no-tools" role="note">
+              {noToolsWords(chosen.label)}
+              {starting ? ` ${NO_TOOLS_START}` : ""}
+          </p>
+          )}
+          {/* A model with less room than the agent's own instructions and tools need: said here, where it's picked, because the
+            first message would otherwise fail in the server's words (which blame the chat's length, not what was sent). */}
+          {!chosen?.noTools && smallWindow && (
+            <p className="no-tools" role="note">
+              {smallWindow}
+          </p>
+          )}
+          {/* Measured on this very model, the last time a request went to it: so it says when, and says nothing at all for a
+            model no chat has used (shared ToolCost). */}
+          {toolCost && (
+            <p className="help model-tool-cost" role="note">
+              {toolCost}
+          </p>
+          )}
+          {/* Room to answer in, but not for the person's own Codex plugins and app connectors: this chat leaves them out. */}
+          {!chosen?.noTools && !smallWindow && leanTools && (
+            <p className="no-tools" role="note">
+              {leanTools}
+          </p>
+          )}
+        </Part>
+        {levels.length > 0 && (
+          <Part title="Effort">
+            <EffortSteps levels={levels} value={effortValue} defaultLevel={chosen?.defaultEffort} agentName={agentName} onChange={(effort) => set({ effort })} />
+          </Part>
+        )}
+        {showHelpers && HELPER_PROVIDERS.includes(provider) && (helpersOn || helpers) && (
+          <>
+            <div className="cs-form-title tip-line">
+              <span>Helpers</span>
+              {!helpersOn && <Tip topic="helpers" />}
+            </div>
+            {helpersOn ? (
+              <HelpersOnControl
+                value={shownHelpers}
+                onChange={(helpers) => set({ helpers })}
+                own={{ provider, account: value.account }}
+                tip={<Tip topic="helpers" />}
+                accounts={accountList}
+                connection={connection}
+                ownModel={
+                  models.length > 0 ? (
+                    <label className="field">
+                      <span>Their model</span>
+                      <HelperSelect models={models} own={chosen?.resolvedModel ?? chosen?.id ?? (value.model || "")} value={value.helperModel ?? ""} onChange={(helperModel) => set({ helperModel })} />
+                      <span className="help">{helperHelp(provider)}</span>
+                    </label>
+                  ) : null
+                }
+              />
+            ) : (
+              <div className="field">
+                <HelperSelect models={models} own={chosen?.resolvedModel ?? chosen?.id ?? (value.model || "")} value={value.helperModel ?? ""} onChange={(helperModel) => set({ helperModel })} />
+                <span className="help">{helperHelp(provider)}</span>
+              </div>
+            )}
+          </>
+        )}
+        {showPermissions && (
+          <>
+            <div className="cs-form-title tip-line">
+              <span>May do</span>
+              <Tip topic="permissions" />
+            </div>
+            <Part title={`What ${agentName} may do without asking`}>
+              <PermissionCards provider={provider} value={value.permissionMode} onChange={(permissionMode) => set({ permissionMode })} />
+            </Part>
+          </>
+        )}
+      </div>
+    );
+
   return (
     <>
       {showAccount && list.length > 1 && (
@@ -91,7 +206,7 @@ export function AgentOptions({ provider, value, onChange, showPermissions = true
           <select className="select" aria-label="Account" value={value.account} onChange={(e) => { setCustom(false); set({ account: e.target.value, model: "", effort: "", ...(value.helperModel !== undefined ? { helperModel: "" } : {}) }); }}>
             {list.map((a) => (
               <option key={a.id} value={a.id}>
-                {a.kind === "apikey" ? `${a.label} · API key, billed per use` : a.kind === "endpoint" ? `${a.label} · custom model` : accountDescription(a.label, a.account)}
+                {a.kind === "apikey" ? `${a.label} · API key, billed per use` : a.kind === "endpoint" ? `${a.label} · your own model` : accountDescription(a.label, a.account)}
                 {a.signedIn === false ? " · not signed in" : ""}
               </option>
             ))}
@@ -114,7 +229,7 @@ export function AgentOptions({ provider, value, onChange, showPermissions = true
           <ModelSelectOptions models={models} />
           {other && <option value={CUSTOM}>Other…</option>}
         </select>
-        {custom && <input className="input" placeholder="Model name, as the agent's CLI takes it" value={value.model} onChange={(e) => set({ model: e.target.value })} autoCapitalize="off" autoCorrect="off" spellCheck={false} />}
+        {custom && <input className="input" placeholder="Model name, as the agent takes it" value={value.model} onChange={(e) => set({ model: e.target.value })} autoCapitalize="off" autoCorrect="off" spellCheck={false} />}
         <span className="help">
           {modelHelp(chosen) ?? (catalog && !catalog.live ? `${PROVIDER_INFO[provider].name} couldn't be asked for its models${catalog.error ? ` (${catalog.error})` : ""}.` : offer || catalog ? "" : "Asking the agent for its models…")}
         </span>
@@ -161,15 +276,37 @@ export function AgentOptions({ provider, value, onChange, showPermissions = true
           <span className="help">How hard it thinks before answering. Lower is faster and uses less of your plan.</span>
         </label>
       )}
-      {showHelpers && HELPER_PROVIDERS.includes(provider) && models.length > 0 && (
-        <div className="field">
-          <span className="tip-line">
-            <span>Helper agents</span>
-            <Tip topic="helpers" />
-          </span>
-          <HelperSelect models={models} own={chosen?.resolvedModel ?? chosen?.id ?? (value.model || "")} value={value.helperModel ?? ""} onChange={(helperModel) => set({ helperModel })} />
-          <span className="help">{helperHelp(provider)}</span>
-        </div>
+      {showHelpers && helpersOn && HELPER_PROVIDERS.includes(provider) ? (
+        <HelpersOnControl
+          value={shownHelpers}
+          onChange={(helpers) => set({ helpers })}
+          own={{ provider, account: value.account }}
+          tip={<Tip topic="helpers" />}
+          accounts={accountList}
+          connection={connection}
+          ownModel={
+            models.length > 0 ? (
+              <label className="field">
+                <span>Their model</span>
+                <HelperSelect models={models} own={chosen?.resolvedModel ?? chosen?.id ?? (value.model || "")} value={value.helperModel ?? ""} onChange={(helperModel) => set({ helperModel })} />
+                <span className="help">{helperHelp(provider)}</span>
+              </label>
+            ) : null
+          }
+        />
+      ) : (
+        showHelpers &&
+        HELPER_PROVIDERS.includes(provider) &&
+        models.length > 0 && (
+          <div className="field">
+            <span className="tip-line">
+              <span>Helper agents</span>
+              <Tip topic="helpers" />
+            </span>
+            <HelperSelect models={models} own={chosen?.resolvedModel ?? chosen?.id ?? (value.model || "")} value={value.helperModel ?? ""} onChange={(helperModel) => set({ helperModel })} />
+            <span className="help">{helperHelp(provider)}</span>
+          </div>
+        )
       )}
       {showPermissions && (
         <div className="field">
@@ -192,7 +329,7 @@ export function cleanChoice(v: AgentChoice): AgentChoice {
 
 /** What a provider's helper agents are, in the help under the setting. */
 export function helperHelp(provider: Provider): string {
-  const which = provider === "claude" ? "The subagents and workflow agents Claude Code starts" : "The agents Codex spawns";
+  const which = provider === "claude" ? "The helpers and workflow agents Claude Code starts" : "The helpers Codex starts";
   return `${which}. They work at the agent's own effort, and never switch models on their own.`;
 }
 

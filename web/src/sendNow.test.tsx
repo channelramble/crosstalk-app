@@ -19,6 +19,10 @@ const { useStore } = await import("./store");
 // What the chat's status says while a message of yours waits on its agent, and what a Send now that didn't go says.
 // The bar once said "Your message is waiting for this reply to finish." with no reply running (new settings
 // were waiting for the agent's helpers), and Send now answered "It's being answered already, or the reply just ended."
+//
+// A hub with the one rule (HubInfo.flowsIn, 0.8 on) puts a message into the running reply by itself, always: there the
+// app never draws the bar for it, and the one button is Interrupt, under the message ("a hub with the one rule", below).
+// Send now, Answer now and Read it now are what a hub from before it gets, and the tests that name them say so.
 
 const NOW = Date.UTC(2026, 9, 30, 23, 37, 21);
 const MIN = 60_000;
@@ -28,7 +32,7 @@ const turn = (patch: Partial<Turn>): Turn => ({ id: "t", roomId: "r", memberId: 
 const msg = (seq: number, patch: Partial<Message> = {}): Message => ({ id: `m${seq}`, roomId: "r", authorKind: "human", memberId: null, authorName: "Phone", text: `message ${seq}`, mentions: [], turnId: null, status: "done", createdAt: NOW - MIN + seq, updatedAt: NOW, seq, ...patch });
 const draw = (line: ReturnType<typeof sendNowLine>) => renderToStaticMarkup(createElement(SendNowBar, { line, onAct: () => {} }));
 
-test("behind a running reply: Send now, as before", () => {
+test("a hub before the one rule, behind a running reply: Send now, as before", () => {
   const state = sendNowState(member(), [turn({ status: "running" }), turn({ id: "q", status: "queued" })], [msg(9), msg(11)]);
   expect(state).toEqual({ kind: "reply" });
   const line = sendNowLine(state!);
@@ -38,7 +42,7 @@ test("behind a running reply: Send now, as before", () => {
   expect(html).toContain(">Send now</button>");
 });
 
-test("held while new settings wait for the agent's helpers: it says so, and offers Answer now with what that means", () => {
+test("a hub before the one rule, held while new settings wait for the agent's helpers: it says so, and offers Answer now with what that means", () => {
   const held = member({ status: "working", statusDetail: "Finishing helpers before your new settings apply", held: { change: "settings", helpers: true } });
   const state = sendNowState(held, [turn({ id: "q", status: "queued" })], [msg(11)]);
   expect(state).toEqual({ kind: "helpers", held: { change: "settings", helpers: true } });
@@ -180,22 +184,23 @@ test("a Send now that didn't go says why, in plain words, never a guess", () => 
   }
 });
 
-// By default, nobody is asked to tap Send now while helpers work in the background: a hub that says messagesFlow delivers
-// a message by itself while the agent's helpers work, and the app shows nothing to tap.
+// Nobody is asked to tap Send now for a message the hub delivers by itself. A hub with the one rule (HubInfo.flowsIn)
+// does for every reply: the app passes AT_WORK for it always (views/WorkingPanel.tsx). One from before it (0.7) did
+// only while the agent's helpers worked (HubInfo.messagesFlow): AT_WORK then, DONE once they had finished.
 const AT_WORK = { helpers: true };
 const DONE = { helpers: false };
 const behindReply = [turn({ status: "running" }), turn({ id: "q", status: "queued" })];
 const heldOnly = [turn({ id: "q", status: "queued" })];
 const HELD = { change: "settings", helpers: true } as const;
 
-test("helpers at work and a reply running: no bar, with or without new settings waiting, and for an agent with no mid-reply form", () => {
+test("a reply running, on a hub that delivers into it by itself: no bar, with or without new settings waiting, and for an agent with no mid-reply form", () => {
   expect(sendNowState(member(), behindReply, [msg(11)], undefined, AT_WORK)).toBeNull();
   expect(sendNowState(member({ held: HELD }), behindReply, [msg(11)], undefined, AT_WORK)).toBeNull();
   // The agent's own reply as its helpers report back is one.
   expect(sendNowState(member({ held: { ...HELD, owed: "report" } }), behindReply, [msg(11)], undefined, AT_WORK)).toBeNull();
 });
 
-test("helpers at work and no reply running, with only what it may answer around waiting: no bar, whatever else it may be waiting its turn for", () => {
+test("no reply running, with only what it may answer around waiting: no bar, whatever else it may be waiting its turn for", () => {
   const finishing = member({ statusDetail: "Finishing helpers before your new settings apply", held: HELD });
   expect(sendNowState(finishing, heldOnly, [msg(11)], undefined, AT_WORK)).toBeNull();
   // In a group chat, its turn waits for another agent's reply: "waiting for its helpers" would be untrue.
@@ -238,7 +243,7 @@ test("a usage limit and the agent's own wake-up say what they always said, with 
   expect(draw(sendNowLine(others!))).not.toContain("<button");
 });
 
-test("no helpers at work: the bar and Send now, as ever, new settings waiting or not", () => {
+test("a hub before the one rule with no helpers at work: the bar and Send now, as ever, new settings waiting or not", () => {
   const plain = sendNowState(member(), behindReply, [msg(11)], undefined, DONE);
   expect(plain).toEqual({ kind: "reply" });
   expect(sendNowLine(plain!)).toEqual({ text: "Your message is waiting for this reply to finish.", action: "Send now" });
@@ -256,7 +261,7 @@ test("a hub that doesn't say messagesFlow holds the message itself: its buttons 
   expect(quietWait(member(), behindReply, [msg(11)])).toBeNull();
 });
 
-test("the small label: on your newest message that goes when the reply ends, and only while that's so", () => {
+test("the line under a message: on your newest one that goes when the reply ends, and only while that's so", () => {
   expect(quietWait(member(), behindReply, [msg(9), msg(11), msg(12)], undefined, AT_WORK)).toBe("m12");
   expect(quietWait(member({ held: HELD }), behindReply, [msg(11)], undefined, AT_WORK)).toBe("m11");
   expect(quietWaitWords()).toBe("Goes when this reply ends.");
@@ -269,7 +274,7 @@ test("the small label: on your newest message that goes when the reply ends, and
   expect(quietWait(member(), behindReply, [msg(11, { text: "@codex you take this" })], (m) => !m.text.startsWith("@codex"), AT_WORK)).toBeNull();
 });
 
-test("an agent only waiting for its helpers so a change can apply isn't in the way of Try again or Answer now, for as long as they run", () => {
+test("an agent only waiting for its helpers so a change can apply isn't in the way of Try again, for as long as they run", () => {
   for (const statusDetail of ["Finishing helpers before your new settings apply", "Finishing helpers before your account switch applies", "Finishing helpers before your permission change applies", "Finishing helpers before your changes apply"]) expect(onlyFinishingHelpers(member({ statusDetail }))).toBe(true);
   // Anything else it says, or any other state, is it working.
   expect(onlyFinishingHelpers(member({ statusDetail: null }))).toBe(false);
@@ -295,13 +300,58 @@ describe("as the chat draws it", () => {
   const room = { id: "r", name: "Job", cwd: "/tmp/job", mode: "direct", leadMemberId: null, maxHops: 0, rounds: 1, parallel: false, createdAt: 1000, updatedAt: 1000, archived: false, chat: { provider: "claude", origin: "web" } } as unknown as Room;
   const running = (status: BackgroundTask["status"]): BackgroundTask => ({ id: "h1", kind: "local_agent", description: "Checking the work", agentType: null, workflow: null, background: true, status, startedAt: NOW - MIN, endedAt: status === "running" ? null : NOW, tokens: null, toolUses: null, lastTool: null, summary: null, error: null });
   const person = (patch: Partial<Member> = {}) => ({ roomId: "r", handle: "claude", provider: "claude", model: "m", role: "", permissionMode: "full", config: {}, createdAt: 1000, position: 0, ...member(patch) }) as unknown as Member;
-  const draws = (m: Member, opts: { flows?: boolean; task?: BackgroundTask["status"] }) => {
+  /** `rule`: a hub with the one rule (HubInfo.flowsIn, which says messagesFlow too). `flows`: one before it, with the switch on or off; neither: older still. */
+  const draws = (m: Member, opts: { rule?: boolean; flows?: boolean; task?: BackgroundTask["status"] }) => {
     const turns = behindReply;
-    Object.assign(first, { status: "open", syncing: false, hub: { version: "0.6.7", hostname: "h", platform: "darwin", workspaceRoot: "/", publicUrl: null, ...(opts.flows === undefined ? {} : { messagesFlow: opts.flows }) }, tasks: opts.task ? { mb1: [running(opts.task)] } : {}, members: { mb1: m }, approvals: {}, roomData: { r: { messages: [msg(11)], turns: Object.fromEntries(turns.map((t) => [t.id, t])), activities: {}, loaded: true, loading: false, error: null, hasMore: false, totals: null } } });
+    Object.assign(first, { status: "open", syncing: false, hub: { version: "0.6.7", hostname: "h", platform: "darwin", workspaceRoot: "/", publicUrl: null, ...(opts.rule ? { messagesFlow: true, flowsIn: true } : opts.flows === undefined ? {} : { messagesFlow: opts.flows }) }, tasks: opts.task ? { mb1: [running(opts.task)] } : {}, members: { mb1: m }, approvals: {}, roomData: { r: { messages: [msg(11)], turns: Object.fromEntries(turns.map((t) => [t.id, t])), activities: {}, loaded: true, loading: false, error: null, hasMore: false, totals: null } } });
     return renderToStaticMarkup(createElement(WorkingPanel, { room, members: [m] }));
   };
 
-  test("the bar goes only for a hub that delivers it by itself, and only while helpers work", () => {
+  test("a hub with the one rule: never the bar for a message behind a running reply, helpers or not, and what must hold still says so with nothing to tap", () => {
+    for (const task of [undefined, "running", "completed"] as const) {
+      const html = draws(person(), { rule: true, task });
+      expect(html).not.toContain("send-now");
+      expect(html).not.toContain("Send now");
+      expect(html).not.toContain("Answer now");
+      expect(draws(person({ held: HELD }), { rule: true, task })).not.toContain("send-now");
+    }
+    for (const [change, words] of [["account", "your account switch applies first."], ["permissions", "your permission change applies first."], ["other", "your changes apply first."]] as const) {
+      const held = draws(person({ held: { change, helpers: true } }), { rule: true });
+      expect(held).toContain(`Your message is waiting for this reply and its helpers to finish, so ${words}`);
+      expect(held).toContain("send-now paused");
+      expect(held).not.toContain("<button class=\"btn small primary\"");
+    }
+  });
+
+  test("a hub with the one rule: under a message the reply was handed, one quiet line with Interrupt, whatever it has to say", () => {
+    const note = (turnPatch: Partial<Turn> = {}, m: Partial<Member> = {}) => {
+      draws(person(m), { rule: true });
+      return renderToStaticMarkup(createElement(ReadNowNote, { room, turn: turn({ status: "running", unread: ["m11"], ...turnPatch }), agentName: "Claude Code" }));
+    };
+    const line = note();
+    expect(line).toContain("msg-quiet");
+    expect(line).toContain("Claude Code reads this at its next step.");
+    expect(line).toContain(">Interrupt</button>");
+    // Never the older hub's card or its words.
+    for (const old of ["read-now", "Read it now", "Stop it and read now", "Send now"]) expect(line).not.toContain(old);
+    // While the step is being stopped: the same line, saying so, with nothing to tap twice.
+    const stopping = note({ readingNow: true });
+    expect(stopping).toContain("msg-quiet");
+    expect(stopping).toContain("Stopping the current step so Claude Code reads this now…");
+    expect(stopping).not.toContain("<button");
+    // It's waiting for your answer to a request: answering that moves it on, so that's what it says, with no button.
+    draws(person(), { rule: true });
+    Object.assign(first, { approvals: { a1: { id: "a1", turnId: "t", status: "pending" } } });
+    const approving = renderToStaticMarkup(createElement(ReadNowNote, { room, turn: turn({ status: "running", unread: ["m11"] }), agentName: "Claude Code" }));
+    expect(approving).toContain("Claude Code reads this once you answer its request above.");
+    expect(approving).not.toContain("<button");
+    // Crosstalk's own agent can't be made to read it sooner: it says when, and offers nothing that can't happen.
+    const builtin = note({}, { provider: "builtin" });
+    expect(builtin).toContain("Claude Code reads this at its next step.");
+    expect(builtin).not.toContain("<button");
+  });
+
+  test("a hub before the one rule: the bar goes only where it delivers a message by itself, and only while helpers work", () => {
     expect(draws(person(), { flows: true, task: "running" })).not.toContain("send-now");
     expect(draws(person({ held: HELD }), { flows: true, task: "running" })).not.toContain("send-now");
     expect(draws(person(), { flows: true, task: "running" })).not.toContain("<button class=\"btn small primary\"");
@@ -313,7 +363,7 @@ describe("as the chat draws it", () => {
     expect(account).not.toContain("Send now</button>");
   });
 
-  test("the switch off, with new settings waiting and no reply running: the bar and Answer now; an account switch or the like still has no button", () => {
+  test("a hub before the one rule with the switch off, new settings waiting and no reply running: the bar and Answer now; an account switch or the like still has no button", () => {
     const finishing = (held: Member["held"]) => {
       const m = person({ statusDetail: "Finishing helpers before your new settings apply", held });
       Object.assign(first, { status: "open", syncing: false, hub: { version: "0.6.7", hostname: "h", platform: "darwin", workspaceRoot: "/", publicUrl: null, messagesFlow: false }, tasks: { mb1: [running("running")] }, members: { mb1: m }, approvals: {}, roomData: { r: { messages: [msg(11)], turns: Object.fromEntries(heldOnly.map((t) => [t.id, t])), activities: {}, loaded: true, loading: false, error: null, hasMore: false, totals: null } } });
@@ -331,7 +381,7 @@ describe("as the chat draws it", () => {
     }
   });
 
-  test("a message handed over by itself: a small label and no Read it now, until the helpers are done", () => {
+  test("a hub before the one rule, a message handed over by itself: a small label with nothing to tap, and Read it now once the helpers are done", () => {
     const note = (opts: { flows?: boolean; task?: BackgroundTask["status"] }) => {
       draws(person(), opts);
       return renderToStaticMarkup(createElement(ReadNowNote, { room, turn: turn({ status: "running", unread: ["m11"] }), agentName: "Claude Code" }));
@@ -340,10 +390,12 @@ describe("as the chat draws it", () => {
     expect(quiet).toContain("msg-quiet");
     expect(quiet).toContain("Claude Code reads this at its next step.");
     expect(quiet).not.toContain("<button");
+    expect(quiet).not.toContain("Interrupt");
     for (const opts of [{ flows: true, task: "completed" as const }, { flows: false, task: "running" as const }, { task: "running" as const }]) {
       const full = note(opts);
       expect(full).toContain("read-now");
       expect(full).toContain(">Read it now</button>");
+      expect(full).not.toContain("Interrupt");
     }
   });
 });

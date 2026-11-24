@@ -1,9 +1,9 @@
 import { expect, test } from "bun:test";
 import { isServiceOnlyAgent } from "@crosstalk/shared";
-import { ENDPOINT_PRESETS, KIMI_PRESET, SERVICE_PRESETS, presetNoteHolds, presetSteps, servicePreset } from "./presets";
+import { ENDPOINT_PRESETS, KIMI_PRESET, SERVICE_PRESETS, presetFields, presetNoteHolds, presetSteps, servicePreset } from "./presets";
 
 test("the sheet lists the services the spec names, in its order, Kimi first", () => {
-  expect(SERVICE_PRESETS.map((p) => p.title)).toEqual(["Kimi", "DeepSeek", "Mistral", "OpenRouter", "Groq", "xAI", "NanoGPT", "Refuseless", "Featherless", "Venice", "Google Gemini", "A server on this machine", "Another server"]);
+  expect(SERVICE_PRESETS.map((p) => p.title)).toEqual(["Kimi", "DeepSeek", "Mistral", "OpenRouter", "Groq", "xAI", "NanoGPT", "Refuseless", "Featherless", "Venice", "Google Gemini", "A model on this machine", "Something else"]);
   expect(new Set(SERVICE_PRESETS.map((p) => p.id)).size).toBe(SERVICE_PRESETS.length);
 });
 
@@ -69,7 +69,7 @@ test("Venice: its API address, its key page, and the one thing Crosstalk does fo
   expect(SERVICE_PRESETS.filter((p) => p.note).map((p) => p.id)).toEqual(["nanogpt", "refuseless", "featherless", "venice", "local"]);
   const local = servicePreset("local")!;
   expect([local.protocol, local.agent, local.kind]).toEqual(["chat", "codex", "local"]);
-  expect(local.note).toBe("Crosstalk talks to it in the Chat Completions style, which these servers handle best.");
+  expect(local.note).toBe("Crosstalk talks to it in the Chat Completions style, which these programs handle best.");
   expect(local.note!.length).toBeLessThan(90);
   // A pinned style has to be one a preset's own agent can speak, or it would never be used.
   // (Crosstalk's own agent and OpenCode speak Chat Completions only.)
@@ -104,4 +104,13 @@ test("a note that says which agent runs a service is shown only while that's tru
   for (const agent of ["opencode", "codex", "claude"] as const) expect(presetNoteHolds(nano, agent, openCode)).toBe(false);
   // Every other preset's note names no agent, and stays whichever is picked.
   for (const p of SERVICE_PRESETS.filter((x) => x.note && x.id !== "refuseless" && x.id !== "nanogpt")) expect(presetNoteHolds(p, "codex", {})).toBe(true);
+});
+
+test("the Kimi preset fills in Moonshot's address for each agent", () => {
+  expect(presetFields(KIMI_PRESET, "claude")).toEqual({ baseUrl: "https://api.moonshot.ai/anthropic", models: "kimi-k3.1-pro, kimi-k3.1-pro-highspeed", context: "1048576", label: "Kimi K3.1 Pro" });
+  expect(presetFields(KIMI_PRESET, "codex")?.baseUrl).toBe("https://api.moonshot.ai");
+  expect(presetFields(KIMI_PRESET, "gemini")).toBeNull();
+  expect(KIMI_PRESET.title).toBe("Kimi K3.1 Pro (Moonshot API)");
+  expect(KIMI_PRESET.help).toContain("about $2 per million tokens in and $10 out (Oct 2026)");
+  expect(KIMI_PRESET.keyFrom.label).toBe("platform.kimi.ai");
 });

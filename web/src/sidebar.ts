@@ -1,8 +1,27 @@
 import { create } from "zustand";
 import { FOLDED_KEY, readFolded, writtenFolded } from "./chatList";
 import type { NewChatTarget } from "./newChat";
+import { openedOver } from "./back";
 
 const KEY = "crosstalk.sidebar.collapsed";
+const WIDTH_KEY = "crosstalk.sidebar.width";
+/** How wide the docked chats are unless dragged wider or narrower, and how far the drag goes. */
+export const SIDEBAR_WIDTH = 272;
+export const SIDEBAR_MIN = 220;
+export const SIDEBAR_MAX = 480;
+
+/** A width the docked chats can have: whole pixels, within the limits. */
+export const sidebarWidth = (px: number) => Math.round(Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, Number.isFinite(px) ? px : SIDEBAR_WIDTH)));
+
+/** The width this device left the docked chats at (a browser that refuses storage, or never dragged: the usual one). */
+function savedWidth(): number {
+  try {
+    const n = Number(localStorage.getItem(WIDTH_KEY));
+    return n > 0 ? sidebarWidth(n) : SIDEBAR_WIDTH;
+  } catch {
+    return SIDEBAR_WIDTH;
+  }
+}
 /** The drawer's search is kept this long after it closes. */
 const QUERY_KEPT_MS = 5 * 60_000;
 
@@ -47,6 +66,16 @@ interface SidebarState {
    * in) when the drawer turns into the docked list as a foldable unfolds, and back.
    */
   creating: NewChatTarget | null;
+  /** How wide the docked chats are, in the page's own pixels: dragged at their edge on a computer, kept on this device. */
+  width: number;
+  /**
+   * Asked for from the keyboard (shortcuts.ts): the search to type in, or the New chat menu. A count, so asking twice
+   * asks twice; the list answers when it's drawn (the drawer opens first, on a phone).
+   */
+  asked: { search: number; create: number };
+  /** `keep` false while a drag is still going: kept on this device when it ends. */
+  setWidth(px: number, keep?: boolean): void;
+  ask(what: "search" | "create"): void;
   setCollapsed(v: boolean): void;
   setDrawer(v: boolean): void;
   setAll(key: string, v: boolean): void;
@@ -55,6 +84,9 @@ interface SidebarState {
   setScrollTop(top: number): void;
   setCreating(target: NewChatTarget | null): void;
 }
+
+/** The open drawer's entry in the browser's history (back.ts): how to take it out again once the drawer has closed. */
+let drawerClosed: (() => void) | null = null;
 
 /** The chat sidebar: docked (and collapsible) on wide screens, a slide-in drawer on phones. */
 export const useSidebar = create<SidebarState>((set, get) => ({
@@ -66,6 +98,22 @@ export const useSidebar = create<SidebarState>((set, get) => ({
   scrollTop: 0,
   closedAt: 0,
   creating: null,
+  width: savedWidth(),
+  asked: { search: 0, create: 0 },
+  setWidth(px, keep = true) {
+    const width = sidebarWidth(px);
+    if (width !== get().width) set({ width });
+    if (!keep) return;
+    try {
+      if (width === SIDEBAR_WIDTH) localStorage.removeItem(WIDTH_KEY);
+      else localStorage.setItem(WIDTH_KEY, String(width));
+    } catch {
+      // storage unavailable: the width lasts until reload
+    }
+  },
+  ask(what) {
+    set({ asked: { ...get().asked, [what]: get().asked[what] + 1 } });
+  },
   setCollapsed(v) {
     set({ collapsed: v });
     try {
@@ -76,9 +124,16 @@ export const useSidebar = create<SidebarState>((set, get) => ({
   },
   setDrawer(v) {
     if (v === get().drawer) return;
-    if (!v) set({ drawer: false, closedAt: Date.now() });
+    if (!v) {
+      set({ drawer: false, closedAt: Date.now() });
+      drawerClosed?.();
+      drawerClosed = null;
+      return;
+    }
     // An old search is gone by the next time the drawer opens.
-    else set({ drawer: true, ...(get().query && Date.now() - get().closedAt > QUERY_KEPT_MS ? { query: "" } : {}) });
+    set({ drawer: true, ...(get().query && Date.now() - get().closedAt > QUERY_KEPT_MS ? { query: "" } : {}) });
+    // The phone's Back closes it before it leaves the screen.
+    drawerClosed = openedOver(() => get().setDrawer(false));
   },
   setAll(key, v) {
     set({ all: { ...get().all, [key]: v } });

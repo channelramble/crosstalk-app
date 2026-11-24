@@ -6,7 +6,7 @@ import { test, expect, noHorizontalOverflow } from "./fixtures";
 
 // Crosstalk's own agent beside agent sign-in, on a phone (390 px), against a hub of the test's own (e2e/signinHub.ts with
 // its stand-in NanoGPT, the hub tests' fixtures/fake-nanogpt.ts). That agent has no sign-in: it runs on an AI service's
-// key. A NanoGPT chat whose key the service refuses says so in plain words with Open AI services as the way there, and
+// key. A NanoGPT chat whose key the service refuses says so in plain words with Open Accounts as the way there, and
 // nothing anywhere offers to sign the agent in; Test on the service's row then says the key was refused, and with the
 // right key Try again answers. No real AI service, BrowserOS neo, agent CLI or sign-in is asked anything.
 
@@ -17,7 +17,7 @@ const SHARED_HUB_API = "http://127.0.0.1:5198/api/**";
 /** The one key the stand-in NanoGPT takes. */
 const KEY = "sk-nano-test-key-0001";
 const PICK = "deepseek/deepseek-v4.1-flash-uncensored";
-const REFUSED = "NanoGPT refused the key — check it in Settings → AI services, then tap Try again.";
+const REFUSED = "NanoGPT refused the key — check it in Settings → Accounts, then tap Try again.";
 
 /** Once per engine, on a phone (390 px). */
 const onPhone = () => test.skip(!test.info().project.name.endsWith("-390"), "Once per engine, on a phone (390 px).");
@@ -95,7 +95,7 @@ async function shot(page: Page, name: string) {
   await page.screenshot({ path: join(dir, `agent-key-${name}.png`), animations: "disabled" });
 }
 
-test("a NanoGPT chat on Crosstalk's agent whose key is refused: the key and Open AI services, never a sign-in", async ({ page, playwright }) => {
+test("a NanoGPT chat on Crosstalk's agent whose key is refused: the key and Open Accounts, never a sign-in", async ({ page, playwright }) => {
   onPhone();
   test.setTimeout(90_000);
   const hub = await hubWithNano(playwright);
@@ -120,7 +120,7 @@ test("a NanoGPT chat on Crosstalk's agent whose key is refused: the key and Open
   const messages = page.locator(".messages");
   await expect(messages.getByText(REFUSED)).toBeVisible();
   // The way there, beside Try again; and no Sign in anywhere on the screen.
-  const open = messages.getByRole("button", { name: "Open AI services", exact: true });
+  const open = messages.getByRole("button", { name: "Open Accounts", exact: true });
   await expect(open).toBeVisible();
   await expect(messages.getByRole("button", { name: "Try again", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: /Sign in/ })).toHaveCount(0);
@@ -136,14 +136,12 @@ test("a NanoGPT chat on Crosstalk's agent whose key is refused: the key and Open
   await expect(row).toBeVisible();
   await expect(row.getByRole("button", { name: /Sign in/ })).toHaveCount(0);
   await expect(page.getByRole("group", { name: /Sign in to Crosstalk agent/ })).toHaveCount(0);
-  // Under Agents it's listed as what it is: it runs NanoGPT itself, with no sign-in; the sign-in there is Claude Code's and
-  // Codex's (both signed in on this hub, so their own sign-ins are services above too).
-  await expect(page.locator(".svc-agents-line")).toHaveText(
-    "Claude Code and Codex run the other services above. Crosstalk's own agent runs NanoGPT itself, with the key above, and needs no sign-in. Install Claude Code or Codex, sign in to your plan or add accounts here.",
-  );
+  // It's under Other services, saying which agent runs it: nothing about a sign-in anywhere on its row.
+  await expect(row).toContainText("runs with Crosstalk agent");
+  await expect(row).not.toContainText(/sign/i);
   // Test checks the key for real, and says what the chat said.
   await row.getByRole("button", { name: "Test", exact: true }).click();
-  await expect(row.locator(".svc-status")).toHaveText("Key refused");
+  await expect(row.locator(".svc-status")).toHaveText("Key was refused");
   await expect(row.getByText(/This key was refused\. Check that you copied all of it/)).toBeVisible();
   await row.scrollIntoViewIfNeeded();
   await noHorizontalOverflow(page);
@@ -155,7 +153,7 @@ test("a NanoGPT chat on Crosstalk's agent whose key is refused: the key and Open
   await page.goto(`/#/room/${roomId}`);
   await messages.getByRole("button", { name: "Try again", exact: true }).click();
   await expect(messages.getByText("Hello from NanoGPT.", { exact: true })).toBeVisible();
-  await expect(messages.getByRole("button", { name: "Open AI services", exact: true })).toHaveCount(0);
+  await expect(messages.getByRole("button", { name: "Open Accounts", exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: /Sign in/ })).toHaveCount(0);
   expect(await (await hub.api.get("/api/signin")).json()).toEqual({ needs: [], sessions: [] });
   await shot(page, "3-answered");

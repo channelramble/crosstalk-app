@@ -1,6 +1,7 @@
-// "Send now" while the agent is inside one long step: the message waits for that step. "Read it now" stops the step so
-// the agent answers right away, in the same reply, and the message is neither lost nor answered twice. Against the
-// fake Claude Code (queue mode, like the real CLI) and the fake Codex app-server; never a real agent.
+// A message sent while the agent is inside one long step goes into its reply by itself, and waits for that step. "Read
+// it now" (the app's Interrupt) stops the step so the agent answers right away, in the same reply, and the message is
+// neither lost nor answered twice. Against the fake Claude Code (queue mode, like the real CLI) and the fake Codex
+// app-server; never a real agent.
 import { describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -42,12 +43,14 @@ function chat(provider: "claude" | "codex", env: Record<string, string>) {
     for (const end = Date.now() + ms; Date.now() < end; await Bun.sleep(10)) if (what()) return;
     throw new Error("timed out waiting");
   };
-  /** Starts the long step, then sends a message and hands it to the running reply ("Send now"). */
+  /** Starts the long step, then sends a message: it goes into the running reply by itself. */
   const handOver = async (text: string) => {
     engine.postHumanMessage(room.id, "LONG_STEP: run the long check", "Phone");
     await until(() => store.listActivities(room.id, engine.runningTurns(room.id).map((t) => t.id)).some((a) => a.kind === "command" && a.status === "running"));
     const sent = engine.postHumanMessage(room.id, text, "Phone");
-    expect(await engine.sendNow(room.id)).toBe(true);
+    await until(() => !engine.queuedTurns(room.id).length);
+    // No tap sent it, and one from an older app has nothing left to send.
+    expect(await engine.sendNow(room.id)).toBe(false);
     const running = engine.runningTurns(room.id)[0];
     // The app shows under the message that it's read after the current step.
     expect(engine.liveTurn(store.getTurn(running.id)!)).toMatchObject({ unread: [sent.id], readingNow: false });
@@ -122,7 +125,7 @@ describe("Read it now: Claude Code", () => {
     }
   });
 
-  test("Stop still stops: a Stop while Read it now waits doesn't start the answer, then or a moment later, and Answer now delivers it once", async () => {
+  test("Stop still stops: a Stop while Read it now waits doesn't start the answer, then or a moment later, and Try again delivers it once", async () => {
     const t = chat("claude", { FAKE_CLAUDE_QUEUE: "1" });
     try {
       const { sent } = await t.handOver("also add tests");
@@ -184,7 +187,7 @@ describe("Read it now: Codex", () => {
     }
   });
 
-  test("Stop instead of Read it now: the message Codex's stopped turn dropped is unread, starts nothing, and Answer now delivers it once", async () => {
+  test("Stop instead of Read it now: the message Codex's stopped turn dropped is unread, starts nothing, and Try again delivers it once", async () => {
     const t = chat("codex", {});
     try {
       const { sent } = await t.handOver("also add tests");
@@ -246,7 +249,9 @@ test("while the reply waits on your approval, Read it now says to answer that (s
   engine.postHumanMessage(room.id, "publish it", "Phone");
   for (let i = 0; i < 200 && !store.listPendingApprovals().length; i++) await Bun.sleep(5);
   engine.postHumanMessage(room.id, "use the beta tag", "Phone");
-  expect(await engine.sendNow(room.id)).toBe(true);
+  // In the reply by itself, to be read once the request is answered: a tap has nothing left to send.
+  expect(await engine.sendNow(room.id)).toBe(false);
+  expect(engine.liveTurn(engine.runningTurns(room.id)[0]).unread).toHaveLength(1);
   await expect(engine.readNow(room.id)).rejects.toThrow("waiting for your approval");
   expect(stopped).toBe(0);
   engine.decideApproval(store.listPendingApprovals()[0].id, "approve", "Phone");
@@ -282,7 +287,8 @@ test("Read it now that can't stop the step says so: the message is read after it
   engine.postHumanMessage(room.id, "run the deploy", "Phone");
   for (let i = 0; i < 200 && !engine.runningTurns(room.id).length; i++) await Bun.sleep(5);
   engine.postHumanMessage(room.id, "also bump the version", "Phone");
-  expect(await engine.sendNow(room.id)).toBe(true);
+  // In the reply by itself: a tap has nothing left to send.
+  expect(await engine.sendNow(room.id)).toBe(false);
   // Not "it has just read it": the step goes on, and the message waits for it.
   await expect(engine.readNow(room.id)).rejects.toThrow("Couldn't stop the step: Claude Code reads this after it.");
   const turn = engine.runningTurns(room.id)[0];

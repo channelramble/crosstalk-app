@@ -40,7 +40,7 @@ gemini mcp add --scope user crosstalk-setup ~/.local/bin/crosstalk-hub setup-mcp
 
 With a data folder other than `~/.crosstalk`, pass it on: `-e CROSSTALK_HOME=/path` (Claude Code before `--`, Gemini CLI
 last) or `--env CROSSTALK_HOME=/path` (Codex). The checklist's own commands that run the hub's program (`connect.cli`,
-`pair`) start with `CROSSTALK_HOME=/path` then. In the app, Settings → Set up with an AI agent has these commands with
+`pair`) start with `CROSSTALK_HOME=/path` then. In the app, Settings → Machines → Advanced → Set up with an AI agent has these commands with
 Copy, and "Add for me" runs them on the machine.
 
 Then the person tells the agent: "Use the crosstalk-setup tools to finish setting up Crosstalk on this machine; ask me
@@ -101,14 +101,13 @@ really never leaves the machine.
 - `state`: `done`; `missing` (an agent can do it with the person's OK); `user` (only the person can); `unknown`
   (couldn't check, or waits for an item above).
 - `fix`: `text` always; then any of `command` (run on this machine), `password` (the person runs it), `screen` (where in
-  the app, e.g. "Settings → This Mac"), `target` (that Settings section's element id) and `url`. `null` when done.
+  the app, e.g. "Settings → Machines → This Mac"), `target` (that Settings section's element id) and `url`. `null` when done.
 - `summary` counts required items only.
-- `group`: `hub`, `network`, `devices`, `agents`, `services`, `mac`, `machines` or `pool`.
+- `group`: `hub`, `network`, `devices`, `agents`, `services`, `mac` or `machines`.
 
 The items, in their order: `service`, `version`, `tailscale`, `https`, `public-url`, `devices`, `push`, `agent.claude`,
 `agent.codex` (and `agent.gemini`, `agent.antigravity`, `agent.muse`, `agent.opencode` once installed), `browseros`, `services`, on a Mac
-`mac.autologin`, `mac.power`, `mac.full-disk`, `mac.updates` (and `mac.dialogs` while any wait), `machines`, and `pool`
-once a model pool is set up.
+`mac.autologin`, `mac.power`, `mac.full-disk`, `mac.updates` (and `mac.dialogs` while any wait), and `machines`.
 
 `crosstalk-hub setup` exits 0 whenever it printed a checklist, 1 for a usage error.
 
@@ -134,13 +133,17 @@ service (`crosstalk-hub`, logging to the journal).
 
 ## version
 
-Crosstalk has no update feed. A newer build shows only when it's installed at the hub's path and waits for a restart
+Crosstalk has no update feed. A newer build shows only when it's installed at the hub's path, or waits beside it as
+`crosstalk-hub.next` (the hub puts that one in place itself as it restarts), and waits for a restart
 (`staged`), or when a linked machine runs one.
 
 - Staged (`missing`): restart the hub once no chat is working. Where the idle watcher is installed
   (`~/.crosstalk/bin/restart-when-idle.sh`), check it isn't running already (`pgrep -f restart-when-idle`), then start it:
-  `nohup ~/.crosstalk/bin/restart-when-idle.sh >> ~/Library/Logs/Crosstalk/restart-when-idle.log 2>&1 &`. It waits for
-  five idle minutes, then restarts the hub. Without it, ask the person: `launchctl kickstart -k gui/$(id -u)/com.crosstalk.hub`
+  `nohup ~/.crosstalk/bin/restart-when-idle.sh >> ~/Library/Logs/Crosstalk/restart-when-idle.log 2>&1 &` (on Linux its
+  log goes in the data folder: `mkdir -p ~/.crosstalk/logs && nohup ~/.crosstalk/bin/restart-when-idle.sh >>
+  ~/.crosstalk/logs/restart-when-idle.log 2>&1 &`; the item's fix gives the line for this machine). It waits for
+  five idle minutes, then restarts the hub. It reads the hub's database with the `sqlite3` command and says so at once
+  when that's missing (`sudo apt install -y sqlite3`). Without it, ask the person: `launchctl kickstart -k gui/$(id -u)/com.crosstalk.hub`
   or `systemctl --user restart crosstalk-hub` stops every reply that's running.
 - A linked machine runs a newer version (`user`): the person updates this one the way it was installed.
 - Never update a running Mac hub with `install-macos.sh`: it restarts at once.
@@ -213,13 +216,13 @@ The person pairs their phone (and any computer) once.
    Share → Add to Home Screen, and open it from that icon from then on.
 4. Never type the code anywhere yourself. Each code works once, for the minutes given.
 
-From a paired device, more are paired in Settings → Devices → Pair a new device.
+From a paired device, more are paired in Settings → This device → Paired devices → Pair a new device.
 
 ## push
 
 Notifications tell the person when an agent needs an OK, asks a question or finishes.
 
-- None on (`user`): on the phone, open Crosstalk (on an iPhone from its Home Screen icon), then Settings → Devices → turn
+- None on (`user`): on the phone, open Crosstalk (on an iPhone from its Home Screen icon), then Settings → This device → Notifications → turn
   on notifications, and allow them when asked.
 - iPhones need the https address (`public-url`) first; without it Apple refuses the hub's notifications.
 
@@ -231,8 +234,8 @@ Chats run Claude Code or Codex, so one of the two is needed: until one is instal
 is optional. Gemini CLI, Antigravity CLI or Muse installed alone doesn't count.
 
 - Not installed (`missing`): `curl -fsSL https://claude.ai/install.sh | bash` (Anthropic's official installer, into
-  `~/.local/bin`), or Settings → AI services → Claude Code → Install.
-- Not signed in (`user`): the person signs in from Settings → AI services → Claude Code → Sign in (from the phone), or at
+  `~/.local/bin`), or Settings → Accounts → Claude Code → Install.
+- Not signed in (`user`): the person signs in from Settings → Accounts → Claude Code → Sign in (from the phone), or at
   the machine with `claude auth login`. Don't do the sign-in for them.
 - Then `recheck_agents`.
 
@@ -240,9 +243,10 @@ is optional. Gemini CLI, Antigravity CLI or Muse installed alone doesn't count.
 
 Codex, OpenAI's agent CLI, with the person's ChatGPT plan.
 
-- Not installed (`missing`): `npm install -g --prefix "$HOME/.npm-global" @openai/codex@latest` (needs Node.js; on a Mac
-  `brew install node`), or Settings → AI services → Codex → Install.
-- Not signed in (`user`): Settings → AI services → Codex → Sign in (a one-time code for chatgpt.com), or `codex login` at
+- Not installed (`missing`): Settings → Accounts → Codex → Install, or the checklist's command: it downloads OpenAI's
+  own ready-made build for this machine into `~/.local/bin/codex`. No Node.js is needed. (A copy that npm installed
+  under `~/.npm-global` before keeps being updated with npm.)
+- Not signed in (`user`): Settings → Accounts → Codex → Sign in (a one-time code for chatgpt.com), or `codex login` at
   the machine.
 - Then `recheck_agents`.
 
@@ -328,7 +332,7 @@ and check things as them. Crosstalk doesn't need it; it's offered once and left 
 Optional. AI services are models other than the agents' own: a model server on this machine (Ollama, LM Studio,
 llama.cpp, mlx-lm, vLLM) or an online service with an API key, used through Claude Code or Codex.
 
-- The person adds them in Settings → AI services → Add an AI service, or Found on this machine → Use it. Keys are typed
+- The person adds them in Settings → Accounts → Add an account, or Found on this machine → Use it. Keys are typed
   there by the person, never by you. A server already running on this machine is also in their New chat menu: one tap
   there adds it and starts a chat on it, with the same checks.
 - `test_ai_service` checks an address first (free requests only): whether it answers, its models, and which agent can
@@ -340,7 +344,7 @@ On a Mac the hub is a LaunchAgent: after an update or a power cut it starts only
 makes the Mac do that by itself.
 
 - Off (`user`): `sudo sysadminctl -autologin set -userName <user> -password -`, which asks for the sudo password and
-  then the account's password, so the person runs it: from the phone, Settings → This Mac → Turn on automatic login opens
+  then the account's password, so the person runs it: from the phone, Settings → Machines → This Mac → Turn on automatic login opens
   it in a terminal on the Mac with a field for the password.
 - FileVault on (`user`): automatic login can't be on with FileVault. Only the person decides that, at the Mac (System
   Settings → Privacy & Security).
@@ -349,7 +353,7 @@ makes the Mac do that by itself.
 
 The Mac should never sleep, and start up again after a power cut.
 
-- (`user`): `sudo pmset -a sleep 0 autorestart 1 womp 1`, run by the person: Settings → This Mac → Keep it on, from the
+- (`user`): `sudo pmset -a sleep 0 autorestart 1 womp 1`, run by the person: Settings → Machines → This Mac → Keep it on, from the
   phone.
 
 ## mac.full-disk
@@ -369,7 +373,7 @@ again afterwards. Without automatic login, see `mac.autologin`.
 ## mac.dialogs
 
 A question from macOS (a privacy dialog) waits on the Mac's screen, and the program that asked waits with it. Only
-someone at the Mac can answer it: no software can. From the phone, Settings → This Mac can stop the program asking.
+someone at the Mac can answer it: no software can. From the phone, Settings → Machines → This Mac can stop the program asking.
 
 ## machines
 
@@ -380,15 +384,6 @@ Optional. Other machines running Crosstalk (a Linux box beside the Mac, say) can
 - A linked machine that runs an older Crosstalk (`user`) needs updating there; for a Linux machine, Set up a Linux
   machine gives the command that installs this version.
 - One that can't be reached: check that it's on and on the tailnet, then Connect in Settings → Machines.
-
-## pool
-
-Shown once a model pool is set up: one local model split across several machines' GPUs (docs/MODEL-POOL.md).
-
-- Error (`missing`): the detail says what's wrong in plain words. Fix that, then the person presses Start in
-  Settings → Model pool.
-- Off (`missing`, optional): it's set up but not running; Start in Settings → Model pool.
-- Never probe a pool machine's helper port yourself while the pool runs: helpers serve one client at a time.
 
 ## Troubleshooting
 

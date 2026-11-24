@@ -19,7 +19,7 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, platform } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { serviceKeyWords, type ApprovalDecision, type ApprovalKind, type PermissionMode } from "@crosstalk/shared";
+import { settingsPath, serviceKeyWords, type ApprovalDecision, type ApprovalKind, type PermissionMode } from "@crosstalk/shared";
 import { endGroup } from "../util/process";
 import { discoverMcp } from "../browseros";
 import { RUN_DIR } from "../config";
@@ -275,7 +275,7 @@ const requestJson = (body: unknown): string => JSON.stringify(body, (_key, value
 
 /** A reply's end when the service says the conversation is too long for the model and a summary didn't make room. */
 const tooLongWords = (model: string, summarised: boolean, said: string | null) =>
-  `This conversation is too long for ${model}${summarised ? ", even summarised" : ", and it couldn't be summarised to make room"}. To go on, edit your last message to make it shorter, start a new chat and say where the work stands, or pick a model that holds more in this chat's settings.${said ? ` (The service said: ${said})` : ""}`;
+  `This chat is too long for ${model}${summarised ? ", even summarised" : ", and it couldn't be summarised to make room"}. To go on, edit your last message to make it shorter, start a new chat and say where the work stands, or pick a model that holds more in this chat's settings.${said ? ` (The service said: ${said})` : ""}`;
 
 /** Package and build files: what makes a folder a project with checks to run, besides a git repository around it (inProject). */
 const PROJECT_FILES = new Set([
@@ -597,7 +597,7 @@ export function serviceError(status: number, body: string, label: string, model:
   // (Carry on after limits is off) the way on is to wait a little and try again.
   if (status === 429) return new ServiceError(`${label} has had too many requests from this account just now${said && !/^too many requests\.?$/i.test(said) ? ` (${said})` : ""}. Wait a moment, then tap Try again.`, status, retryAfter);
   if (status >= 500) return new ServiceError(`${label} had a problem (error ${status}${said ? `: ${said}` : ""}). Wait a minute, then tap Try again.`, status, null, true);
-  return new ServiceError(`${label} turned the request down (error ${status}${said ? `: ${said}` : ""}). Check the model and its settings in Settings → AI services, then tap Try again.`, status, null, false, null, said || null, tooLong);
+  return new ServiceError(`${label} turned the request down (error ${status}${said ? `: ${said}` : ""}). Check the model and its settings in ${settingsPath("ai-services")}, then tap Try again.`, status, null, false, null, said || null, tooLong);
 }
 
 /**
@@ -743,7 +743,7 @@ export class BuiltinDriver implements AgentDriver {
   /** Where "Always allow" is kept when there's no saved session to read (a one-off, a test). */
   private kept: Record<string, unknown>;
   /**
-   * Messages handed over mid-reply ("Send now"), read at the next step. What a reply never read (it failed, was stopped,
+   * Messages handed over mid-reply (steer), read at the next step. What a reply never read (it failed, was stopped,
    * or ran out of steps first) is handed back as it ends (takeUnread): nothing is kept here for later.
    */
   private steered: { text: string; ids: string[] }[] = [];
@@ -886,7 +886,7 @@ export class BuiltinDriver implements AgentDriver {
 
   async runTurn(input: TurnInput, sink: TurnSink): Promise<TurnResult> {
     const ep = this.ctx.endpoint;
-    if (!ep) return { ok: false, error: "Crosstalk's agent runs on an AI service: pick one in this chat's settings (Settings → AI services adds them)." };
+    if (!ep) return { ok: false, error: `Crosstalk's agent needs an account to run on: pick one in this chat's settings (${settingsPath("ai-services")} adds them).` };
     const model = this.ctx.member.model || ep.models[0];
     if (!model) return { ok: false, error: `Pick a model for ${ep.label} in this chat's settings.` };
     const abort = new AbortController();
@@ -927,8 +927,8 @@ export class BuiltinDriver implements AgentDriver {
         // The summary couldn't be made: the reply fails, with the service's words where it answered (a refused key, money;
         // a limit waits for its reset, below) and Try again under them, never "nothing to do". Its card says why otherwise.
         if (made instanceof ServiceError) throw made;
-        if (made === "failed") return { ok: false, error: "The conversation couldn't be summarised, so the chat goes on as it is. Tap Try again, or start a new chat." };
-        sink.setText(made === "done" ? "Done: the conversation so far is summarised, and the chat goes on from the summary." : "There wasn't enough to summarise yet.");
+        if (made === "failed") return { ok: false, error: "The chat couldn't be summarised, so it goes on as it is. Tap Try again, or start a new chat." };
+        sink.setText(made === "done" ? "Done: the chat so far is summarised, and it goes on from the summary." : "There wasn't enough to summarise yet.");
         return { ok: true };
       }
       saved.turns.push({ at: saved.messages.length, ids: input.messageIds ?? [] });
@@ -1049,7 +1049,7 @@ export class BuiltinDriver implements AgentDriver {
             gap();
             continue;
           }
-          // A message handed over while this answer was being written (Send now) is read now, in a reply of its own below
+          // A message handed over while this answer was being written (steer) is read now, in a reply of its own below
           // it: this agent starts no reply by itself. Nothing awaits between here and the end, so one that comes later is
           // refused, and the waiting turn brings it.
           if (this.steered.length && step < MAX_STEPS - 1) continue;
@@ -1238,7 +1238,7 @@ export class BuiltinDriver implements AgentDriver {
     while (keepFrom > start + 1 && saved.messages[keepFrom]?.role === "tool") keepFrom--;
     const before = saved.messages.slice(0, keepFrom);
     if (before.length < 3) return "nothing";
-    const id = sink.activity({ kind: "notice", title: "Summarising the conversation so far", status: "running" });
+    const id = sink.activity({ kind: "notice", title: "Summarising the chat so far", status: "running" });
     const failed = (words: string) => sink.updateActivity(id, { status: "error", appendDetail: `Couldn't summarise: ${words}` });
     let part = before;
     let answer: Answer | null = null;
@@ -1274,7 +1274,7 @@ export class BuiltinDriver implements AgentDriver {
           return err;
         }
         if (retries >= SUMMARY_RETRIES || part.length < 3) {
-          failed("the conversation is too long for the model, even cut down.");
+          failed("the chat is too long for the model, even cut down.");
           return "failed";
         }
         log.info(`${this.ctx.member.id}: the summary's request is too long for the model too: sending less of it`);
@@ -1591,13 +1591,18 @@ export class BuiltinDriver implements AgentDriver {
   }
 
   /**
-   * What Send now handed the reply that just ended and it never read: it failed (a refused model, a server error, a
+   * What steer handed the reply that just ended and it never read: it failed (a refused model, a server error, a
    * limit…), was stopped, or ran out of steps first. Handed back, by message id, and forgotten here: this agent starts no
    * reply by itself, so a message kept in the driver was only ever lost (to a settings change, an idle end) while the hub
    * counted it read. The engine makes them unread again (Engine.giveBack).
    */
   takeUnread(): string[] {
     return this.steered.splice(0).flatMap((s) => s.ids);
+  }
+
+  /** It runs inside the hub; only the command it is running is a process of its own. */
+  pids(): number[] {
+    return this.child?.pid ? [this.child.pid] : [];
   }
 
   canEndWhenIdle(): boolean {
@@ -1607,7 +1612,7 @@ export class BuiltinDriver implements AgentDriver {
   async rewind(messageId: string): Promise<string[]> {
     const saved = this.load();
     const i = saved.turns.findIndex((t) => t.ids.includes(messageId));
-    if (i < 0) throw new Error("That message isn't in this conversation any more (it was summarised, or came before this chat's agent changed).");
+    if (i < 0) throw new Error("That message isn't in what the agent remembers any more (it was summarised, or came before this chat's agent changed).");
     const turn = saved.turns[i];
     saved.messages = saved.messages.slice(0, turn.at);
     saved.turns = saved.turns.slice(0, i);

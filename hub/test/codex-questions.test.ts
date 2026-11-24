@@ -785,7 +785,7 @@ describe("a chat's thread: before it's known, and when it can't be resumed", () 
       expect(methods.indexOf("thread/start")).toBeGreaterThan(methods.indexOf("thread/resume"));
       expect(sent().find((x) => x.method === "turn/start").params.threadId).toBe("th-1");
       expect(s.rec.saved).toContainEqual({ threadId: "th-1" });
-      expect(s.rec.notices).toEqual([expect.objectContaining({ kind: "notice", title: "Codex has lost this chat's earlier conversation" })]);
+      expect(s.rec.notices).toEqual([expect.objectContaining({ kind: "notice", title: "Codex no longer remembers this chat's earlier messages" })]);
     } finally { await d.dispose(); }
   });
 

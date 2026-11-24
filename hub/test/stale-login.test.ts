@@ -190,7 +190,7 @@ describe("the drivers report it, against the fake CLIs", () => {
     expect(stale).toMatchObject({ ok: false, auth: { kind: "stale" } });
     expect(stale.auth!.said).toContain("OAuth session expired and could not be refreshed");
     // In words a person can act on, even without the engine's recovery.
-    expect(stale.error).toContain("sign-in on the hub stopped working");
+    expect(stale.error).toContain("sign-in on this machine stopped working");
     const busy = await d.runTurn({ turnId: "t2", prompt: "REFRESH_BUSY please", systemNote: null }, quietSink());
     expect(busy.auth?.kind).toBe("busy");
     const restart = await d.runTurn({ turnId: "t3", prompt: "RESTART_TO_SIGN_IN please", systemNote: null }, quietSink());
@@ -378,7 +378,7 @@ describe("the engine starts the agent again once, then checks its sign-in", () =
     expect(reply.text).toContain("I looked at");
   });
 
-  test("Send now's message, handed to the process whose sign-in then fails, goes to the fresh one and is answered", async () => {
+  test("a message that went into the reply of a process whose sign-in then fails goes to the fresh one and is answered", async () => {
     // Process 1 takes the request, runs a step, writes, and fails as stale once a message was handed to it; process 2
     // answers. As Claude Code does, a message handed over mid-reply waits for its next step (here: never comes).
     const steered: { text: string; ids?: string[] }[] = [];
@@ -410,14 +410,15 @@ describe("the engine starts the agent again once, then checks its sign-in", () =
     const a = r.engine.postHumanMessage(r.room.id, "Refactor the parser", "Phone");
     await until(() => r.made.length === 1 && r.store.listActivities(r.room.id, r.store.listTurns(r.room.id).map((t) => t.id)).length > 0, "the first step");
     const b = r.engine.postHumanMessage(r.room.id, "Also: do NOT touch the lexer", "Phone");
-    expect(await r.engine.sendNowWhy(r.room.id)).toEqual({ sent: true });
+    // Into the running reply by itself: a tap from an older app finds it there.
+    expect(await r.engine.sendNowWhy(r.room.id)).toEqual({ sent: false, why: "answering" });
     expect(steered.map((x) => x.text)).toEqual(["Also: do NOT touch the lexer"]);
     failNow();
     await r.idle();
 
     const turns = r.store.listTurns(r.room.id);
     const reply = turns.find((t) => t.triggerMessageId === a.id)!;
-    // Its own turn was closed by Send now; the reply that had it carried on and answered it.
+    // Its own turn was closed as it went in; the reply that had it carried on and answered it.
     expect(turns.find((t) => t.triggerMessageId === b.id)?.status).toBe("stopped");
     expect(reply.status).toBe("done");
     expect(r.made).toHaveLength(2);
@@ -436,7 +437,7 @@ describe("the engine starts the agent again once, then checks its sign-in", () =
     expect(note.detail).toBe("It had already done part of the work, so Crosstalk asked it to carry on from where it got to, without doing those steps again. The message you sent while it worked went to it too.");
   });
 
-  test("Send now's message, when the reply is stopped before a fresh process has it: it's unread again, not lost", async () => {
+  test("a message that went into the reply, when the reply is stopped before a fresh process has it: it's unread again, not lost", async () => {
     let failNow!: () => void;
     const failed = new Promise<void>((res) => (failNow = res));
     let release!: () => void;
@@ -464,7 +465,8 @@ describe("the engine starts the agent again once, then checks its sign-in", () =
     await until(() => r.made.length === 1 && r.made[0].inputs.length === 1, "the first process");
     await Bun.sleep(20);
     const b = r.engine.postHumanMessage(r.room.id, "Also: do NOT touch the lexer", "Phone");
-    expect((await r.engine.sendNowWhy(r.room.id)).sent).toBe(true);
+    // Into the running reply by itself, and counted as read from there.
+    expect(await r.engine.sendNowWhy(r.room.id)).toEqual({ sent: false, why: "answering" });
     expect(r.store.getLastSeen(r.member.id).seq).toBeGreaterThanOrEqual(b.seq);
     failNow();
     await until(() => ending, "the old process to be ending");
@@ -639,7 +641,7 @@ describe("a stale sign-in, end to end", () => {
     h.app.engine.postHumanMessage(h.chat.id, "Plan the next release", "Phone");
     await h.idle();
     const [turn] = h.app.store.listTurns(h.chat.id);
-    const words = "Claude Code is signed out on Mac mini, so it couldn't answer. Sign in to it again (Settings → Agents → Claude Code → Sign in), then tap Try again.";
+    const words = "Claude Code is signed out on Mac mini, so it couldn't answer. Sign in to it again (Settings → Accounts → Claude Code → Sign in), then tap Try again.";
     expect(turn).toMatchObject({ status: "error", error: words });
     expect(h.app.store.getMessage(turn.replyMessageId!)!.text).toBe(`⚠️ ${words}`);
     // Never a loop: the stale process, one fresh one, and then it stopped.

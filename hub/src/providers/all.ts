@@ -1,5 +1,5 @@
 // Registers every provider module and agent driver. Imported once by main.ts.
-import { PROVIDER_INFO, type PermissionMode, type Provider } from "@crosstalk/shared";
+import { agentSettingsPath, PROVIDER_INFO, type PermissionMode, type Provider } from "@crosstalk/shared";
 import { registerProvider } from "./index";
 import { registerDriver } from "../agents";
 import type { DriverContext } from "../agents/driver";
@@ -19,7 +19,7 @@ import { OpenCodeDriver } from "../agents/opencode";
 import { opencodeProvider } from "./opencode";
 
 function needBin(ctx: DriverContext): string {
-  if (!ctx.bin) throw new Error(`${PROVIDER_INFO[ctx.member.provider as Provider].name} isn't installed on the hub. Install it under Settings → AI services.`);
+  if (!ctx.bin) throw new Error(`${PROVIDER_INFO[ctx.member.provider as Provider].name} isn't installed on this machine. Install it under ${agentSettingsPath(ctx.member.provider as Provider)}.`);
   return ctx.bin;
 }
 

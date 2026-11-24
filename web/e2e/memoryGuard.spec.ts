@@ -48,7 +48,7 @@ const squeezed = (over: Partial<MachineMemory> = {}): MachineMemory => ({
   holders: [
     // One Crosstalk started (it can be turned off from here) and one the person started (it can't).
     { what: "llama.cpp on port 9000", ours: true, section: "local-models", bytes: Math.round(16.9 * GiB) },
-    { what: "the model server on port 8080", ours: false, section: null, bytes: Math.round(3.8 * GiB) },
+    { what: "the model running on port 8080", ours: false, section: null, bytes: Math.round(3.8 * GiB) },
   ],
   at: Date.now(),
   ...over,
@@ -56,7 +56,7 @@ const squeezed = (over: Partial<MachineMemory> = {}): MachineMemory => ({
 
 test("the memory card appears when the machine runs out, names what's holding it, and goes when it's fine again", async ({ page }) => {
   await page.goto("/#/settings/local-models");
-  await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Your own models", exact: true })).toBeVisible();
   const path = await appStore(page);
   // Nothing to say: no card (a hub that can't read its machine shows nothing either).
   await expect(page.getByRole("heading", { name: "Memory" })).toHaveCount(0);
@@ -71,7 +71,7 @@ test("the memory card appears when the machine runs out, names what's holding it
   await expect(card).toContainText("9.6 GB has moved to the disk");
   await expect(card).toContainText("Crosstalk never stops anything by itself");
   // The person's own server gets words, not a button: the hub never ends what it didn't start.
-  await expect(card.getByRole("button", { name: /model server on port 8080/i })).toHaveCount(0);
+  await expect(card.getByRole("button", { name: /model running on port 8080/i })).toHaveCount(0);
   await expect(card).toContainText("Quit it on");
   await expect(page.locator("#memory .pill")).toHaveText("Full");
   // It fits a phone.

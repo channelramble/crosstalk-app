@@ -20,11 +20,18 @@ if [ -n "$CROSSTALK_RESTART_LOG" ]; then
 elif [ "$(uname -s)" = "Darwin" ]; then
   LOG="$HOME/Library/Logs/Crosstalk/restart-when-idle.log"
 else
-  LOG=/dev/stdout
+  # Standard output itself, not /dev/stdout: under systemd it's the journal's socket, which can't be opened by name.
+  LOG=""
 fi
 say() {
-  echo "$(date) $*" >> "$LOG"
+  if [ -n "$LOG" ]; then echo "$(date) $*" >> "$LOG"; else echo "$(date) $*"; fi
 }
+# The database is read with the sqlite3 command, which a Mac always has and a Linux server often doesn't: without it
+# nothing here could tell whether a chat is working, and this would wait an hour for nothing.
+if ! command -v sqlite3 >/dev/null 2>&1; then
+  say "the sqlite3 command isn't installed, and this needs it to see whether a chat is working. Install it (on Ubuntu or Debian: sudo apt install -y sqlite3), then run this again. Crosstalk wasn't restarted."
+  exit 2
+fi
 end=$(( $(date +%s) + 3600 ))
 idle_since=0
 # "running or queued|newest time (ms) anything moved" for a table with status, created_at, started_at and ended_at.

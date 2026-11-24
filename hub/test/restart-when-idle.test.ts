@@ -2,7 +2,7 @@
 // have no turn, so the script also reads the asks table; what the hub is busy with that its database doesn't show
 // (background work, wake-ups agents owe) it reads from the hub's run/busy.json. deploy/restart-when-turns-end.sh (a restart
 // asked for now) makes the same checks over 30 seconds. Here the scripts run for real against a temp database, with fake
-// date, sleep, launchctl, systemctl, curl and the installed hub first on their PATH (and a fake uname for Linux): time is a
+// date, sleep, launchctl, systemctl, curl, uname and the installed hub first on their PATH (so each test says whether it's a Mac or Linux, wherever it runs): time is a
 // counter that sleep advances, and "restarting" only writes a line. Nothing here can reach the real launchctl, the real
 // hub (its port included) or ~/.crosstalk.
 
@@ -36,7 +36,7 @@ interface Scenario {
   hooks?: Record<number, string>;
   /** The script is ended by its Nth sleep, so a hub that never goes idle can't loop. */
   maxSleeps?: number;
-  /** What `uname -s` says: Linux restarts the systemd user service instead of the LaunchAgent. */
+  /** What `uname -s` says (a Mac's Darwin unless given): Linux restarts the systemd user service instead of the LaunchAgent. */
   os?: "Linux";
   /** The hub's data in a folder of its own, given as CROSSTALK_HOME, while ~/.crosstalk holds a busy hub's database. */
   dataHome?: boolean;
@@ -48,6 +48,8 @@ interface Scenario {
   busyHooks?: Record<number, number | null>;
   /** deploy/restart-when-turns-end.sh instead: a restart asked for now. */
   now?: boolean;
+  /** A machine without the sqlite3 command (a Linux server often has none): only the fakes are on the PATH. */
+  noSqlite?: boolean;
 }
 
 /** What the hub writes (hub/src/busyFile.ts), for a count. */
@@ -96,7 +98,8 @@ function run(s: Scenario) {
   tool("date", `if [ "$1" = "+%s" ]; then cat "$FAKE_STATE/clock"; else echo "a fake time"; fi`);
   tool("launchctl", `echo "$* sleeps=$(cat "$FAKE_STATE/sleeps")" >> "$FAKE_STATE/launchctl.log"`);
   tool("systemctl", `if [ "$2" = "is-active" ]; then [ -z "$FAKE_STOPPED" ]; exit; fi\necho "$* sleeps=$(cat "$FAKE_STATE/sleeps")" >> "$FAKE_STATE/systemctl.log"`);
-  if (s.os === "Linux") tool("uname", `if [ "$1" = "-s" ]; then echo Linux; else /usr/bin/uname "$@"; fi`);
+  // Which system the script takes this for is the scenario's, not the machine's the tests run on: a Mac unless it says Linux.
+  tool("uname", `if [ "$1" = "-s" ]; then echo ${s.os ?? "Darwin"}; else /usr/bin/uname "$@"; fi`);
   tool(
     "sleep",
     [
@@ -118,7 +121,7 @@ function run(s: Scenario) {
   mkdirSync(join(home, ".local", "bin"), { recursive: true });
   writeFileSync(join(home, ".local", "bin", "crosstalk-hub"), `#!/bin/sh\n[ "$1" = version ] && echo 0.6.5\n`);
   chmodSync(join(home, ".local", "bin", "crosstalk-hub"), 0o755);
-  const PATH = `${bin}:${dirname(SQLITE!)}:/usr/bin:/bin`;
+  const PATH = s.noSqlite ? bin : `${bin}:${dirname(SQLITE!)}:/usr/bin:/bin`;
   // The fakes must win, or the script would restart the real hub (or ask it how it is).
   expect(Bun.which("launchctl", { PATH })).toBe(join(bin, "launchctl"));
   expect(Bun.which("systemctl", { PATH })).toBe(join(bin, "systemctl"));
@@ -129,7 +132,7 @@ function run(s: Scenario) {
   const env = { PATH, HOME: home, FAKE_STATE: state, FAKE_BUSY: busyFile, FAKE_MAX_SLEEPS: String(s.maxSleeps ?? 60), CROSSTALK_PORT: "9", CROSSTALK_RESTART_LOG: log, ...(dataHome ? { CROSSTALK_HOME: dataHome } : {}), ...s.env };
   const done = Bun.spawnSync(["/bin/sh", s.now ? NOW_SCRIPT : SCRIPT], { env, stdout: "pipe", stderr: "pipe", timeout: 60_000 });
   const lines = (name: string) => (existsSync(join(state, name)) ? readFileSync(join(state, name), "utf8").trim().split("\n") : []);
-  return { restarts: lines("launchctl.log"), systemd: lines("systemctl.log"), curls: lines("curl.log"), said: lines("restart.log"), sleeps: Number(readFileSync(join(state, "sleeps"), "utf8")), exit: done.exitCode, out: done.stdout.toString() };
+  return { restarts: lines("launchctl.log"), systemd: lines("systemctl.log"), curls: lines("curl.log"), said: lines("restart.log"), sleeps: Number(readFileSync(join(state, "sleeps"), "utf8")), exit: done.exitCode, out: done.stdout.toString(), err: done.stderr.toString() };
 }
 
 describe.skipIf(!SQLITE)("deploy/restart-when-idle.sh", () => {
@@ -243,6 +246,15 @@ describe.skipIf(!SQLITE)("deploy/restart-when-idle.sh", () => {
     const r = run({ busy: { count: 1 }, busyHooks: { 2: null } });
     expect(r.restarts).toEqual(["kickstart -k gui/" + process.getuid!() + "/com.crosstalk.hub sleeps=7"]);
   });
+
+  test("without the sqlite3 command (a Linux server often has none) it says so at once and what to install, and restarts nothing", () => {
+    const r = run({ os: "Linux", noSqlite: true });
+    expect(r.err).toContain("the sqlite3 command isn't installed");
+    expect(r.err).toContain("sudo apt install -y sqlite3");
+    expect(r.exit).toBe(2);
+    expect(r.sleeps).toBe(0);
+    expect(r.systemd).toEqual([]);
+  });
 });
 
 describe.skipIf(!SQLITE)("deploy/restart-when-turns-end.sh (a restart asked for now)", () => {
@@ -277,6 +289,14 @@ describe.skipIf(!SQLITE)("deploy/restart-when-turns-end.sh (a restart asked for 
   test("background work that never ends keeps it waiting: it doesn't restart", () => {
     const r = run({ now: true, busy: { count: 1 }, maxSleeps: 20 });
     expect(r.restarts).toEqual([]);
+    expect(r.systemd).toEqual([]);
+  });
+
+  test("without the sqlite3 command it says so at once in its log, and restarts nothing", () => {
+    const r = run({ now: true, os: "Linux", noSqlite: true });
+    expect(r.said).toEqual([expect.stringContaining("the sqlite3 command isn't installed")]);
+    expect(r.exit).toBe(2);
+    expect(r.sleeps).toBe(0);
     expect(r.systemd).toEqual([]);
   });
 });

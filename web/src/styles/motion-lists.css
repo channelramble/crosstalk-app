@@ -25,7 +25,7 @@
   --csb-bg: var(--bg);
 }
 .chat-sidebar.drawer {
-  --csb-bg: #0a0a0b;
+  --csb-bg: var(--drawer);
 }
 .csb-scroll :is(.csb-item:not(.open), .csb-group-head, .csb-empty, .csb-more, .csb-fold-said) {
   background-color: var(--csb-bg);
@@ -52,9 +52,7 @@
 @media (prefers-reduced-motion: no-preference) {
   /* ---- Press: rows and the list's own buttons shrink a touch while held (motion.css does .btn and .icon-btn). */
   .csb-chat,
-  button.csb-agent,
-  .csb-link,
-  .csb-waiting,
+  .csb-tab,
   .csb-storage,
   .nc-item {
     --press: var(--press-card);
@@ -64,14 +62,14 @@
   .csb-tray-btn {
     --press: var(--press-button);
   }
-  :is(.csb-chat, button.csb-agent, .csb-link, .csb-waiting, .csb-storage, .nc-item, .csb-brand, .csb-more, .csb-tray-btn) {
+  :is(.csb-chat, .csb-tab, .csb-storage, .nc-item, .csb-brand, .csb-more, .csb-tray-btn) {
     transition:
       background-color var(--dur-paint) var(--ease-fade),
       color var(--dur-paint) var(--ease-fade),
       scale var(--dur-press-out) var(--ease-bouncy);
   }
   /* In the list (a scroller), a moment's wait first: a finger that starts a scroll on a row never shrinks it. */
-  :is(.csb-chat, button.csb-agent, .csb-link, .csb-waiting, .csb-storage, .nc-item, .csb-brand, .csb-more, .csb-tray-btn):active:not(:disabled):not([aria-disabled="true"]) {
+  :is(.csb-chat, .csb-tab, .csb-storage, .nc-item, .csb-brand, .csb-more, .csb-tray-btn):active:not(:disabled):not([aria-disabled="true"]) {
     scale: var(--press);
     transition:
       background-color var(--dur-paint) var(--ease-fade),
@@ -183,7 +181,7 @@
     animation: csb-step-back var(--dur-fade) var(--ease-fade);
   }
   /* Held down: dimmed, nothing moves. */
-  :is(.csb-chat, button.csb-agent, .csb-link, .csb-waiting, .csb-storage, .nc-item, .csb-brand, .csb-more, .csb-tray-btn):active:not(:disabled):not([aria-disabled="true"]) {
+  :is(.csb-chat, .csb-tab, .csb-storage, .nc-item, .csb-brand, .csb-more, .csb-tray-btn):active:not(:disabled):not([aria-disabled="true"]) {
     opacity: 0.7;
   }
 }

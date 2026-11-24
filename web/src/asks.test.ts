@@ -242,10 +242,10 @@ test("a failed request is said in plain words, with the Settings button that hel
   expect(askProblem(err(409, "Codex isn't signed in.", "not_signed_in"))).toEqual({ text: "Codex isn't signed in.", fix: "signin" });
   expect(askProblem(err(409, "Request failed (409)", "busy")).text).toContain("busy");
   expect(askProblem(err(409, "Request failed (409)", "model_choice")).text).toContain("Choose a model");
-  expect(askProblem(err(404, "Not found")).text).toContain("Update the hub");
+  expect(askProblem(err(404, "Not found")).text).toContain("Update Crosstalk on it");
   // A 404 with its own words (the message is gone) keeps them.
   expect(askProblem(err(404, "That message isn't in this chat any more.")).text).toBe("That message isn't in this chat any more.");
-  expect(askProblem(err(0, "Can't reach the hub. Check that it's running."))).toEqual({ text: "Can't reach the hub. Check that it's running.", fix: null });
+  expect(askProblem(err(0, "Can't reach the machine. Check that Crosstalk is running on it."))).toEqual({ text: "Can't reach the machine. Check that Crosstalk is running on it.", fix: null });
   expect(askProblem(new Error("boom")).text).toBe("boom");
   expect(askProblem(err(500, "")).text).toContain("try again");
 });

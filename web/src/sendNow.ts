@@ -16,9 +16,10 @@ import { heldWords, limitQueuedWords, type HeldSettings, type Member, type Messa
 export type SendNowState = { kind: "reply"; held?: HeldSettings } | { kind: "helpers"; held?: HeldSettings; flowing?: boolean } | { kind: "limit"; wait: NonNullable<Turn["wait"]> };
 
 /**
- * A hub that delivers your messages by itself while an agent's helpers work (HubInfo.messagesFlow), and whether this
- * agent's are at work now (shared helperAtWork). Absent for a hub with "Keep going while helpers work" off, or an older one:
- * it holds them, and only the buttons send them.
+ * A hub that delivers your messages by itself (HubInfo.messagesFlow), and whether it does for this agent now: always, on
+ * a hub with the one rule (HubInfo.flowsIn); on one before it, while this agent's helpers are at work (shared
+ * helperAtWork). Absent for a hub before the rule with "Keep going while helpers work" off, or an older one: it holds
+ * them, and only the buttons send them.
  */
 export interface MessageFlow {
   helpers: boolean;
@@ -89,9 +90,10 @@ export function sendNowState(member: MemberLike, turns: readonly TurnLike[], mes
 }
 
 /**
- * The message of yours that goes by itself when this agent's reply ends, while its helpers work (a reply that can't take
- * it: no mid-reply form, a summary being made), and the small label on it: all that's said then, with no bar and no
- * button. Null when no message waits that way.
+ * The message of yours that goes by itself when this agent's reply ends (a reply that can't take it: no mid-reply form, a
+ * summary being made), and the line under it. On a hub with the one rule (HubInfo.flowsIn) that's so for any reply, and
+ * the line has Interrupt beside it (views/ChatScreen.tsx QuietWait); on one before it, only while the agent's helpers
+ * work, with nothing to tap. Never a bar. Null when no message waits that way.
  */
 export function quietWait(member: MemberLike, turns: readonly TurnLike[], messages: readonly MessageLike[], forThis: (m: MessageLike) => boolean = () => true, flow?: MessageFlow): string | null {
   if (!flow?.helpers || !mayGoAround(member) || !["thinking", "working", "approval"].includes(member.status)) return null;

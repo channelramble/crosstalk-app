@@ -48,7 +48,7 @@ async function liveChat(page: Page, request: APIRequestContext, token: string, n
   });
   await page.route("**/api/state", (route) => {
     counts.state++;
-    if (control.stateStatus) return route.fulfill({ status: control.stateStatus, json: { error: "The hub is busy." } });
+    if (control.stateStatus) return route.fulfill({ status: control.stateStatus, json: { error: "Crosstalk is busy." } });
     return route.fulfill({ json: { ...snapshot, members: snapshot.members.map((m: Member) => (m.id === member.id ? { ...m, status: "working", readSeq: 1 } : m)), ...extra } });
   });
   await page.route(`**/api/rooms/${room.id}/history**`, async (route) => {
@@ -224,7 +224,7 @@ test("a connection that comes back in under a second never raises the red alarm"
 test("a hub that holds the socket open but cannot answer gives a reason and a way on", async ({ page, request, token }) => {
   // EXPECTED TO FAIL. When /api/state keeps failing while the socket is up, hubStore.refresh()'s catch sets
   // { syncing: true, syncSlow: true } and tries again every 3 s for ever (hubStore.ts:660-661), and the only thing on
-  // screen is "Getting the latest from <machine>…" (App.tsx:350-357): the hub's own words ("The hub is busy.") are
+  // screen is "Getting the latest from <machine>…" (App.tsx:350-357): the hub's own words ("Crosstalk is busy.") are
   // thrown away, nothing escalates after a while, and Try now is nowhere — reconnectNow is only offered where
   // `downSince` is set, which an open socket never sets. A wedged hub (this Mac swapping) looks like a slow one for ever.
   test.setTimeout(45_000);
@@ -239,7 +239,7 @@ test("a hub that holds the socket open but cannot answer gives a reason and a wa
     await expect(strip).toBeVisible({ timeout: 15_000 });
     // It has been failing for 10 s now: say why, and offer the same way on as a machine that can't be reached.
     await page.waitForTimeout(10_000);
-    await expect(strip).toContainText("The hub is busy.");
+    await expect(strip).toContainText("Crosstalk is busy.");
     await expect(strip.getByRole("button", { name: "Try now", exact: true })).toBeVisible();
     await noHorizontalOverflow(page);
   } finally {
@@ -258,7 +258,7 @@ test("Retry keeps the keyboard's place while it works", async ({ page, request, 
   const c = await liveChat(page, request, token, "Retry focus");
   let release = () => {};
   try {
-    c.control.historyError = "The hub is restarting.";
+    c.control.historyError = "Crosstalk is restarting.";
     await page.goto(`/#/room/${c.room.id}`);
     const line = page.locator(".chat-status");
     await expect(line).toContainText("Couldn't load this chat");
@@ -325,8 +325,9 @@ test("the small words and the tab you are on have enough contrast to read", asyn
   //     (.btn.primary:309-313, .settings-tabs-row button[aria-selected="true"]:2586-2589, 13px 600).
   // Both are read on a phone held outdoors, which is where this app is used.
   await page.goto("/#/settings/machines");
-  const tab = page.getByRole("tab", { name: "Machines", exact: true });
-  await expect(tab).toHaveAttribute("aria-selected", "true");
+  // (The tabs are gone: the primary action is measured on a primary button of that page now.)
+  const tab = page.getByRole("region", { name: "Machines", exact: true }).locator(".btn.primary").first();
+  await expect(tab).toBeVisible();
   const ratios = await tab.evaluate((el) => {
     const rgb = (css: string) => {
       const s = css.trim();

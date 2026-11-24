@@ -8,7 +8,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CHAT_PROVIDERS, type AskChoice, type AskModel, type AskTarget, type ChatProvider, type CostBasis } from "@crosstalk/shared";
+import { settingsPath, CHAT_PROVIDERS, type AskChoice, type AskModel, type AskTarget, type ChatProvider, type CostBasis } from "@crosstalk/shared";
 import type { App } from "./app";
 import { HttpError } from "./engine/engine";
 import { hubCall } from "./machines";
@@ -87,8 +87,8 @@ export function peerProblem(e: unknown, name: string, url: string): string {
   const there = capital(theMachine(name));
   if (err.code === "off") return turnedOff(name);
   if (down(err)) return `${noAnswer(name)} Check it's on, then Try again.`;
-  if (err.status === 401) return `${there} no longer accepts this machine's sign-in. Link it again under Settings → Machines, then Try again.`;
-  if (err.code === "not_linked" || err.code === "peer_scope") return `${there} doesn't have this machine linked for this yet. Check Settings → Machines, then Try again.`;
+  if (err.status === 401) return `${there} no longer accepts this machine. Link it again under ${settingsPath("machines")}, then Try again.`;
+  if (err.code === "not_linked" || err.code === "peer_scope") return `${there} doesn't have this machine linked for this yet. Check ${settingsPath("machines")}, then Try again.`;
   // The other hub's own sentence, without its address in front.
   const said = line(String(err.message ?? "").replace(`${hostOf(url)}: `, ""), 300);
   if (err.status === 404 && (!said || /^not found\.?$/i.test(said))) return `${there} needs a Crosstalk update before it can answer. Update it, then Try again.`;
@@ -159,7 +159,7 @@ export function readPeerRows(data: unknown): AskChoice[] {
     if (!provider || typeof t.account !== "string" || !ACCOUNT.test(t.account) || model === undefined || effort === undefined || !label) continue;
     const available = r.available === true;
     const typical = typeof r.typicalCostUsd === "number" && Number.isFinite(r.typicalCostUsd) && r.typicalCostUsd >= 0 ? r.typicalCostUsd : null;
-    // Newer than 0.6.1: the models it can be asked on (only a row that can be asked has them), or why its model can't be picked.
+    // Newer than 0.6.1: the models it can be asked on (only a row that can be asked has them).
     const list = available ? readPeerModels(r.models, models) : undefined;
     if (list) models -= list.length;
     rows.push({
@@ -173,7 +173,6 @@ export function readPeerRows(data: unknown): AskChoice[] {
       why: available ? null : line(r.why, 120) || "Not available right now",
       typicalCostUsd: typical,
       ...(list ? { models: list } : {}),
-      ...(available && r.fixedModel === "pool" ? { fixedModel: "pool" as const } : {}),
     });
   }
   return rows;

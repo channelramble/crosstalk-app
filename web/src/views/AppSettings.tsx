@@ -1,13 +1,15 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
-import { Gauge, Plus, SquareTerminal } from "lucide-react";
-import { CHAT_PROVIDERS, EFFORT_LABELS, PROVIDER_INFO, permissionInfo, type ChatProvider, type Device, type HubSettings, type ModelOption, type RoomDefaults, type TeamworkSettings } from "@crosstalk/shared";
-import { api } from "../api";
+import { foldKnown, foldParts, setFoldParts } from "../viewport";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { ChevronLeft, ChevronRight, Monitor, Plus, SquareTerminal } from "lucide-react";
+import { CHAT_PROVIDERS, EFFORT_LABELS, PROVIDER_INFO, permissionInfo, type ChatProvider, type Device, type HubSettings, type ModelOption, type RoomDefaults, type ScreenStatus } from "@crosstalk/shared";
+import { api, ApiError } from "../api";
 import { accountKey } from "../accounts";
-import { canNavigate, peekSettingsTarget, takeSettingsTarget, useNavigationGuard, watchSettingsTarget } from "../navigation";
-import { keepSettingsTab, lastSettingsTab, SETTINGS_PANEL_ID, SETTINGS_TABS, settingsPlace, settingsTabId, tabForSection, TAB_FOR_VIEW, type SettingsTabId } from "../settingsTabs";
+import { canNavigate, keepSettingsPage, settingsStartPage, takeSettingsTarget, useNavigationGuard, watchSettingsTarget } from "../navigation";
+import { wentTo } from "../back";
+import { PAGE_FOR_VIEW, pageForSection, SECTION_FOR_VIEW, SETTINGS_INDEX, SETTINGS_PAGES, SETTINGS_PANEL_ID, settingsAddress, settingsPage, settingsPlace, type SettingsPageId } from "../settingsTabs";
 import { UsagePauseSetting } from "./SettingsPage";
 import { useMachines, useStore } from "../store";
-import { Stepper, Switch, timeAgo } from "../ui";
+import { ConfirmButton, Stepper, Switch, timeAgo } from "../ui";
 import { useCatalog } from "../useCatalog";
 import { useReconnected } from "../useReconnected";
 import { holdLayout, NARROWEST, screenWidth, setZoom, useZoom, zoomFactor, ZOOM_STEPS } from "../zoom";
@@ -16,67 +18,81 @@ import { DeviceIcon, NotificationsCard, PairDialog } from "./DevicesPage";
 import { ComputersCard } from "./ComputersCard";
 import { StorageSection } from "./StorageSection";
 import { MachinesSection } from "./MachinesSection";
-import { ModelPool } from "./ModelPool";
 import { ImageEditorSection } from "./ImageEditorSection";
 import { MacSection } from "./MacSection";
-import { AiServicesExtras } from "./AiServices";
-import { OpenCodeCard } from "./AgentInstall";
+import { AccountsList } from "./AccountsList";
 import { CostsSection } from "./CostsSection";
 import { LocalModelsSection } from "./LocalModelsSection";
 import { MemorySection } from "./MemorySection";
 import { MachinePicker, useMachineName } from "./MachinePicker";
-import { GitHubCard, ProviderCard } from "./SetupPage";
+import { GitHubCard } from "./SetupPage";
 import { SidebarButton } from "./ChatSidebar";
+import { HelpTip } from "./HelpTip";
+import { HelpersOnCard, QuestionsCard } from "./TogetherSettings";
 import { TipHeading } from "./Tip";
 import { AgentSetupSection } from "./AgentSetupSection";
 import { TemplatesSection } from "./TemplatesSection";
+import { ThemeSection } from "./ThemeSection";
+import { SettingsIndex } from "./SettingsIndex";
+import { NameDialog } from "./SmallDialogs";
+import { UsageMeters } from "./UsagePage";
 
-/** Settings, in tabs (settingsTabs.ts): the agents and their sign-ins, the models, the machines, the devices, usage. */
+/** The addresses that draw Settings. */
+const SETTINGS_VIEWS = ["settings", "setup", "devices", "usage"];
+
+/**
+ * Settings: one list of pages (settingsTabs.ts), with what needs you and a search field above it. A page opens over
+ * the list with a Back to it; every section id Settings has ever had still lands on its section, inside its page.
+ */
 export function AppSettings() {
-  const hub = useStore((s) => s.hub);
   const view = useStore((s) => s.view);
   const toast = useStore((s) => s.toast);
-  // The model pool's "Add a Linux machine" opens Machines → Set up a Linux machine, in the Machines tab.
-  const [linuxSetup, setLinuxSetup] = useState(0);
-  // The tab on screen: the one the section asked for is in, else the address's, else where this device was last.
-  const [tab, setTab] = useState<SettingsTabId>(() => settingsPlace(peekSettingsTarget())?.tab ?? TAB_FOR_VIEW[view] ?? lastSettingsTab());
+  const several = useMachines((m) => m.list.length > 1);
+  const machine = useMachineName();
+  // The page on screen; null is the list of pages.
+  const [page, setPage] = useState<SettingsPageId | null>(() => settingsStartPage(view));
   // The section to land on, counted so the same one asked for twice lands twice.
   const [place, setPlace] = useState<{ section: string; n: number } | null>(null);
   const asked = useRef(0);
   // A land asked for in this render: it lets the target go once drawn (below).
   const landing = useRef(false);
-  const page = useRef<HTMLDivElement>(null);
-  const tabbed = useRef(false);
-  // The tab now, for the watcher below: it's set up once and would otherwise go on seeing the tab Settings opened on.
-  const now = useRef(tab);
-  now.current = tab;
-  // Which way the last move between tabs went: the new tab's settings come in from that side (motion-chat.css), never
-  // when Settings first opens. Their scroll and the focus move at once, as they always did.
-  const went = useRef<{ tab: SettingsTabId; way: "" | "next" | "back" }>({ tab, way: "" });
-  if (went.current.tab !== tab) {
-    const at = (id: SettingsTabId) => SETTINGS_TABS.findIndex((t) => t.id === id);
-    went.current = { tab, way: at(tab) > at(went.current.tab) ? "next" : "back" };
-  }
+  const scroller = useRef<HTMLDivElement>(null);
+  // The page now, for the watcher below: it's set up once and would otherwise go on seeing the page Settings opened on.
+  const now = useRef(page);
+  now.current = page;
+  // How far down the list of pages was, so Back returns to where you were on it.
+  const listScroll = useRef(0);
+  // Which way the last move went: a page comes in from the right, the list comes back from the left (motion-chat.css),
+  // never when Settings first opens. Their scroll and the focus move at once.
+  const went = useRef<{ page: SettingsPageId | null; way: "" | "next" | "back" }>({ page, way: "" });
+  if (went.current.page !== page) went.current = { page, way: page ? "next" : "back" };
   useEffect(() => {
     // Sign-ins done elsewhere (say, in a terminal on the machine) show up when Settings opens.
     api("POST", "/api/providers/refresh").catch((e) => toast("error", e instanceof Error ? e.message : String(e)));
+    // Leaving Settings lets its page go; being replaced for another machine keeps it.
+    return () => {
+      if (!SETTINGS_VIEWS.includes(useStore.getState().view)) keepSettingsPage(null);
+    };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
-  /** Another tab, asking first when this one holds unsaved changes (leaving Settings asks the same way). */
-  const goTab = (id: SettingsTabId) => {
+  /** Another page (null: the list), asking first when this one holds unsaved changes (leaving Settings asks the same way). */
+  const goPage = (id: SettingsPageId | null) => {
     if (id !== now.current && !canNavigate()) return false;
-    setTab(id);
+    if (now.current === null && scroller.current) listScroll.current = scroller.current.scrollTop;
+    setPage(id);
     return true;
   };
-  /** Opens a section's tab and lands on it (a tab's own name just opens it). */
+  /** Opens a section's page and lands on it (a page's own name just opens it; the list's name goes back to the list). */
   const land = (name: string) => {
+    if (name === SETTINGS_INDEX) return void (goPage(null) || takeSettingsTarget());
     const where = settingsPlace(name);
-    if (!where || !goTab(where.tab)) return;
+    // Refused (unsaved changes kept): the section asked for is let go, or the next Settings would open on it.
+    if (!where || !goPage(where.page)) return void takeSettingsTarget();
     landing.current = true;
-    if (where.section) setPlace({ section: where.section, n: ++asked.current });
+    setPlace(where.section ? { section: where.section, n: ++asked.current } : null);
   };
   useEffect(() => {
-    // Where this Settings was opened to show (once).
-    const target = takeSettingsTarget();
+    // Where this Settings was opened to show (once): a section asked for, or the one an older address means.
+    const target = takeSettingsTarget() ?? SECTION_FOR_VIEW[view];
     if (target) land(target);
     // Something links to a section while Settings is on screen already (the Mac strip's Details, Raise limit).
     return watchSettingsTarget(land);
@@ -88,56 +104,76 @@ export function AppSettings() {
     landing.current = false;
     takeSettingsTarget();
   });
-  // The address changing to #/devices or #/setup while Settings is up moves to that tab, as a section's would.
+  // The address changing to #/devices, #/setup or #/usage while Settings is up moves to that page, as a section's would.
+  // (Compared with the last one seen, not counted: in development React runs a new screen's effects twice.)
+  const viewed = useRef(view);
   useEffect(() => {
-    const named = TAB_FOR_VIEW[view];
-    if (named) setTab(named);
+    if (viewed.current === view) return;
+    viewed.current = view;
+    const named = PAGE_FOR_VIEW[view];
+    if (!named) return;
+    setPage(named);
+    const section = SECTION_FOR_VIEW[view];
+    if (section) setPlace({ section, n: ++asked.current });
   }, [view]);
+  const shown = useRef(page);
   useEffect(() => {
-    keepSettingsTab(tab);
-    if (!tabbed.current) {
-      tabbed.current = true;
+    keepSettingsPage(page);
+    if (shown.current === page) {
+      // Opened on this page: it's the place Settings has in the history already (the store names it), unless an older
+      // address drew it (#/usage), which stays as it is so a reload opens the same.
+      if (useStore.getState().view === "settings") wentTo(settingsAddress(page));
       return;
     }
-    // A new tab starts at its top, and a reader lands in it rather than back at the tabs.
-    if (page.current) page.current.scrollTop = 0;
-    page.current?.focus({ preventScroll: true });
-  }, [tab]);
-  // The Linux setup is asked for once: MachinesSection opens it when it sees the signal, and its tab unmounts when you
-  // leave it, so the signal is let go there or coming back to Machines would open the form again unasked.
+    shown.current = page;
+    // The address follows the page (a reload opens it again), under Settings' own name whichever older address drew it.
+    if (useStore.getState().view !== "settings") {
+      viewed.current = "settings";
+      useStore.setState({ view: "settings" });
+    }
+    // A page is a place over the list: Back from it is the list when it was opened from there, else where you came from.
+    wentTo(settingsAddress(page));
+    // A page starts at its top, the list where it was left; and a reader lands in it rather than back at the top bar.
+    if (scroller.current) scroller.current.scrollTop = page ? 0 : listScroll.current;
+    scroller.current?.focus({ preventScroll: true });
+  }, [page]);
+  // After the page's own sections are drawn, so the one asked for is there to land on.
   useEffect(() => {
-    if (linuxSetup && tab === "machines") setLinuxSetup(0);
-  }, [linuxSetup, tab]);
-  // After the tab's own sections are drawn, so the one asked for is there to land on.
-  useEffect(() => {
-    if (!place || !page.current) return;
-    // Another tab: the land is over. In that tab its section is only a hidden anchor, and holding it would pull you
+    if (!place || !scroller.current) return;
+    // Another page: the land is over. There its section is only a hidden anchor, and holding it would pull you
     // straight back here; coming back later shouldn't jump to it either.
-    if (tabForSection(place.section) !== tab) return void setPlace(null);
-    return keepInView(page.current, place.section);
-  }, [place, tab]);
+    if (pageForSection(place.section) !== page) return void setPlace(null);
+    return keepInView(scroller.current, place.section);
+  }, [place, page]);
+  const label = page ? settingsPage(page).label : "Settings";
   return (
     <>
       <header className="topbar" data-tauri-drag-region>
+        {/* The chats stay one tap away on every page (and what needs you in them shows on the button). */}
         <SidebarButton />
+        {page && (
+          <button className="icon-btn settings-back" onClick={() => goPage(null)} aria-label="Back to Settings" title="Back to Settings">
+            <ChevronLeft size={24} aria-hidden />
+          </button>
+        )}
         <div className="titles">
-          <h1>Settings</h1>
-          <div className="sub">{hub?.name ?? hub?.hostname ?? "Hub"}</div>
+          <h1>{label}</h1>
+          <div className="sub">{page ? (several && page !== "device" ? `Settings · ${machine}` : "Settings") : machine}</div>
         </div>
-        <MachinePicker />
+        {/* Which machine's settings these are, when this device has several. On the Machines page each machine has its own place instead. */}
+        {page !== "machines" && <MachinePicker />}
       </header>
-      <SettingsTabRow tab={tab} onPick={goTab} />
-      <div className="page" ref={page} role="tabpanel" id={SETTINGS_PANEL_ID} aria-labelledby={settingsTabId(tab)} tabIndex={-1}>
-        <div className={`page-inner${went.current.way ? ` m-tab-${went.current.way}` : ""}`} key={tab}>
-          {tab === "agents" && <AgentsTab />}
-          {tab === "models" && <ModelsTab onSetUpLinux={() => void (goTab("machines") && setLinuxSetup((n) => n + 1))} />}
-          {tab === "machines" && <MachinesTab linuxSetup={linuxSetup} />}
-          {tab === "devices" && <DevicesTab />}
-          {tab === "usage" && <UsageTab />}
-          <p className="tiny muted" style={{ marginTop: 18 }}>
-            Hub {hub?.version} · {hub?.hostname} · new chat folders go in <span className="mono">{hub?.workspaceRoot}</span>
-          </p>
-          <Elsewhere tab={tab} onShow={land} />
+      <div className="page" ref={scroller} role="region" id={SETTINGS_PANEL_ID} aria-label={label} tabIndex={-1}>
+        <div className={`page-inner settings-page${went.current.way ? ` m-tab-${went.current.way}` : ""}`} key={page ?? "list"}>
+          {page === null && <SettingsIndex onShow={land} />}
+          {page === "accounts" && <AccountsPage />}
+          {page === "new-chats" && <NewChatsPage />}
+          {page === "together" && <TogetherPage />}
+          {page === "usage" && <UsageCostsPage />}
+          {page === "device" && <DevicePage />}
+          {page === "machines" && <MachinesPage asked={place} />}
+          {page === "models" && <ModelsPage />}
+          <Elsewhere page={page} onShow={land} />
         </div>
       </div>
     </>
@@ -145,60 +181,19 @@ export function AppSettings() {
 }
 
 /**
- * The tabs: a tablist whose row scrolls sideways when the names don't fit (a narrow phone, a big text size), so no tab
- * is ever a scroll away. Arrow keys (and Home and End) move between them, Enter or Space opens one, the same on a wide
- * screen as on a phone.
+ * The sections that aren't on screen (every one, on the list of pages), as an empty line each carrying that section's
+ * id. Code all over brings a section into view with `document.getElementById(id).scrollIntoView()` (the chats list's
+ * Machines and Storage, Raise limit, the setup checklist's Go there): asked while that page
+ * is closed, this opens the page and lands there instead, so no caller has to know Settings has pages.
  */
-function SettingsTabRow({ tab, onPick }: { tab: SettingsTabId; onPick: (tab: SettingsTabId) => void }) {
-  const row = useRef<HTMLDivElement>(null);
-  // The tab on screen stays in sight when the row is wider than the screen.
-  useEffect(() => {
-    row.current?.querySelector<HTMLElement>('[aria-selected="true"]')?.scrollIntoView({ block: "nearest", inline: "nearest" });
-  }, [tab]);
-  const move = (e: React.KeyboardEvent<HTMLDivElement>) => {
-    const step = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
-    if (!step && e.key !== "Home" && e.key !== "End") return;
-    const tabs = [...(row.current?.querySelectorAll<HTMLButtonElement>('[role="tab"]') ?? [])];
-    const at = tabs.indexOf(document.activeElement as HTMLButtonElement);
-    const to = e.key === "Home" ? 0 : e.key === "End" ? tabs.length - 1 : (Math.max(at, 0) + step + tabs.length) % tabs.length;
-    e.preventDefault();
-    tabs[to]?.focus();
-  };
-  return (
-    <div className="settings-tabs">
-      <div className="settings-tabs-row" role="tablist" aria-label="Settings" ref={row} onKeyDown={move}>
-        {SETTINGS_TABS.map((t) => (
-          <button
-            key={t.id}
-            id={settingsTabId(t.id)}
-            type="button"
-            role="tab"
-            aria-selected={t.id === tab}
-            aria-controls={SETTINGS_PANEL_ID}
-            tabIndex={t.id === tab ? 0 : -1}
-            onClick={() => onPick(t.id)}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-/**
- * The other tabs' sections, as an empty line each carrying that section's id. Code all over brings a section into view
- * with `document.getElementById(id).scrollIntoView()` (the chats list's Machines and Storage, Raise limit, the setup
- * checklist's Go there, the model pool's Storage): asked while that tab is closed, this opens the tab and lands there
- * instead, so no caller has to know Settings has tabs.
- */
-function Elsewhere({ tab, onShow }: { tab: SettingsTabId; onShow: (id: string) => void }) {
+function Elsewhere({ page, onShow }: { page: SettingsPageId | null; onShow: (id: string) => void }) {
   return (
     <>
-      {SETTINGS_TABS.filter((t) => t.id !== tab)
-        .flatMap((t) => t.sections)
-        .map((id) => (
-          <Anchor key={id} id={id} onShow={onShow} />
+      {SETTINGS_PAGES.filter((p) => p.id !== page)
+        .flatMap((p) => p.sections)
+        .filter((s) => !s.gone)
+        .map((s) => (
+          <Anchor key={s.id} id={s.id} onShow={onShow} />
         ))}
     </>
   );
@@ -219,110 +214,289 @@ function Anchor({ id, onShow }: { id: string; onShow: (id: string) => void }) {
   );
 }
 
-/** The agents: what's left to set up, the services and sign-ins, what new chats start with, and teamwork. */
-function AgentsTab() {
-  const providers = useStore((s) => s.providers);
+/** Who answers: every account once, in one list (plan sign-ins, API keys, other services, your own models), with one Add. */
+function AccountsPage() {
+  return (
+    <div id="ai-services" className="settings-target">
+      <AccountsList />
+    </div>
+  );
+}
+
+/** What a new chat starts with: each agent's model, effort and permissions, and the templates. */
+function NewChatsPage() {
   return (
     <>
-      <AgentSetupSection />
-
-      <h2 className="settings-heading" id="ai-services">AI services</h2>
-      <AiServicesExtras />
+      <h2 className="settings-heading" id="defaults">
+        What a new chat starts with
+      </h2>
       {CHAT_PROVIDERS.map((p) => (
-        <div key={p} id={`agent-${p}`} className="settings-target">
-          <ProviderCard provider={p} status={providers[p]} />
-          <AgentDefaults provider={p} />
-        </div>
+        <AgentDefaults key={p} provider={p} />
       ))}
-      <div id="agent-opencode" className="settings-target">
-        <OpenCodeCard />
-      </div>
-
+      <p className="help">A chat can still be changed once it's started: these are only where it begins.</p>
       <TemplatesSection />
-
-      <TipHeading id="teamwork" topic="teamwork">Teamwork</TipHeading>
-      <TeamworkSection />
-      <CrossChatCard />
-      <div id="keep-going" className="settings-target">
-        <KeepGoingCard />
-      </div>
     </>
   );
 }
 
-/** The models that run on your own machines, and the image editor beside them (Local models links to both). */
-function ModelsTab({ onSetUpLinux }: { onSetUpLinux: () => void }) {
+/** Three things, a sentence each: who does helper work, agents asking another agent, agents reaching your other chats. */
+function TogetherPage() {
   return (
     <>
-      {/* Only on screen while the machine is getting full: everything it offers is in this tab. */}
-      <MemorySection />
-
-      <LocalModelsSection />
-
-      <ImageEditorSection />
-
-      <TipHeading id="model-pool" topic="modelPool">Model pool</TipHeading>
-      <ModelPool onSetUpLinux={onSetUpLinux} />
+      <HelpersOnCard />
+      <QuestionsCard />
+      <CrossChatCard />
     </>
   );
 }
 
-/** The machines Crosstalk runs on: the links between them, this Mac, their disks, and the tools on them. */
-function MachinesTab({ linuxSetup }: { linuxSetup: number }) {
-  const setView = useStore((s) => s.setView);
+/** The plan meters first, then carrying on after a limit, then what each account cost and its spending limit. */
+function UsageCostsPage() {
+  return (
+    <>
+      <TipHeading id="usage" topic="usage">Plan limits</TipHeading>
+      <UsageMeters />
+      <UsagePauseSetting />
+      <CostsSection />
+    </>
+  );
+}
+
+/** This device: its notifications, its theme, its text size, and the devices paired with the machine. */
+function DevicePage() {
+  return (
+    <>
+      <h2 className="settings-heading" id="notifications">
+        Notifications
+      </h2>
+      <NotificationsCard />
+
+      <h2 className="settings-heading" id="appearance">
+        Theme
+      </h2>
+      <ThemeSection />
+
+      <h2 className="settings-heading" id="display">
+        Text size
+      </h2>
+      <ZoomCard />
+      <FoldCard />
+
+      <h2 className="settings-heading" id="devices">
+        Paired devices
+      </h2>
+      <DevicesSection />
+    </>
+  );
+}
+
+/**
+ * A foldable's own choice, shown only on a device that has reported a fold: whether a phone held half-open is laid out
+ * in two parts (the chats beside the chat, or the messages above the fold). Off by default: the screen is used as one.
+ */
+function FoldCard() {
+  const [on, setOn] = useState(foldParts);
+  if (!foldKnown()) return null;
+  return (
+    <div className="card" style={{ marginTop: 10 }}>
+      <div className="row" style={{ gap: 10, alignItems: "flex-start" }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div className="title">Use both halves when half-folded</div>
+          <p className="help" id="fold-parts-help" style={{ margin: "2px 0 0" }}>
+            With this phone held half-open, the chats go on one half and the chat on the other, or the messages above the fold and the message box below it. Off: the whole screen is used as one.
+          </p>
+        </div>
+        <Switch
+          checked={on}
+          onChange={(v) => {
+            setFoldParts(v);
+            setOn(v);
+          }}
+          label="Use both halves when half-folded"
+          describedBy="fold-parts-help"
+        />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The machines Crosstalk runs on. The list comes first (each machine's name and link); then one machine's own things
+ * under its name: this Mac's checks, its disk, GitHub, the remote computers its agents can use, its screen, and
+ * Advanced. With several machines, Open on a machine's row shows that machine's things here.
+ */
+function MachinesPage({ asked }: { asked: { section: string; n: number } | null }) {
   const machine = useMachineName();
+  const several = useMachines((m) => m.list.length > 1);
   return (
     <>
       <TipHeading id="machines" topic="machines">Machines</TipHeading>
-      <MachinesSection linuxSetup={linuxSetup} />
+      <MachinesSection />
 
-      <div id="computers" style={{ marginTop: 26 }}>
-        <ComputersCard />
-      </div>
+      {several && (
+        <div className="machine-things" id="machine-things">
+          <h2 className="machine-things-name">{machine}</h2>
+          <p className="help">What follows is {machine}'s own. Tap Open on another machine above to see that one's.</p>
+        </div>
+      )}
 
       <MacSection />
 
       <TipHeading id="storage" topic="storage">Storage</TipHeading>
       <StorageSection />
 
-      <h2 className="settings-heading" id="more">More</h2>
+      <h2 className="settings-heading" id="more">
+        GitHub
+      </h2>
       <GitHubCard />
-      <div className="list-group" style={{ marginTop: 12 }}>
-        <div className="list-row" role="button" tabIndex={0} onClick={() => setView("terminal")} onKeyDown={(e) => e.key === "Enter" && setView("terminal")}>
-          <SquareTerminal size={20} />
-          <div style={{ flex: 1 }}>
-            <div className="title">Terminal</div>
-            <div className="subtitle">A shell on {machine}</div>
+
+      <div id="computers" className="settings-target" style={{ marginTop: 26 }}>
+        <ComputersCard />
+      </div>
+
+      <ScreenCard />
+
+      <AdvancedCard asked={asked} />
+    </>
+  );
+}
+
+/** The models that run on your own machines, and the image editor beside them (Local models links to it). */
+function ModelsPage() {
+  return (
+    <>
+      {/* Only on screen while the machine is getting full: everything it offers is on this page. */}
+      <MemorySection />
+
+      <LocalModelsSection />
+
+      <ImageEditorSection />
+    </>
+  );
+}
+
+/**
+ * The machine's screen: the way to the Screen page, and whether its agents may use the screen (the page's own
+ * switch). A machine whose Crosstalk is older than Screen shows nothing.
+ */
+function ScreenCard() {
+  const setView = useStore((s) => s.setView);
+  const toast = useStore((s) => s.toast);
+  const machine = useMachineName();
+  const heard = useStore((s) => s.hub?.screen);
+  const [status, setStatus] = useState<ScreenStatus | null>(null);
+  const [older, setOlder] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const request = useRef(0);
+  const load = () => {
+    const id = ++request.current;
+    api<ScreenStatus>("GET", "/api/screen").then(
+      (s) => id === request.current && setStatus(s),
+      (e) => id === request.current && e instanceof ApiError && e.status === 404 && setOlder(true),
+    );
+  };
+  useEffect(() => {
+    load();
+    return () => void request.current++;
+  }, [heard?.ready, heard?.agents]); // eslint-disable-line react-hooks/exhaustive-deps
+  useReconnected(load);
+  if (older) return null;
+  const put = async (agents: boolean) => {
+    setBusy(true);
+    try {
+      setStatus(await api<ScreenStatus>("PUT", "/api/screen", { agents }));
+    } catch (e) {
+      toast("error", e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const words = !status ? "See it live and take control" : status.ready ? "Ready: see it live and take control" : status.state === "auth" ? "Needs its password before it can be seen" : status.state === "off" ? "Not turned on yet: open it to set it up" : (status.problem ?? "See it live and take control");
+  return (
+    <>
+      <h2 className="settings-heading" id="screen">
+        Screen
+      </h2>
+      <div className="list-group">
+        <button type="button" className="list-row settings-page-row" onClick={() => setView("screen")}>
+          <span className="settings-page-icon">
+            <Monitor size={20} aria-hidden />
+          </span>
+          <span className="row-text">
+            <span className="title">See {machine}'s screen</span>
+            <span className="subtitle">{words}</span>
+          </span>
+          <ChevronRight size={18} aria-hidden className="settings-page-chev" />
+        </button>
+        {status && (
+          <div className="list-row settings-switch-row">
+            <div className="row-text">
+              <div className="title">Let agents use this screen</div>
+              <div className="help" id="settings-screen-agents-help">
+                Agents on {machine} can look at the screen, click and type. Off: only you can.
+              </div>
+            </div>
+            <Switch checked={status.agents} onChange={(v) => void put(v)} disabled={busy} label="Let agents use this screen" describedBy="settings-screen-agents-help" />
           </div>
-        </div>
+        )}
       </div>
     </>
   );
 }
 
-/** This device: its text and page size, the devices paired with the hub, and notifications here. */
-function DevicesTab() {
-  return (
-    <>
-      <h2 className="settings-heading" id="display">Display</h2>
-      <ZoomCard />
-
-      <h2 className="settings-heading" id="devices">Devices</h2>
-      <DevicesSection />
-    </>
-  );
-}
-
-/** What the agents have used, and what it costs. */
-function UsageTab() {
+/**
+ * Advanced, closed until asked for: a terminal on the machine, setting it up with an AI agent (one button, with the
+ * commands behind "Do it by hand"), and the version it runs and where new chats' folders go. Asked for by a link (the
+ * checklist's own address, #/setup, a search), it opens by itself.
+ */
+function AdvancedCard({ asked }: { asked: { section: string; n: number } | null }) {
   const setView = useStore((s) => s.setView);
+  const hub = useStore((s) => s.hub);
+  const machine = useMachineName();
+  const wanted = asked?.section === "advanced" || asked?.section === "agent-setup";
+  const [open, setOpen] = useState(wanted);
+  useEffect(() => {
+    if (wanted) setOpen(true);
+  }, [wanted, asked?.n]);
   return (
-    <>
-      <TipHeading id="usage" topic="usage">Usage</TipHeading>
-      <UsagePauseSetting />
-      <button className="btn block" onClick={() => setView("usage")}><Gauge size={18} /> View usage for every account</button>
-      <CostsSection />
-    </>
+    <details className="card defaults-card settings-advanced settings-target" id="advanced" open={open} onToggle={(e) => setOpen(e.currentTarget.open)}>
+      <summary>
+        Advanced
+        <span className="defaults-picks">Terminal, setup with an AI agent, version</span>
+      </summary>
+      {open && (
+        <>
+          <div className="list-group">
+            <button type="button" className="list-row settings-page-row" onClick={() => setView("terminal")}>
+              <span className="settings-page-icon">
+                <SquareTerminal size={20} aria-hidden />
+              </span>
+              <span className="row-text">
+                <span className="title">Terminal</span>
+                <span className="subtitle">A shell on {machine}</span>
+              </span>
+              <ChevronRight size={18} aria-hidden className="settings-page-chev" />
+            </button>
+          </div>
+          <AgentSetupSection />
+          <h3 className="settings-subheading">About {machine}</h3>
+          <dl className="settings-facts">
+            <div>
+              <dt>Version</dt>
+              <dd>Crosstalk {hub?.version ?? "…"}</dd>
+            </div>
+            <div>
+              <dt>Computer name</dt>
+              <dd>{hub?.hostname ?? "…"}</dd>
+            </div>
+            <div>
+              <dt>New chats' folders go in</dt>
+              <dd className="mono">{hub?.workspaceRoot ?? "…"}</dd>
+            </div>
+          </dl>
+        </>
+      )}
+    </details>
   );
 }
 
@@ -331,7 +505,7 @@ function UsageTab() {
  * you scroll or touch something yourself, or a few seconds pass. Returns what stops it.
  */
 function keepInView(page: HTMLElement, id: string): () => void {
-  // A section of another tab is only a hidden anchor (Elsewhere): bringing that into view would open its tab.
+  // A section of another page is only a hidden anchor (Elsewhere): bringing that into view would open its page.
   const show = () => {
     const el = document.getElementById(id);
     if (el?.offsetParent) el.scrollIntoView({ block: "start" });
@@ -444,8 +618,10 @@ function ZoomCard() {
 function DevicesSection() {
   const disconnect = useStore((s) => s.disconnect);
   const toast = useStore((s) => s.toast);
+  const machine = useMachineName();
   const [devices, setDevices] = useState<Device[] | null>(null);
   const [pairing, setPairing] = useState(false);
+  const [renaming, setRenaming] = useState<Device | null>(null);
   const [error, setError] = useState("");
   const load = () => {
     setError("");
@@ -457,9 +633,11 @@ function DevicesSection() {
     void load();
   }, []);
   useReconnected(() => void load());
-  const act = async (fn: () => Promise<void>) => {
+  const signOut = async (d: Device) => {
     try {
-      await fn();
+      await api("DELETE", `/api/devices/${d.id}`);
+      if (d.current) disconnect();
+      else await load();
     } catch (e) {
       toast("error", e instanceof Error ? e.message : String(e));
     }
@@ -470,7 +648,7 @@ function DevicesSection() {
         <Plus size={16} /> Pair a new device
       </button>
       <p className="help" style={{ margin: "6px 0 10px" }}>
-        Shows a code and a QR code. On the new phone or computer, scan it with the camera, or open the hub's address and type the code.
+        Shows a code and a QR code. On the new phone or computer, scan it with the camera, or open {machine}'s address and type the code.
       </p>
       {error && (
         <div role="alert" className="small">
@@ -483,7 +661,7 @@ function DevicesSection() {
       {devices && (
         <div className="list-group">
           {devices.map((d) => {
-            // Another machine's hub signed in here: signed out from this list, that link would quietly break.
+            // Another machine signed in here: signed out from this list, that link would quietly break.
             const link = d.platform === "Crosstalk hub" || !!d.hubId;
             return (
               <div key={d.id} className="list-row can-wrap names-wrap" style={{ cursor: "default" }}>
@@ -504,32 +682,16 @@ function DevicesSection() {
                     </button>
                   ) : (
                     <>
-                      <button
-                        className="btn small ghost"
-                        onClick={() =>
-                          act(async () => {
-                            const name = prompt("Device name", d.name);
-                            if (!name) return;
-                            await api("PATCH", `/api/devices/${d.id}`, { name });
-                            await load();
-                          })
-                        }
-                      >
+                      <button className="btn small ghost" onClick={() => setRenaming(d)}>
                         Rename
                       </button>
-                      <button
-                        className="btn small ghost danger"
-                        onClick={() =>
-                          act(async () => {
-                            if (!confirm(d.current ? "Sign this device out? You'll need a new pairing code to come back." : `Sign "${d.name}" out?`)) return;
-                            await api("DELETE", `/api/devices/${d.id}`);
-                            if (d.current) disconnect();
-                            else await load();
-                          })
-                        }
-                      >
-                        Sign out
-                      </button>
+                      <ConfirmButton
+                        label="Sign out"
+                        ariaLabel={`Sign ${d.name} out`}
+                        question={d.current ? "Sign this device out? You'll need a new pairing code to come back." : `Sign "${d.name}" out?`}
+                        confirmLabel="Sign out"
+                        onConfirm={() => void signOut(d)}
+                      />
                     </>
                   )}
                 </div>
@@ -538,8 +700,19 @@ function DevicesSection() {
           })}
         </div>
       )}
-      <NotificationsCard />
       {pairing && <PairDialog onClose={() => (setPairing(false), void load())} />}
+      {renaming && (
+        <NameDialog
+          title="Rename device"
+          label="Device name"
+          value={renaming.name}
+          onSave={async (name) => {
+            await api("PATCH", `/api/devices/${renaming.id}`, { name });
+            await load();
+          }}
+          onClose={() => setRenaming(null)}
+        />
+      )}
     </>
   );
 }
@@ -609,7 +782,7 @@ function AgentDefaults({ provider }: { provider: ChatProvider }) {
       </summary>
       {error && <div role="alert"><p>Couldn't read your {name} defaults: {error}</p><button className="btn small" onClick={load}>Retry defaults</button></div>}
       {choice && defaults ? <fieldset className="settings-fields" disabled={busy}>
-        <AgentOptions provider={provider} value={choice} onChange={setChoice} />
+        <AgentOptions provider={provider} value={choice} onChange={setChoice} cards />
         <button className="btn small primary" disabled={busy || !dirty} onClick={save}>
           {busy ? "Saving…" : "Save"}
         </button>
@@ -628,7 +801,7 @@ function useChoiceWords(provider: ChatProvider, c: AgentChoice | null, opts: { p
   return c ? choiceWords(provider, c, catalog?.models ?? [], { ...opts, account }) : null;
 }
 
-function choiceWords(provider: ChatProvider, c: Pick<AgentChoice, "model" | "effort" | "permissionMode">, models: ModelOption[], opts: { account?: string | null; permissions?: boolean; effortWord?: boolean } = {}): string {
+export function choiceWords(provider: ChatProvider, c: Pick<AgentChoice, "model" | "effort" | "permissionMode">, models: ModelOption[], opts: { account?: string | null; permissions?: boolean; effortWord?: boolean } = {}): string {
   const name = PROVIDER_INFO[provider].name;
   const def = models.find((m) => m.isDefault);
   const model = c.model ? models.find((m) => m.id === c.model)?.label ?? c.model : `${name}'s default model${def ? ` (${def.label})` : ""}`;
@@ -636,7 +809,7 @@ function choiceWords(provider: ChatProvider, c: Pick<AgentChoice, "model" | "eff
   return [opts.account, model, effort, opts.permissions ? permissionInfo(provider, c.permissionMode).short : null].filter(Boolean).join(" · ");
 }
 
-/** Agents reaching the user's other chats, here and on linked machines (the hub setting agentsAcrossChats). */
+/** Agents reaching the user's other chats, here and on linked machines (the machine's setting agentsAcrossChats). */
 function CrossChatCard() {
   const toast = useStore((s) => s.toast);
   const hub = useStore((s) => s.hub);
@@ -665,300 +838,34 @@ function CrossChatCard() {
       toast("error", e instanceof Error ? e.message : String(e));
     }
   };
-  if (on === null) {
-    return (
-      <section className="card" style={{ marginTop: 12 }} aria-label="Let agents reach your other chats">
-        <div style={{ fontWeight: 600 }}>Let agents reach your other chats</div>
-        {error ? (
-          <div role="alert">
-            <p className="small">Couldn't load this setting: {error}</p>
-            <button className="btn small" onClick={load}>Retry</button>
-          </div>
-        ) : (
-          <p className="muted small" role="status">Loading…</p>
-        )}
-      </section>
-    );
-  }
   return (
-    <section className="card" style={{ marginTop: 12 }} aria-label="Let agents reach your other chats">
-      <div className="row">
-        <div style={{ flex: 1 }}>
-          <div style={{ fontWeight: 600 }}>Let agents reach your other chats</div>
-          <div className="help">
-            Agents in {hub?.name ?? "this machine"}'s chats can find, read and message your other chats, here and on your linked machines, and agents on those machines can do the same with chats here (when it's on there too). Messages show in the chat they're sent to, marked with where they came from. If the receiving chat can do more without asking than the sender, you approve the message first. After 3 messages passed between agents, they ask you before going on. Reading a chat shows it to the agent that reads it. Keep a chat out of this in its settings.
-          </div>
-        </div>
-        <Switch checked={on} onChange={(v) => void put(v)} label="Let agents reach your other chats" />
-      </div>
-      {on && <p className="help" style={{ marginBottom: 0 }}>Linked machines connect for this once it's on on the machine they were linked from (Settings → Machines shows each one).</p>}
-    </section>
-  );
-}
-
-const KEEP_GOING = "Keep going while helpers work";
-
-/**
- * Whether your messages go straight to an agent while its helpers work (the hub setting messagesFlow): saved at once, like
- * the switches beside it, and heard from your other devices as they change it (the hub's "hub" event). It's the machine's
- * this Settings shows, as every hub-wide setting is: nothing carries one to linked machines, so the row says so. A hub that
- * doesn't have it (GET says nothing of it) gets words, not a switch that would do nothing.
- */
-function KeepGoingCard() {
-  // This machine's: Settings opens anew when another machine is picked, and a save still on its way goes here.
-  const connection = useRef(useStore.getState().conn).current;
-  const machine = useMachineName();
-  const others = useMachines((m) => m.list.length > 1);
-  const heard = useStore((s) => s.hub?.messagesFlow);
-  const helpId = useId();
-  const [on, setOn] = useState<boolean | null>(null);
-  const [older, setOlder] = useState(false);
-  const [error, setError] = useState("");
-  const [saveError, setSaveError] = useState("");
-  const [saving, setSaving] = useState(false);
-  // What the hub last said: what the switch goes back to when a save fails.
-  const saved = useRef(true);
-  const loads = useRef(0);
-  const saves = useRef(0);
-  const heardTimes = useRef(0);
-  const load = () => {
-    const id = ++loads.current;
-    setError("");
-    api<HubSettings>("GET", "/api/settings/hub", undefined, connection)
-      .then((s) => {
-        if (id !== loads.current) return;
-        setOlder(s.messagesFlow === undefined);
-        saved.current = s.messagesFlow !== false;
-        setOn(saved.current);
-      })
-      .catch((e) => { if (id === loads.current) setError(e instanceof Error ? e.message : String(e)); });
-  };
-  useEffect(() => {
-    load();
-    return () => {
-      loads.current++;
-      saves.current++;
-    };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-  // `older`: that machine may just have been updated.
-  useReconnected(() => { if (on === null || older) load(); });
-  // Changed on another device: this row shows it too. A tap here on its way goes on showing until its answer.
-  useEffect(() => {
-    if (typeof heard !== "boolean") return;
-    heardTimes.current++;
-    saved.current = heard;
-    if (!saving) setOn((was) => (was === null ? was : heard));
-  }, [heard]); // eslint-disable-line react-hooks/exhaustive-deps
-  const put = async (v: boolean) => {
-    const id = ++saves.current;
-    const times = heardTimes.current;
-    setOn(v);
-    setSaveError("");
-    setSaving(true);
-    try {
-      const s = await api<HubSettings>("PUT", "/api/settings/hub", { messagesFlow: v }, connection);
-      // What it heard meanwhile is as new as this answer, or newer.
-      if (heardTimes.current === times) saved.current = s.messagesFlow !== false;
-      if (id === saves.current) setOn(saved.current);
-    } catch (e) {
-      if (id !== saves.current) return;
-      // Back to what's saved, saying so: what's shown is always what the hub does.
-      setOn(saved.current);
-      setSaveError(`Couldn't save: ${(e instanceof Error ? e.message : String(e)).replace(/[.\s]*$/, "")}. Change it again to retry.`);
-    } finally {
-      if (id === saves.current) setSaving(false);
-    }
-  };
-  if (on === null || older) {
-    return (
-      <section className="card" style={{ marginTop: 12 }} aria-label={KEEP_GOING}>
-        <div style={{ fontWeight: 600 }}>{KEEP_GOING}</div>
-        {older ? (
-          <p className="help" style={{ marginBottom: 0 }}>Update Crosstalk on {machine} to choose this.</p>
-        ) : error ? (
-          <div role="alert">
-            <p className="small">Couldn't load this setting: {error}</p>
-            <button className="btn small" onClick={load}>Retry</button>
-          </div>
-        ) : (
-          <p className="muted small" role="status">Loading…</p>
-        )}
-      </section>
-    );
-  }
-  return (
-    <section className="card" style={{ marginTop: 12 }} aria-label={KEEP_GOING}>
+    <section className="card settings-target together-card" id="other-chats" aria-label={OTHER_CHATS}>
       <div className="row">
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontWeight: 600 }}>{KEEP_GOING}</div>
-          <div className="help" id={helpId}>
-            Your messages go straight to the agent. New settings apply when its helpers finish. Off: messages wait for the helpers, so new settings apply first, and you can send one sooner by tapping.
-          </div>
+          <div style={{ fontWeight: 600 }}>{OTHER_CHATS}</div>
+          {on === null ? (
+            error ? (
+              <div role="alert">
+                <p className="small">Couldn't load this setting: {error}</p>
+                <button className="btn small" onClick={load}>Retry</button>
+              </div>
+            ) : (
+              <p className="muted small" role="status">Loading…</p>
+            )
+          ) : (
+            <div className="help tip-line">
+              <span>Agents can find, read and message your other chats, here and on your linked machines.</span>
+              <HelpTip label="More about reaching other chats">
+                A message shows in the chat it's sent to, marked with where it came from. When that chat can do more without asking than the one that sent it, you approve the message first. After 3 messages passed between agents, they ask you before going on. Reading a chat shows it to the agent that reads it. Keep a chat out of this in its own settings. Agents on a linked machine can do the same with chats here when it's on there too, once it's on on the machine they were linked from.
+              </HelpTip>
+            </div>
+          )}
         </div>
-        <Switch checked={on} onChange={(v) => void put(v)} label={KEEP_GOING} describedBy={helpId} />
+        {on !== null && <Switch checked={on} onChange={(v) => void put(v)} label={OTHER_CHATS} />}
       </div>
-      <p className="help">An account switch, tighter permissions or a new folder always wait.</p>
-      {others && <p className="help" role="note">This doesn't reach your other machines. Each has its own: pick one at the top of Settings to change it there.</p>}
-      {saveError ? (
-        <p role="alert" className="small" style={{ color: "var(--red)", marginBottom: 0 }}>{saveError}</p>
-      ) : (
-        <p className="help" role="status" style={{ marginBottom: 0 }}>{saving ? "Saving…" : `Saves as you change it, for ${machine} only.`}</p>
-      )}
     </section>
   );
 }
 
-/**
- * Teamwork: whether agents may ask each other, how often, and which model answers. Every change saves by itself, like
- * the switch: at once for the switch, a moment after the last tap for the rest (a burst of + taps saves once).
- */
-function TeamworkSection() {
-  // This machine's: Settings opens anew when another machine is picked, and a save still on its way goes here.
-  const connection = useRef(useStore.getState().conn).current;
-  const [tw, setTw] = useState<TeamworkSettings | null>(null);
-  const [error, setError] = useState("");
-  const [saveError, setSaveError] = useState("");
-  const [saving, setSaving] = useState(false);
-  const saved = useRef<TeamworkSettings | null>(null);
-  const pending = useRef<TeamworkSettings | null>(null);
-  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const loads = useRef(0);
-  const saves = useRef(0);
-  // The newest save the hub took (answers can come back out of order).
-  const savedBy = useRef(0);
-  const mounted = useRef(true);
-  const load = () => {
-    const id = ++loads.current;
-    setError("");
-    api<HubSettings>("GET", "/api/settings/hub", undefined, connection)
-      .then((s) => {
-        if (id !== loads.current || pending.current) return;
-        saved.current = s.teamwork;
-        setTw(s.teamwork);
-      })
-      .catch((e) => { if (id === loads.current) setError(e instanceof Error ? e.message : String(e)); });
-  };
-  const flush = () => {
-    clearTimeout(timer.current);
-    const next = pending.current;
-    if (!next) return;
-    pending.current = null;
-    const id = ++saves.current;
-    setSaving(true);
-    api<HubSettings>("PUT", "/api/settings/hub", { teamwork: next }, connection)
-      .then((s) => {
-        if (id > savedBy.current) {
-          savedBy.current = id;
-          saved.current = s.teamwork;
-        }
-        if (!mounted.current || id !== saves.current) return;
-        setSaveError("");
-        if (!pending.current) setTw(s.teamwork);
-      })
-      .catch((e) => {
-        if (!mounted.current || id !== saves.current) return;
-        // Back to what's saved, saying so: what's shown is always what agents get.
-        pending.current = null;
-        clearTimeout(timer.current);
-        setTw(saved.current);
-        setSaveError(`Couldn't save: ${(e instanceof Error ? e.message : String(e)).replace(/[.\s]*$/, "")}. Change it again to retry.`);
-      })
-      .finally(() => { if (mounted.current && id === saves.current) setSaving(false); });
-  };
-  // Saved once you change something: the options correcting themselves (an effort the model doesn't take) aren't you.
-  const touched = useRef(false);
-  const change = (next: TeamworkSettings, wait = 700) => {
-    setTw(next);
-    setSaveError("");
-    if (!touched.current) return;
-    pending.current = next;
-    clearTimeout(timer.current);
-    timer.current = setTimeout(flush, wait);
-  };
-  useEffect(() => {
-    mounted.current = true;
-    load();
-    // Leaving Settings, or the app, doesn't lose a change still waiting to be saved.
-    const hidden = () => { if (document.visibilityState === "hidden") flush(); };
-    document.addEventListener("visibilitychange", hidden);
-    return () => {
-      document.removeEventListener("visibilitychange", hidden);
-      loads.current++;
-      flush();
-      mounted.current = false;
-    };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-  useReconnected(() => { if (!tw) load(); });
-  if (!tw) {
-    return error ? (
-      <div className="card" role="alert">
-        <p className="small" style={{ marginTop: 0 }}>Couldn't load teamwork settings: {error}</p>
-        <button className="btn small" onClick={load}>Retry</button>
-      </div>
-    ) : (
-      <p className="muted small" role="status">Loading teamwork settings…</p>
-    );
-  }
-  return (
-    <section className="card" aria-label="Teamwork" onPointerDownCapture={() => (touched.current = true)} onKeyDownCapture={() => (touched.current = true)}>
-      <div className="row">
-        <div style={{ flex: 1 }}>
-          <div style={{ fontWeight: 600 }}>Let agents ask each other for help</div>
-          <div className="help">
-            When on, Claude Code can ask Codex one focused question (and the other way round) when a second opinion really helps. The helper sees only the question, never your chat, can read the project but not change it, and isn't asked when its plan is nearly used up.
-          </div>
-        </div>
-        <Switch checked={tw.enabled} onChange={(v) => change({ ...tw, enabled: v }, 0)} label="Let agents ask each other for help" />
-      </div>
-      {tw.enabled && (
-        <>
-          <div className="row wrap" style={{ marginTop: 12 }}>
-            <div style={{ flex: "1 1 110px" }}>
-              <div style={{ fontWeight: 600 }}>Questions per reply</div>
-              <div className="help">How many times an agent may ask while writing one reply.</div>
-            </div>
-            <Stepper label="Questions per reply" value={tw.perReply} min={1} max={3} onChange={(v) => change({ ...tw, perReply: v })} />
-          </div>
-          <div className="row wrap" style={{ marginTop: 12 }}>
-            <div style={{ flex: "1 1 110px" }}>
-              <div style={{ fontWeight: 600 }}>Save the helper's plan</div>
-              <div className="help">Don't ask an agent whose plan is at or above this share of a limit.</div>
-            </div>
-            <Stepper label="Plan limit for asking" value={Math.round(tw.skipAbovePercent / 5)} min={10} max={20} unit={(n) => `${n * 5}%`} onChange={(v) => change({ ...tw, skipAbovePercent: v * 5 })} />
-          </div>
-          {CHAT_PROVIDERS.map((p) => (
-            <HelperChoice key={p} provider={p} value={tw.helper[p] ?? null} onChange={(h) => change({ ...tw, helper: { ...tw.helper, [p]: h } })} />
-          ))}
-          <p className="help">Light models and low effort keep questions cheap.</p>
-        </>
-      )}
-      {saveError ? (
-        <p role="alert" className="small" style={{ color: "var(--red)", marginBottom: 0 }}>{saveError}</p>
-      ) : (
-        <p className="help" role="status" style={{ marginBottom: 0 }}>{saving ? "Saving…" : "Changes save as you make them."}</p>
-      )}
-    </section>
-  );
-}
+const OTHER_CHATS = "Let agents reach your other chats";
 
-/** Which model (and effort) answers when an agent asks this one for help: said on the row, changed inside it. */
-function HelperChoice({ provider, value, onChange }: { provider: ChatProvider; value: { model: string | null; effort: string | null } | null; onChange: (v: { model: string | null; effort: string | null }) => void }) {
-  const choice: AgentChoice = { account: "default", model: value?.model ?? "", effort: value?.effort ?? "", permissionMode: "ask" };
-  const words = useChoiceWords(provider, choice, { effortWord: true });
-  return (
-    <details className="defaults-card" style={{ marginTop: 10 }} aria-label={`${PROVIDER_INFO[provider].name} helper model`}>
-      <summary>
-        {PROVIDER_INFO[provider].name} answers with
-        <span className="defaults-picks">{words}</span>
-      </summary>
-      <AgentOptions
-        provider={provider}
-        showPermissions={false}
-        showAccount={false}
-        showHelpers={false}
-        value={choice}
-        onChange={(c) => onChange({ model: c.model.trim() || null, effort: c.effort || null })}
-      />
-    </details>
-  );
-}

@@ -1,5 +1,6 @@
 // The one sign-in sheet (views/SignIn.tsx), drawn over whatever screen is up wherever it was opened from (signInSheet.ts),
 // and, for an agent that can't sign in from the sheet, the agent's own sign-in in a terminal as Settings has it.
+import { agentSettingsPath } from "@crosstalk/shared";
 import { useEffect, useRef, useState } from "react";
 import type { LoginFlow } from "@crosstalk/shared";
 import { closeSignIn, useSignInSheet, type SignInTarget } from "../signInSheet";
@@ -58,7 +59,7 @@ function TerminalSignIn({ target }: { target: SignInTarget }) {
     startLogin(target.provider, target.account)
       .then(setFlow)
       .catch((e) => {
-        toast("error", `Couldn't start the terminal sign-in: ${e instanceof Error ? e.message : String(e)} Try again from the agent's card in Settings → Agents.`);
+        toast("error", `Couldn't start the terminal sign-in: ${e instanceof Error ? e.message : String(e)} Try again from ${agentSettingsPath(target.provider)}.`);
         closeSignIn();
       });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps

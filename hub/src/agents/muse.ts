@@ -1,5 +1,5 @@
 import { MuseClient, readSessionDurability, spawnMspConnection, type Session } from "@muse-code/sdk";
-import type { ApprovalDecision, PermissionMode, UsageSnapshot } from "@crosstalk/shared";
+import { agentSettingsPath, type ApprovalDecision, type PermissionMode, type UsageSnapshot } from "@crosstalk/shared";
 import type { AgentDriver, DriverContext, TurnInput, TurnResult, TurnSink } from "./driver";
 import { textLimitHit } from "./limits";
 import { museAuthHit, museStartAuthHit } from "./stale-login";
@@ -132,7 +132,7 @@ export class MuseDriver implements AgentDriver {
       this.sink = null;
       const msg = e instanceof Error ? e.message : String(e);
       const auth = museStartAuthHit(`${msg}\n${this.stderr}`);
-      return { ok: false, error: auth || /auth|login|sign/i.test(msg + this.stderr) ? "Muse Code isn't signed in on the hub. Open Settings → AI services → Muse Code." : `Muse Code didn't start: ${msg}`, ...(auth ? { auth } : {}) };
+      return { ok: false, error: auth || /auth|login|sign/i.test(msg + this.stderr) ? `Muse Code isn't signed in on this machine. Open ${agentSettingsPath("muse")}.` : `Muse Code didn't start: ${msg}`, ...(auth ? { auth } : {}) };
     }
     const session = this.session!;
     const text = input.systemNote ? `${input.systemNote}\n\n---\n\n${input.prompt}` : input.prompt;
@@ -204,8 +204,8 @@ export class MuseDriver implements AgentDriver {
         const p = outcome.params;
         if (p.terminal === "completed") return { ok: true };
         if (p.terminal === "cancelled") return { ok: false, error: "stopped" };
-        const msg = p.error?.message ?? p.reason ?? "Muse Code turn failed";
-        if (p.error?.kind === "authRequired") return { ok: false, error: "Muse Code isn't signed in on the hub. Open Settings → AI services → Muse Code.", auth: museAuthHit(p.error) };
+        const msg = p.error?.message ?? p.reason ?? "Muse Code's reply failed";
+        if (p.error?.kind === "authRequired") return { ok: false, error: `Muse Code isn't signed in on this machine. Open ${agentSettingsPath("muse")}.`, auth: museAuthHit(p.error) };
         // Muse reports failures as sentences, so a limit is only taken from a clear one (limits.ts), never a guess.
         const limit = textLimitHit(msg);
         return { ok: false, error: msg, ...(limit ? { limit } : {}) };

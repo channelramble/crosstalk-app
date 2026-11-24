@@ -1,26 +1,28 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { ChevronRight, Laptop, Plus, RefreshCw, Settings } from "lucide-react";
-import { PROVIDER_INFO, isServiceOnlyAgent, slugHandle, type ChatProvider, type ServiceAgent, type LocalSession, type PromptTemplate, type Room, type RoomDefaults } from "@crosstalk/shared";
+import { settingsPath, PROVIDER_INFO, isServiceOnlyAgent, slugHandle, type ChatProvider, type ServiceAgent, type LocalSession, type PromptTemplate, type Room, type RoomDefaults } from "@crosstalk/shared";
 import { agentReady, usesApiKey, useMachines, useStore } from "../store";
 import { MachinePicker, useMachineName } from "./MachinePicker";
 import { accountKey } from "../accounts";
+import { useCatalog } from "../useCatalog";
+import { choiceWords } from "./AppSettings";
 import { serviceWhere, serviceWhereWords } from "../chatIdentity";
 import { showInSettings } from "../navigation";
-import { agentStarters, serverModelOptions, targetChoice, type NewChatTarget } from "../newChat";
-import { poolAgents, poolWhereWords } from "../poolChat";
+import { accountAnswers, agentStarters, answeringChoice, serverModelOptions, targetChoice, type NewChatTarget } from "../newChat";
 import { StarterList, useChatStarters } from "./NewChatMenu";
 import { agentCanRun, noDot, openCodeUnusable, routeMissing } from "../services";
 import { api, ApiError } from "../api";
 import { UsageLine } from "./HomeScreen";
 import { ApiBadge, Dialog, ProviderAvatar, ServiceAvatar, timeAgo } from "../ui";
 import { AgentOptions, cleanChoice, type AgentChoice } from "./AgentOptions";
+import { cleanHelpersOn } from "./HelpersOn";
 import { SidebarButton } from "./ChatSidebar";
-import { useSidebar } from "../sidebar";
 import { TemplatePick, type Picked } from "./TemplatePick";
 import { emptyBlanks, fillBlanks, parsePick, templateGroups, templateNote, withTemplate, type TemplateHere } from "../templates";
 import { sendFirstMessage } from "../templateApi";
 import { AgentSignInButton } from "./AgentSignInButton";
+import { openAiServices } from "./ServiceKey";
 import { FolderPicker, NEW_FOLDER, OTHER_FOLDER } from "./FolderPicker";
 
 
@@ -45,8 +47,8 @@ export function AgentScreen({ provider }: { provider: ChatProvider }) {
   const [localError, setLocalError] = useState("");
   const [loading, setLoading] = useState(false);
   const [creating, setCreating] = useState(false);
-  // Its own AI services (its endpoint accounts), the servers running here that would be added under it, and the model
-  // pool, which either agent can drive (newChat.ts agentStarters).
+  // Its own AI services (its endpoint accounts) and the servers running here that would be added under it (newChat.ts
+  // agentStarters).
   const starters = useChatStarters();
   const mine = agentStarters(starters.yours, provider);
   const [opening, setOpening] = useState<string | null>(null);
@@ -70,7 +72,7 @@ export function AgentScreen({ provider }: { provider: ChatProvider }) {
   }, [provider]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const open = async (s: LocalSession) => {
-    if (s.busy && provider === "claude" && !confirm("This conversation is open in the Claude app right now. You can read it here; to keep going here, close it in the Claude app, or duplicate it from the chat's settings.")) return;
+    if (s.busy && provider === "claude" && !confirm("This chat is open in the Claude app right now. You can read it here; to keep going here, close it in the Claude app, or duplicate it from the chat's settings.")) return;
     setOpening(s.id);
     try {
       const room = await api<Room>("POST", "/api/chats/open", { provider, id: s.id });
@@ -123,7 +125,7 @@ export function AgentScreen({ provider }: { provider: ChatProvider }) {
             {!ready && status?.checkedAt ? (
               <div role="note">
                 <p className="small" style={{ margin: "0 0 10px" }}>
-                  {status.installed ? `${info.name} needs your sign-in before it can chat. It takes a minute, from this device.` : `${info.name} isn't installed on the hub yet.`}
+                  {status.installed ? `${info.name} needs your sign-in before it can chat. It takes a minute, from this device.` : `${info.name} isn't installed on ${machine} yet.`}
                 </p>
                 <AgentSignInButton provider={provider} />
               </div>
@@ -134,9 +136,7 @@ export function AgentScreen({ provider }: { provider: ChatProvider }) {
             )}
           </section>
 
-          {/* The model pool's own dialog is drawn by the app around the list (it can start the pool first), as it is for
-              Home and the New chat menu; everything else opens here. */}
-          <StarterList rows={mine} onPick={(t) => (t.kind === "pool" ? useSidebar.getState().setCreating(t) : setStartOn(t))} title={`Models on ${info.name}`} help={`${info.name} can run these instead of its own models. A server found running here is added first.`} />
+          <StarterList rows={mine} onPick={setStartOn} title={`Models on ${info.name}`} help={`${info.name} can run these instead of its own models. A model found running here is added first.`} />
 
           <section style={{ marginTop: 20 }} aria-label="Your chats">
             <h3 className="section-title">Chats</h3>
@@ -177,7 +177,7 @@ export function AgentScreen({ provider }: { provider: ChatProvider }) {
               </button>
             </div>
             <p className="help" style={{ margin: "4px 0 8px" }}>
-              {provider === "claude" ? `Sessions from the Claude app and the claude command on ${machine}.` : `Threads from the Codex app, CLI and IDE on ${machine}.`} Open one to continue it here.
+              {provider === "claude" ? `Chats from the Claude app and the claude command on ${machine}.` : `Chats from the Codex app, the codex command and IDE on ${machine}.`} Open one to continue it here.
             </p>
             {localError && (
               <div role="alert" className="small">
@@ -215,6 +215,9 @@ export function AgentScreen({ provider }: { provider: ChatProvider }) {
 }
 
 
+/** Whether New chat's More options is open on this device ("1"), once someone has opened it. */
+export const MORE_KEY = "crosstalk.newchat.more.v1";
+
 /**
  * Starts a chat on what the New chat menu was tapped for: an agent, an AI service of yours, or a model server running on
  * this machine that isn't added yet (that one is added first, with the same checks Settings → AI services runs).
@@ -225,27 +228,17 @@ export function AgentScreen({ provider }: { provider: ChatProvider }) {
  */
 export function NewChatDialog({ target, folders = [], onClose }: { target: NewChatTarget; folders?: string[]; onClose: () => void }) {
   const server = target.kind === "server" ? target : null;
-  const pool = target.kind === "pool" ? target : null;
   const provider = target.kind === "group" ? "claude" : target.provider;
   // The one it was opened for, or a template's.
   const [agent, setAgent] = useState<ServiceAgent>(provider);
   // A service of yours, or a server to add first: either fixes the agent and the account, so the chat is that service's.
-  // The model pool keeps an account per agent — the same model on the same machines — so its account follows the agent
-  // picked below, and the chat is the pool's either way.
-  const service: Extract<NewChatTarget, { kind: "service" }> | null =
-    target.kind === "service"
-      ? target
-      : pool
-        ? { kind: "service", provider: agent, account: pool.offer.accounts[agent] ?? "", model: pool.offer.model, label: pool.offer.label, ...(pool.machine !== undefined ? { machine: pool.machine } : {}) }
-        : null;
+  const service = target.kind === "service" ? target : null;
   const info = PROVIDER_INFO[agent];
   const openRoom = useStore((s) => s.openRoom);
   const toast = useStore((s) => s.toast);
   const [active, setActive] = useState(() => service?.machine ?? useStore.getState().active);
   const machines = useMachines((m) => m.list);
   const selected = machines.find((m) => m.key === active);
-  /** Which agents can drive the pool's model: the ones it has an account for, the ones installed here first. */
-  const poolAgentList = pool ? poolAgents(pool.offer, { claude: selected?.providers.claude?.installed, codex: selected?.providers.codex?.installed }) : [];
   const hub = selected?.hub;
   // Crosstalk's own agent and OpenCode have nothing to sign in to: the first is part of the hub, the second has to be installed.
   const onlyOnServices = isServiceOnlyAgent(agent);
@@ -264,6 +257,14 @@ export function NewChatDialog({ target, folders = [], onClose }: { target: NewCh
   // Whether a new folder is named after it, as the hub does it (chats.ts): not for "New chat", the stand-in its first
   // message replaces, nor for a name with no Latin letters or digits (slugHandle leaves just "a-"). Those are dated.
   const namesFolder = !!named && named !== "New chat" && slugHandle(named) !== "a-";
+  // More options: closed until you open it, and then it stays as you left it on this device.
+  const [more, setMore] = useState(() => {
+    try {
+      return localStorage.getItem(MORE_KEY) === "1";
+    } catch {
+      return false;
+    }
+  });
   const [busy, setBusy] = useState(false);
   /** Adding the server, or making the chat, went wrong: said here with a way out, not in a toast that slips away. */
   const [startError, setStartError] = useState("");
@@ -271,8 +272,8 @@ export function NewChatDialog({ target, folders = [], onClose }: { target: NewCh
   const account = service ? selected?.accounts[accountKey(service.provider, service.account)] : undefined;
   // What the chat will be: the service's name and avatar, or the agent's. A service of yours is what the chat is called,
   // so New chat says the same thing the chat itself will.
-  const where = server ? ("local" as const) : pool ? ("pool" as const) : account ? serviceWhere(account) : null;
-  const shownName = server ? server.label : pool ? pool.offer.label : service ? account?.label ?? service.label ?? "this service" : info.name;
+  const where = server ? ("local" as const) : account ? serviceWhere(account) : null;
+  const shownName = server ? server.label : service ? account?.label ?? service.label ?? "this service" : info.name;
   // Recent project folders on this machine, newest first, without the throwaway temp ones.
   const recent = useMemo(() => [...new Set([...chatFolders, ...(active === useStore.getState().active ? folders : [])].filter((f) => f && !/^\/(private\/)?tmp\b/.test(f)))].slice(0, 8), [chatFolders, folders]);
 
@@ -306,8 +307,12 @@ export function NewChatDialog({ target, folders = [], onClose }: { target: NewCh
     pickFolder(t.folder, "");
     templateFolder.current = true;
   };
-  /** What a service or a server fixes, whatever the saved defaults say (newChat.ts targetChoice). */
-  const onTarget = (base: AgentChoice): AgentChoice => targetChoice(base, pool ? { ...pool, provider: agent as ChatProvider } : target);
+  /**
+   * What a service or a server fixes, whatever the saved defaults say (newChat.ts targetChoice). An agent's own New chat
+   * fixes nothing, but never opens on a signed-out account while another of its accounts can answer (answeringChoice).
+   */
+  const onTarget = (base: AgentChoice): AgentChoice =>
+    target.kind === "agent" ? answeringChoice(base, agent, Object.values(selected?.accounts ?? {}), selected?.providers[agent]?.signedIn) : targetChoice(base, target);
   /** Your defaults, with the picked template on them (and its folder, on its own machine). */
   const fromDefaults = (base: AgentChoice) => {
     defaultsNow.current = onTarget(base);
@@ -395,7 +400,30 @@ export function NewChatDialog({ target, folders = [], onClose }: { target: NewCh
   // The agent that drives a service has to be on the machine picked. A service is its own sign-in, so only the program
   // matters — without it the chat would be made and then answer nothing but "codex isn't installed on the hub".
   const agentMissing = (!!service || !!server) && !!selected && selected.status === "open" && !agentCanRun(agent, selected.providers[agent]);
-  const canStart = !busy && !!choice && !!selected && selected.status === "open" && !serviceMissing && !agentMissing && !(folder === OTHER_FOLDER && !path.trim()) && blanksLeft === 0;
+  // An agent's own New chat, and the account picked is signed out (or the agent isn't installed): a chat on it could
+  // only answer with an error, so Start gives way to the way to sign it in. A service or a server is its own account,
+  // with nothing to sign in to.
+  const chosen = choice && target.kind === "agent" ? selected?.accounts[accountKey(agent, choice.account)] : undefined;
+  // What More options holds now, said on its closed row: the name you gave, then the account (when it isn't the main
+  // one), model, effort and permissions the chat starts with.
+  const { catalog: moreCatalog } = useCatalog(agent, choice?.account ?? "default", selected?.conn);
+  const moreAccount = choice && choice.account !== "default" && !service && !server ? selected?.accounts[accountKey(agent, choice.account)]?.label ?? null : null;
+  const moreWords = [named || null, choice ? choiceWords(agent as ChatProvider, choice, moreCatalog?.models ?? [], { permissions: true, account: moreAccount }) : defaultsError ? null : "Loading your defaults…"].filter(Boolean).join(" · ");
+  const moreOpen = more || !!picked || !!defaultsError;
+  const toggleMore = (open: boolean) => {
+    // Opened for you (a template, a problem): closing it then isn't your choice for next time either way.
+    if (open === moreOpen && open !== more && (picked || defaultsError)) return;
+    setMore(open);
+    try {
+      if (open) localStorage.setItem(MORE_KEY, "1");
+      else localStorage.removeItem(MORE_KEY);
+    } catch {
+      // storage unavailable: it opens closed next time
+    }
+  };
+  const signedOut = target.kind === "agent" && !!choice && selected?.status === "open" && accountAnswers(Object.values(selected.accounts), agent, choice.account, selected.providers[agent]?.signedIn) === false;
+  const onMachine = machines.length > 1 && selected ? ` on ${selected.name}` : "";
+  const canStart = !busy && !!choice && !!selected && selected.status === "open" && !serviceMissing && !agentMissing && !signedOut && !(folder === OTHER_FOLDER && !path.trim()) && blanksLeft === 0;
   const start = async () => {
     if (!choice || !canStart) return;
     setBusy(true);
@@ -403,7 +431,7 @@ export function NewChatDialog({ target, folders = [], onClose }: { target: NewCh
     try {
       const c = cleanChoice(choice);
       const cwd = folder === NEW_FOLDER ? undefined : folder === OTHER_FOLDER ? path.trim() : folder;
-      const chat = { model: c.model || null, effort: c.effort || null, permissionMode: c.permissionMode, helperModel: c.helperModel || null, cwd, ...(named ? { name: named } : {}) };
+      const chat = { model: c.model || null, effort: c.effort || null, permissionMode: c.permissionMode, helperModel: c.helperModel || null, ...(c.helpers !== undefined ? { helpers: cleanHelpersOn(c.helpers) } : {}), cwd, ...(named ? { name: named } : {}) };
       // A server that isn't added yet: the hub checks it and adds it as the account Settings → AI services would have
       // made, then starts the chat on it — one request, so a chat is never left without its service or the other way round.
       const room = server
@@ -420,7 +448,7 @@ export function NewChatDialog({ target, folders = [], onClose }: { target: NewCh
       // The hub's own words say what went wrong and what to do; a hub too old to add a server from here says so too.
       setStartError(
         server && routeMissing(message, e instanceof ApiError ? e.status : undefined)
-          ? `${selected?.name ?? "This machine"}'s hub is too old to add a server from here. Add ${server.label} in Settings → AI services, then start the chat.`
+          ? `${selected?.name ?? "This machine"}'s Crosstalk is too old to add one of your own models from here. Add ${server.label} in ${settingsPath("ai-services")}, then start the chat.`
           : message,
       );
     } finally {
@@ -442,12 +470,37 @@ export function NewChatDialog({ target, folders = [], onClose }: { target: NewCh
               {startError}
             </p>
           )}
+          {signedOut && (
+            <p role="status" className="dialog-foot-note">
+              {chosen?.kind === "apikey"
+                ? `${chosen.label}'s API key isn't working${onMachine}. Check it in ${settingsPath("ai-services")}, then start the chat.`
+                : !selected?.providers[agent]?.installed
+                  ? `${info.name} isn't installed${onMachine} yet, so it couldn't answer.`
+                  : `${chosen && chosen.id !== "default" ? `${info.name}'s ${chosen.label} account` : info.name} isn't signed in${onMachine}, so it couldn't answer. Sign in, then start the chat.`}
+            </p>
+          )}
           <button className="btn" onClick={() => requestClose()}>
             Cancel
           </button>
-          <button className="btn primary" onClick={start} disabled={!canStart}>
-            {busy ? (server ? "Adding and starting…" : "Starting…") : startError ? "Try again" : "Start chat"}
-          </button>
+          {/* Signed out: no Start to tap and get an error from. The way forward takes its place, one tap away. */}
+          {signedOut && chosen?.kind === "apikey" ? (
+            <button
+              className="btn primary"
+              onClick={() => {
+                onClose();
+                useStore.getState().activate(active);
+                openAiServices();
+              }}
+            >
+              Open Accounts
+            </button>
+          ) : signedOut ? (
+            <AgentSignInButton provider={agent as ChatProvider} account={chosen && chosen.id !== "default" ? { id: chosen.id, label: chosen.label } : undefined} machineKey={active} onLeave={onClose} />
+          ) : (
+            <button className="btn primary" onClick={start} disabled={!canStart}>
+              {busy ? (server ? "Adding and starting…" : "Starting…") : startError ? "Try again" : "Start chat"}
+            </button>
+          )}
         </>
       )}
     >
@@ -456,19 +509,15 @@ export function NewChatDialog({ target, folders = [], onClose }: { target: NewCh
       {(service || server) && (
         <p className="help" style={{ marginTop: 0 }}>
           {server
-            ? `Found running on ${selected?.name ?? "this machine"}. Starting adds it to your AI services first, with the same checks as Settings.`
-            : pool
-              ? `${pool.offer.model ?? "Its model"} ${poolWhereWords(pool.offer)} · driven by ${info.name}`
-              : account
-                ? `${serviceWhereWords(account, selected?.name)} · driven by ${info.name}`
-                : ""}
+            ? `Found running on ${selected?.name ?? "this machine"}. Starting adds it to your accounts first, with the same checks as Settings.`
+            : account
+              ? `${serviceWhereWords(account, selected?.name)} · driven by ${info.name}`
+              : ""}
         </p>
       )}
       {serviceMissing && (
         <p role="alert" className="svc-problem">
-          {pool
-            ? `${shownName} isn't set up on ${selected?.name ?? "this machine"}. Pick the machine it runs on, or set it up there in Settings → Model pool.`
-            : `${shownName} isn't on ${selected?.name ?? "this machine"}. Pick the machine it's on, or add it there in Settings → AI services.`}
+          {`${shownName} isn't on ${selected?.name ?? "this machine"}. Pick the machine it's on, or add it there in ${settingsPath("ai-services")}.`}
         </p>
       )}
       {agentMissing && (
@@ -507,51 +556,9 @@ export function NewChatDialog({ target, folders = [], onClose }: { target: NewCh
               useStore.getState().setView("settings");
             }}
           >
-            Open AI services
+            Open Accounts
           </button>
         </div>
-      )}
-      {/* Shown while there are templates, and while one is picked (it may have been deleted elsewhere: its message still
-          goes). Not for a service or a server: a template carries its own agent and account, which would take the
-          service the menu was tapped for out from under the chat. */}
-      {!service && !server && (groups.length > 0 || picked) && <TemplatePick groups={groups} several={machines.length > 1} picked={picked} onPick={pick} message={message} onMessage={setMessage} values={values} onValues={setValues} note={note} />}
-      <label className="field">
-        <span>Name</span>
-        <input
-          className="input"
-          aria-label="Name"
-          aria-describedby="new-chat-name-help"
-          value={name}
-          maxLength={80}
-          placeholder="Optional"
-          autoComplete="off"
-          enterKeyHint="go"
-          onChange={(e) => setName(e.target.value)}
-          // Enter starts the chat (not while a keyboard is still putting a word together).
-          onKeyDown={(e) => {
-            if (e.key !== "Enter" || e.nativeEvent.isComposing) return;
-            e.preventDefault();
-            void start();
-          }}
-        />
-        <span className="help" id="new-chat-name-help">
-          Without one, it's named from your first message.
-        </span>
-      </label>
-      {/* The model pool is one model with an agent driving it: which agent stays yours to pick, because the permissions,
-          the helper agents and the model lock are that agent's. Nothing else about the chat changes with it. */}
-      {pool && poolAgentList.length > 1 && (
-        <label className="field">
-          <span>Agent</span>
-          <select className="select" aria-label="Agent" value={agent} onChange={(e) => setAgent(e.target.value as ChatProvider)}>
-            {poolAgentList.map((p) => (
-              <option key={p} value={p}>
-                {PROVIDER_INFO[p].name}
-              </option>
-            ))}
-          </select>
-          <span className="help">Drives {shownName}: its permissions, helper agents and model lock.</span>
-        </label>
       )}
       {machines.length > 1 && !server && (
         <label className="field">
@@ -573,44 +580,81 @@ export function NewChatDialog({ target, folders = [], onClose }: { target: NewCh
         onPick={pickFolder}
         known={recent}
         conn={selected?.conn ?? null}
-        newHelp={`An empty folder in ${hub?.workspaceRoot ?? "the workspaces folder"}${namesFolder ? ", named after the chat" : ""}.`}
-        pickedHelp={`${shownName} works in this folder on the hub.`}
+        newHelp={`An empty folder in ${hub?.workspaceRoot ?? "Crosstalk's chats folder"}${namesFolder ? ", named after the chat" : ""}.`}
+        pickedHelp={`${shownName} works in this folder on ${selected?.name ?? "this machine"}.`}
       />
       {/* A template's message goes as soon as the chat is made: one about a project would get an empty folder. */}
       {folder === NEW_FOLDER && firstMessage && <p className="help">The first message goes at once. If it's about a project, pick that project's folder.</p>}
-      {choice ? (
-        <AgentOptions
-          key={`${active}|${agent}|${target.kind}`}
-          provider={agent}
-          value={choice}
-          onChange={setChoice}
-          connection={selected?.conn}
-          accountList={selected?.accounts}
-          // A service is the chat's identity: changing the account here would make it another chat. Its own settings can.
-          showAccount={!service && !server}
-          offer={server ? serverModelOptions(server.models) : undefined}
-          starting
-        />
-      ) : defaultsError ? (
-        <div role="alert" className="defaults-failed">
-          <p className="small" style={{ margin: 0, fontWeight: 600 }}>
-            Couldn't read your {info.name} defaults from {selected?.name ?? "this machine"}.
-          </p>
-          <p className="help" style={{ margin: "2px 0 8px" }}>
-            {defaultsError} {selected?.status === "open" ? "" : `It tries again when ${selected?.name ?? "the machine"} is back.`}
-          </p>
-          <div className="row wrap" style={{ gap: 8 }}>
-            <button className="btn small" onClick={loadDefaults}>
-              Retry
-            </button>
-            <button className="btn small ghost" onClick={ownDefaults}>
-              Use {info.name}'s own defaults
-            </button>
+      {/* Everything else has an answer already (your defaults, a name from the first message): it's here for when you
+          want another. Open while a template is picked (its blanks are in here) or the defaults couldn't be read. */}
+      <details className="more-options" open={moreOpen} onToggle={(e) => toggleMore(e.currentTarget.open)}>
+        <summary>
+          More options
+          <span className="more-picks">{moreWords}</span>
+        </summary>
+        {/* Shown while there are templates, and while one is picked (it may have been deleted elsewhere: its message still
+            goes). Not for a service or a server: a template carries its own agent and account, which would take the
+            service the menu was tapped for out from under the chat. */}
+        {!service && !server && (groups.length > 0 || picked) && <TemplatePick groups={groups} several={machines.length > 1} picked={picked} onPick={pick} message={message} onMessage={setMessage} values={values} onValues={setValues} note={note} />}
+        <label className="field">
+          <span>Name</span>
+          <input
+            className="input"
+            aria-label="Name"
+            aria-describedby="new-chat-name-help"
+            value={name}
+            maxLength={80}
+            placeholder="Optional"
+            autoComplete="off"
+            enterKeyHint="go"
+            onChange={(e) => setName(e.target.value)}
+            // Enter starts the chat (not while a keyboard is still putting a word together).
+            onKeyDown={(e) => {
+              if (e.key !== "Enter" || e.nativeEvent.isComposing) return;
+              e.preventDefault();
+              void start();
+            }}
+          />
+          <span className="help" id="new-chat-name-help">
+            Without one, it's named from your first message.
+          </span>
+        </label>
+        {choice ? (
+          <AgentOptions
+            key={`${active}|${agent}|${target.kind}`}
+            provider={agent}
+            value={choice}
+            onChange={setChoice}
+            connection={selected?.conn}
+            accountList={selected?.accounts}
+            // A service is the chat's identity: changing the account here would make it another chat. Its own settings can.
+            showAccount={!service && !server}
+            offer={server ? serverModelOptions(server.models) : undefined}
+            starting
+            cards
+            helpersOn
+          />
+        ) : defaultsError ? (
+          <div role="alert" className="defaults-failed">
+            <p className="small" style={{ margin: 0, fontWeight: 600 }}>
+              Couldn't read your {info.name} defaults from {selected?.name ?? "this machine"}.
+            </p>
+            <p className="help" style={{ margin: "2px 0 8px" }}>
+              {defaultsError} {selected?.status === "open" ? "" : `It tries again when ${selected?.name ?? "the machine"} is back.`}
+            </p>
+            <div className="row wrap" style={{ gap: 8 }}>
+              <button className="btn small" onClick={loadDefaults}>
+                Retry
+              </button>
+              <button className="btn small ghost" onClick={ownDefaults}>
+                Use {info.name}'s own defaults
+              </button>
+            </div>
           </div>
-        </div>
-      ) : (
-        <p className="muted small">Loading your defaults…</p>
-      )}
+        ) : (
+          <p className="muted small">Loading your defaults…</p>
+        )}
+      </details>
     </Dialog>
   );
 }

@@ -256,10 +256,10 @@ describe("the MCP helper's tools", () => {
     const { tools } = await toolSet({ CROSSTALK_TOOLSET: "chat", CROSSTALK_CHATS: "1" });
     const t = Object.fromEntries(tools.map((x) => [x.name, x]));
     expect(t.list_chats.description).toBe(
-      "List the user's Crosstalk chats and group rooms on this machine and their other machines, most recently active first. The first line says which machines answered. Each line shows the chat's id, name, machine, agent, folder, whether its agent is working or waiting for the user, and its last message; your own chat is marked. Use the id with read_chat or send_to_chat.",
+      "List the user's Crosstalk chats (group chats too) on this machine and their other machines, most recently active first. The first line says which machines answered. Each line shows the chat's id, name, machine, agent, folder, whether its agent is working or waiting for the user, and its last message; your own chat is marked. Use the id with read_chat or send_to_chat.",
     );
     expect(t.read_chat.description).toBe(
-      "Read recent messages of one of the user's Crosstalk chats or group rooms, on any of their machines, oldest first, each labelled with who wrote it. Long messages are shortened: pass seq to read one message in full, or before to read older ones.",
+      "Read recent messages of one of the user's Crosstalk chats (group chats too), on any of their machines, oldest first, each labelled with who wrote it. Long messages are shortened: pass seq to read one message in full, or before to read older ones.",
     );
     expect(t.send_to_chat.description).toBe(
       "Message the agent in another of the user's Crosstalk chats (on any of their machines) and wait for its reply. It sees your message marked as coming from you and this chat, not from the user. It can't see this conversation or this machine's files, so include everything it needs. Use it when the user asks, or when that chat has something you need; not for progress updates. Group rooms can be read but not messaged. To answer a message another chat sent you, just reply normally: your reply goes back to it.",
@@ -1011,7 +1011,7 @@ describe("teamwork helpers", () => {
     } finally {
       // Back to what providers/all.ts registers.
       registerDriver("codex", (ctx) => {
-        if (!ctx.bin) throw new Error("Codex isn't installed on the hub. Install it under Agents & sign-ins.");
+        if (!ctx.bin) throw new Error("Codex isn't installed on the machine. Install it under Agents & sign-ins.");
         return new CodexDriver(ctx, ctx.bin);
       });
       await h.close();

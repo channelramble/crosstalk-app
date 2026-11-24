@@ -36,4 +36,6 @@ test("pair prints a code that pairs once, and touches only the data folder", asy
   } finally {
     store.close();
   }
-});
+  // As long as the command itself is given above: on a busy disk (a Linux check just after an install) its first write
+  // to a new database took more than a test's usual five seconds.
+}, 40_000);

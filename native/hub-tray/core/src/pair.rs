@@ -66,12 +66,12 @@ pub fn qr_svg(text: &str) -> Option<String> {
 
 pub fn make(place: &Place, setup: &Setup, runner: &dyn Runner, now_ms: u64) -> Result<PairCode, String> {
     if !setup.bin_exists {
-        return Err(format!("The hub isn't installed at {}.", setup.bin.display()));
+        return Err(format!("Crosstalk isn't installed at {}.", setup.bin.display()));
     }
     let out = runner.run(&command(place, setup))?;
     let code = parse_code(&out.stdout).ok_or_else(|| {
         let said = out.said();
-        format!("The hub didn't give a code{}", if said.is_empty() { ".".to_string() } else { format!(": {}", said.lines().last().unwrap_or("")) })
+        format!("Crosstalk didn't give a code{}", if said.is_empty() { ".".to_string() } else { format!(": {}", said.lines().last().unwrap_or("")) })
     })?;
     let base = setup.public_url.clone();
     let link = base.as_deref().map(|b| link(b, &code));
@@ -139,6 +139,6 @@ mod tests {
         assert_eq!((code.link, code.qr_svg), (None, None));
         let fake = Fake::new();
         fake.answer("crosstalk-hub pair", Output { code: Some(1), stdout: String::new(), stderr: "SQLiteError: database is locked".into() });
-        assert_eq!(make(&place, &setup, &fake, 0).unwrap_err(), "The hub didn't give a code: SQLiteError: database is locked");
+        assert_eq!(make(&place, &setup, &fake, 0).unwrap_err(), "Crosstalk didn't give a code: SQLiteError: database is locked");
     }
 }

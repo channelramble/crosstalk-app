@@ -132,7 +132,7 @@ test("a chat whose Claude Code sign-in was cleared: one button, the sign-in from
   await expect(card).toContainText("Claude Code is signed out on Mac mini, so it couldn't answer. Sign it in again from this device, then tap Try again.");
   await expect(card.getByRole("button")).toHaveCount(1);
   await expect(card.getByRole("button")).toHaveAccessibleName("Sign in to Claude Code on Mac mini");
-  await expect(page.locator(".messages")).not.toContainText("Settings → Agents → Claude Code → Sign in");
+  await expect(page.locator(".messages")).not.toContainText("Settings → Accounts → Claude Code → Sign in");
   await expect(page.locator(".messages")).toContainText("Claude Code's sign-in had gone stale in this chat. Crosstalk started it again, but its sign-in failed again.");
   await noHorizontalOverflow(page);
   await shot(page, "1-chat");
@@ -146,9 +146,14 @@ test("a chat whose Claude Code sign-in was cleared: one button, the sign-in from
   // Settings → Agents says it too: on Claude Code's own card, and on the setup checklist's item.
   await page.goto(`/#/settings/agent-claude`);
   const agentCard = page.locator("#agent-claude");
-  await expect(agentCard.getByRole("group", { name: "Sign in to Claude Code on Mac mini" })).toContainText("Its chats can't answer until it's signed in again. A chat stopped on it.");
-  await agentCard.getByRole("group", { name: "Sign in to Claude Code on Mac mini" }).scrollIntoViewIfNeeded();
+  // The account's own row says what's waiting on it, with Sign in right there.
+  const account = agentCard.getByRole("group", { name: "Claude Code · Main", exact: true });
+  await expect(account).toContainText("Its chats can't answer until it's signed in again. A chat stopped on it.");
+  await expect(account.getByRole("button", { name: "Sign in", exact: true })).toBeVisible();
+  await account.scrollIntoViewIfNeeded();
   await shot(page, "1b-settings-agent");
+  // The setup checklist is under Machines → Advanced.
+  await page.goto("/#/settings/agent-setup");
   const checklist = page.locator(".agent-setup");
   const item = checklist.getByRole("group", { name: "Sign in to Claude Code on Mac mini" });
   await expect(item).toContainText("From here: no need to be at Mac mini.");

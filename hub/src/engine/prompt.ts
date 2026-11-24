@@ -208,7 +208,7 @@ export function buildChatPrompt(newMessages: (Message & { seq?: number })[], not
 }
 
 /**
- * What "Send now" hands a group chat agent's running reply: your messages labelled as in its turns, each one for other
+ * What goes into a group chat agent's running reply (Engine.handToReply): your messages labelled as in its turns, each one for other
  * agents saying who answers it (they do, in their own turns), so it isn't taken for this agent's to do.
  */
 export function buildGroupSteer(messages: Labelled[], members: Member[], me: Member, targets: (m: Labelled) => Member[]): string {

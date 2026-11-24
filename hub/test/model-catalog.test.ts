@@ -239,7 +239,7 @@ test("More models: a model moving into or out of them reaches the apps, and look
   }
 });
 
-/** What the Claude provider reads of the hub for an account without an API key (a plan sign-in). */
+/** What the Claude provider reads of the hub for an account without an API key (a account on a plan). */
 const claudeApp = (env: Record<string, string>) => ({ providers: { agentEnv: () => env, currentAccount: () => "default", apiKeyFor: () => null } }) as unknown as App;
 const jsonLines = (file: string) => (existsSync(file) ? readFileSync(file, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l)) : []);
 
@@ -253,7 +253,7 @@ test("Claude Code: its models, and each one's context window, from a Claude Code
   const bin = join(FIX, "fake-claude");
   const models = await claudeProvider.listModels!(app, bin);
   expect(models.map((m) => m.id)).toEqual(["opus", "claude-sonnet-4-6", "haiku", "retired"]);
-  // A plan sign-in: Claude Code's picker has no other models (it takes them only by full name), so none go under More models.
+  // A account on a plan: Claude Code's picker has no other models (it takes them only by full name), so none go under More models.
   expect(models.filter((m) => m.more)).toEqual([]);
   const sizes = await claudeProvider.modelContext!(app, bin, models);
   expect(sizes.opus).toEqual({ contextWindow: 1_000_000, compactAt: 967_000 });
@@ -454,7 +454,7 @@ test("More models for a Claude API key: Anthropic's Models API, asked with that 
     await app.providers.setApiKeyAccount("claude", "sk-ant-api03-new-key-5555555555", { id: acct.id });
     expect((await app.providers.models("claude", acct.id, { fresh: true })).models.some((m) => m.more)).toBe(false);
 
-    // A plan sign-in can't say more and isn't asked: Anthropic never hears from it.
+    // A account on a plan can't say more and isn't asked: Anthropic never hears from it.
     const asked = seen.length;
     const plan = await app.providers.models("claude");
     expect(plan.models.some((m) => m.more)).toBe(false);

@@ -1,6 +1,6 @@
 import type { Page, Route } from "@playwright/test";
 import type { LocalServer, ModelCatalog, Room } from "@crosstalk/shared";
-import { test, expect, noHorizontalOverflow } from "./fixtures";
+import { test, expect, noHorizontalOverflow, effortSteps, modelInForce } from "./fixtures";
 
 // Starting a chat with a model of your own, on a phone: the New chat menu lists the AI services you've added and the
 // model servers running on this machine that aren't added yet, and the chat that follows says which service and model it
@@ -62,9 +62,8 @@ test("the New chat menu lists the agents, your services with their model, and a 
     await serversAndModels(page, [found()], [{ id: QWEN }]);
     await page.goto("/");
     const menu = await openNewChat(page);
-    // The agents first, then the service added, then the server found here, then the model pool (this hub's has no model
-    // yet, so it's last of your models: a suggestion never pushes one you can use off the screen), then Group chat.
-    await expect(menu.getByRole("menuitem")).toHaveText([/Claude Code/, /Codex/, /Qwen here/, new RegExp(LLAMA.replace(/[().]/g, "\\$&")), /Model pool/, /Group chat/]);
+    // The agents first, then the service added, then the server found here, then Group chat.
+    await expect(menu.getByRole("menuitem")).toHaveText([/Claude Code/, /Codex/, /Qwen here/, new RegExp(LLAMA.replace(/[().]/g, "\\$&")), /Group chat/]);
     await expect(menu.getByText(`${QWEN} · 2 models · on this machine`, { exact: true })).toBeVisible();
     await expect(menu.getByText(`${QWEN} · add it and start`, { exact: true })).toBeVisible();
     await page.screenshot({ ...shot("new-chat-menu-390.png") });
@@ -114,11 +113,11 @@ test("one tap on a server running here adds it and starts the chat, which says w
     const dialog = page.getByRole("dialog", { name: `New chat with ${LLAMA}`, exact: true });
     await expect(dialog).toBeVisible();
     // It says plainly that it will be added first, and which model it will run.
-    await expect(dialog.getByText(/Starting adds it to your AI services first/)).toBeVisible();
-    await expect(dialog.getByRole("combobox", { name: "Model", exact: true })).toHaveValue(QWEN);
+    await expect(dialog.getByText(/Starting adds it to your accounts first/)).toBeVisible();
+    await expect(modelInForce(dialog)).toHaveAttribute("data-value", QWEN);
     // The server's model takes the defaults' place, and nothing of the other account rides along: this server has no
     // effort levels (so there is no field to clear it in) and doesn't serve the helper model Codex's defaults name.
-    await expect(dialog.getByRole("combobox", { name: "Effort", exact: true })).toHaveCount(0);
+    await expect(effortSteps(dialog)).toHaveCount(0);
     await page.screenshot({ ...shot("new-chat-local-server-390.png") });
     await noHorizontalOverflow(page);
     await dialog.getByRole("button", { name: "Start chat", exact: true }).click();
@@ -133,9 +132,11 @@ test("one tap on a server running here adds it and starts the chat, which says w
     // What the app asked the hub for: that server, its name, and the model the dialog showed.
     expect(asked).toHaveLength(1);
     expect(asked[0]).toMatchObject({ baseUrl: "http://127.0.0.1:8080", label: LLAMA, provider: "codex", model: QWEN, effort: null, helperModel: null });
-    // The chat list puts it under the service, not under Codex.
+    // The chat list shows it as the service's chat (its avatar), not as Codex's.
     await page.getByRole("button", { name: /^Show chats/ }).click();
-    await expect(page.getByRole("button", { name: `New chat with ${LLAMA}, on this machine`, exact: true })).toBeVisible();
+    const listed = page.getByRole("complementary", { name: "Chats", exact: true }).locator(".csb-chat.active");
+    await expect(listed.locator(".svc-avatar")).toHaveAttribute("aria-label", LLAMA);
+    await expect(listed.getByLabel("Codex", { exact: true })).toHaveCount(0);
     await page.screenshot({ ...shot("chat-list-service-group-390.png") });
     await noHorizontalOverflow(page);
   } finally {

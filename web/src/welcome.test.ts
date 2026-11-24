@@ -1,12 +1,16 @@
 import { expect, test } from "bun:test";
 import type { Room } from "@crosstalk/shared";
 import { jargonIn } from "./helpCopy";
-import { chatHasMessage, dismissWelcome, nextWelcomeStep, WELCOME_KEY, welcomeDismissed, welcomeShows, welcomeSteps } from "./welcome";
+import { chatAnswered, dismissWelcome, nextWelcomeStep, WELCOME_KEY, welcomeDismissed, welcomeShows, welcomeSteps } from "./welcome";
 
 const AT = 1_000_000;
 /** A chat nobody has written in yet (the hub makes a room with createdAt equal to updatedAt). */
-const chat = (patch: Partial<Room> = {}) => ({ chat: { provider: "claude", origin: "web" }, createdAt: AT, updatedAt: AT, ...patch }) as Room;
-const done = (signedIn: boolean, rooms: Room[]) => welcomeSteps({ signedIn, rooms }).map((s) => s.done);
+const chat = (patch: Partial<Room> = {}) => ({ id: "r1", chat: { provider: "claude", origin: "web" }, createdAt: AT, updatedAt: AT, ...patch }) as Room;
+/** A chat an agent has answered in: its reply ended, and the hub counts it as finished. */
+const answered = (id = "r1") => chat({ id, updatedAt: AT + 9000, lastReplyAt: AT + 9000 });
+/** The replies the hub says were finished, in the chats named. */
+const finished = (...ids: string[]) => Object.fromEntries(ids.map((id) => [id, [{ turns: 1 }]]));
+const done = (signedIn: boolean, rooms: Room[], activity = finished("r1")) => welcomeSteps({ signedIn, rooms, activity }).map((s) => s.done);
 
 test("a new person has done nothing: all three steps wait", () => {
   expect(done(false, [])).toEqual([false, false, false]);
@@ -17,45 +21,62 @@ test("step 1 is done once an agent is signed in, whatever else there is", () => 
   expect(done(true, [])).toEqual([true, false, false]);
 });
 
-test("step 2 is done once a chat exists, step 3 once something was said in one", () => {
-  expect(done(true, [chat()])).toEqual([true, true, false]);
-  // A message was sent (the chat changed after it was made), the reply not in yet.
-  expect(done(true, [chat({ updatedAt: AT + 5000 })])).toEqual([true, true, true]);
+test("step 2 is done once a chat exists, step 3 once an agent has answered in one", () => {
+  expect(done(true, [chat()], {})).toEqual([true, true, false]);
+  // A message was sent (the chat changed after it was made), the reply not in yet: not done.
+  expect(done(true, [chat({ updatedAt: AT + 5000 })], {})).toEqual([true, true, false]);
   // A reply has ended.
-  expect(done(true, [chat({ updatedAt: AT + 9000, lastReplyAt: AT + 9000 })])).toEqual([true, true, true]);
+  expect(done(true, [answered()])).toEqual([true, true, true]);
   // Any one chat is enough, even among empty ones.
-  expect(done(true, [chat(), chat({ lastReplyAt: AT + 1 }), chat()])).toEqual([true, true, true]);
+  expect(done(true, [chat(), answered("r2"), chat({ id: "r3" })], finished("r2"))).toEqual([true, true, true]);
+});
+
+test("a first reply that failed isn't an answer: the last step stays until one comes through", () => {
+  // No sign-in, a refused key: the reply ended (the hub notes when), but no reply was finished.
+  const failed = chat({ updatedAt: AT + 9000, lastReplyAt: AT + 9000 });
+  expect(done(true, [failed], {})).toEqual([true, true, false]);
+  expect(done(true, [failed], { r1: [] })).toEqual([true, true, false]);
+  expect(nextWelcomeStep(welcomeSteps({ signedIn: true, rooms: [failed], activity: {} }))).toBe("hello");
+  // Another chat's finished reply isn't this one's.
+  expect(done(true, [failed], finished("r2"))).toEqual([true, true, false]);
+  // Tried again, and answered.
+  expect(done(true, [chat({ updatedAt: AT + 20_000, lastReplyAt: AT + 20_000 })], finished("r1"))).toEqual([true, true, true]);
+  // A failure in one chat doesn't undo an answer in another.
+  expect(done(true, [failed, answered("r2")], finished("r2"))).toEqual([true, true, true]);
 });
 
 test("older group rooms are not chats", () => {
-  const room = { ...chat({ updatedAt: AT + 5000, lastReplyAt: AT + 5000 }), chat: null } as Room;
-  const absent = { createdAt: AT, updatedAt: AT + 5000 } as Room;
-  expect(done(true, [room, absent])).toEqual([true, false, false]);
+  const room = { ...answered(), chat: null } as Room;
+  const absent = { id: "r2", createdAt: AT, updatedAt: AT + 5000, lastReplyAt: AT + 5000 } as Room;
+  expect(done(true, [room, absent], finished("r1", "r2"))).toEqual([true, false, false]);
 });
 
 test("signed out again with chats kept: only step 1 is left", () => {
-  expect(done(false, [chat({ lastReplyAt: AT + 1 })])).toEqual([false, true, true]);
+  expect(done(false, [answered()])).toEqual([false, true, true]);
 });
 
-test("a chat has a message when a reply ended or it changed after it was made", () => {
-  expect(chatHasMessage({ createdAt: AT, updatedAt: AT })).toBe(false);
-  expect(chatHasMessage({ createdAt: AT, updatedAt: AT, lastReplyAt: null })).toBe(false);
-  expect(chatHasMessage({ createdAt: AT, updatedAt: AT + 1 })).toBe(true);
-  expect(chatHasMessage({ createdAt: AT, updatedAt: AT, lastReplyAt: AT })).toBe(true);
+test("a chat is answered once a reply has ended in it and the hub counts one as finished", () => {
+  expect(chatAnswered({})).toBe(false);
+  expect(chatAnswered({ lastReplyAt: null }, [{ turns: 1 }])).toBe(false);
+  // Ended, but nothing finished: it failed.
+  expect(chatAnswered({ lastReplyAt: AT })).toBe(false);
+  expect(chatAnswered({ lastReplyAt: AT }, [{ turns: 0 }])).toBe(false);
+  expect(chatAnswered({ lastReplyAt: AT }, [{ turns: 1 }])).toBe(true);
+  expect(chatAnswered({ lastReplyAt: AT }, [{ turns: 0 }, { turns: 3 }])).toBe(true);
 });
 
 test("the next step is the first one not done", () => {
-  const next = (signedIn: boolean, rooms: Room[]) => nextWelcomeStep(welcomeSteps({ signedIn, rooms }));
+  const next = (signedIn: boolean, rooms: Room[]) => nextWelcomeStep(welcomeSteps({ signedIn, rooms, activity: finished("r1") }));
   expect(next(false, [])).toBe("signin");
   expect(next(true, [])).toBe("folder");
   expect(next(true, [chat()])).toBe("hello");
-  expect(next(false, [chat({ lastReplyAt: AT + 1 })])).toBe("signin");
-  expect(next(true, [chat({ lastReplyAt: AT + 1 })])).toBeNull();
+  expect(next(false, [answered()])).toBe("signin");
+  expect(next(true, [answered()])).toBeNull();
 });
 
 test("the card shows only when the hub's state is in, it wasn't skipped and something is left to do", () => {
   const todo = welcomeSteps({ signedIn: false, rooms: [] });
-  const all = welcomeSteps({ signedIn: true, rooms: [chat({ lastReplyAt: AT + 1 })] });
+  const all = welcomeSteps({ signedIn: true, rooms: [answered()], activity: finished("r1") });
   expect(welcomeShows({ loaded: true, dismissed: false, steps: todo })).toBe(true);
   // Before the state arrives every step looks undone: a returning person must not see a flash of the card.
   expect(welcomeShows({ loaded: false, dismissed: false, steps: todo })).toBe(false);

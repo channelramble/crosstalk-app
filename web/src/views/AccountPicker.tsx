@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { MULTI_ACCOUNT_PROVIDERS, type Provider } from "@crosstalk/shared";
+import { settingsPath, MULTI_ACCOUNT_PROVIDERS, type Provider } from "@crosstalk/shared";
 import { accountDescription } from "../accounts";
 import { useStore } from "../store";
 
@@ -26,7 +26,7 @@ export function AccountPicker({ provider, value, onChange, label = "Account" }: 
         {value !== "default" && !list.some((a) => a.id === value) && <option value={value}>{loading ? "Loading selected account…" : "Selected account unavailable"}</option>}
       </select>
     </label>
-    <span className="help">Manage sign-ins under Settings → AI services. Accounts keep separate credentials and usage.</span>
+    <span className="help">Manage accounts under {settingsPath("ai-services")}. Each keeps its own sign-in and usage.</span>
     {error && <div role="alert"><span className="help" style={{ color: "var(--red)" }}>{error}</span><button type="button" className="btn small" onClick={load}>Retry accounts</button></div>}
   </div>;
 }

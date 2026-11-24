@@ -940,57 +940,6 @@ describe("restarts and stuck processes", () => {
     await second.shutdown();
   });
 
-  test("a reply on the model pool's server waits after a restart until the pool runs again, and not if it was answered meanwhile", async () => {
-    const store = new Store(":memory:");
-    const bus = new Bus();
-    const prompts: string[] = [];
-    const make = () =>
-      new Engine({
-        store,
-        bus,
-        createDriver: (ctx) => {
-          const inner = new MockDriver(ctx);
-          return { provider: "mock", runTurn: (input, sink) => (prompts.push(input.prompt), inner.runTurn(input, sink)), interrupt: () => inner.interrupt(), dispose: () => inner.dispose() };
-        },
-        mcpLaunch: () => ({ command: "true", args: [], env: {} }),
-      });
-    const now = Date.now();
-    const room: Room = { id: newId("r"), name: "R", cwd: "/tmp", mode: "direct", leadMemberId: null, maxHops: 6, rounds: 1, parallel: false, createdAt: now, updatedAt: now, archived: false };
-    store.insertRoom(room);
-    const member = { id: newId("mb"), roomId: room.id, handle: "local", provider: "mock" as const, model: null, role: "", permissionMode: "ask" as const, status: "idle" as const, statusDetail: null, config: { delayMs: 400, reply: "Finished.", account: "pool1" }, createdAt: now, position: 0 };
-    store.insertMember(member);
-    const onPool = (m: Member) => m.config?.account === "pool1";
-    const first = make();
-    first.postHumanMessage(room.id, "SUMMARIZE_THE_LOG please", "Phone");
-    while (!first.runningTurns(room.id).length) await Bun.sleep(10);
-    await first.shutdown();
-    // The hub starts again: the pool's server isn't up yet, so the reply waits instead of failing.
-    const second = make();
-    second.resumeAfterRestart(onPool);
-    await Bun.sleep(100);
-    expect(prompts.length).toBe(1);
-    expect(store.listMessages(room.id, { limit: 20 }).at(-1)?.text).toContain("once the model pool runs again");
-    // The pool runs: it picks up where it left off.
-    second.resumeHeld(onPool);
-    await second.whenIdle();
-    expect(prompts.length).toBe(2);
-    expect(prompts[1]).toContain("SUMMARIZE_THE_LOG");
-    // Held again after another restart, then answered by hand before the pool came back: nothing to pick up later.
-    second.postHumanMessage(room.id, "SECOND_REQUEST now", "Phone");
-    while (!second.runningTurns(room.id).length) await Bun.sleep(10);
-    await second.shutdown();
-    const third = make();
-    third.resumeAfterRestart(onPool);
-    third.postHumanMessage(room.id, "answer it now", "Phone");
-    await third.whenIdle();
-    const count = prompts.length;
-    third.resumeHeld(onPool);
-    await Bun.sleep(100);
-    await third.whenIdle();
-    expect(prompts.length).toBe(count);
-    await third.shutdown();
-  });
-
   test("a chat turn resumed after a restart, once the agent had its message, still rewinds to before the first try", async () => {
     const store = new Store(":memory:");
     const bus = new Bus();
@@ -1139,7 +1088,7 @@ describe("approvals and stopping", () => {
     await t.engine.stop(t.room.id);
     await t.engine.whenIdle();
     expect(t.prompts).toEqual(["build it"]);
-    // Nothing answers it, and the app can tell (the agent hasn't read it): "Not answered · Answer now".
+    // Nothing answers it, and the app can tell (the agent hasn't read it): "Not answered · Try again".
     expect(t.member().readSeq ?? 0).toBeLessThan(waiting.seq);
     expect(t.member().status).toBe("idle");
     t.engine.retry(t.room.id);
@@ -1211,7 +1160,7 @@ describe("try again", () => {
     let mode: "busy" | "break" | "ok" = "busy";
     const t = chatSetup(async (_call, _input, sink) => {
       // Claude Code refusing a session that's open in the Claude app: it never takes the message in.
-      if (mode === "busy") return { ok: false, error: "This conversation is open in the Claude app right now." };
+      if (mode === "busy") return { ok: false, error: "This chat is open in the Claude app right now." };
       sink.taken?.();
       if (mode === "break") {
         sink.text("Half way");
@@ -1222,7 +1171,7 @@ describe("try again", () => {
     // 1. It failed before the agent got the message: given back, and Try again sends it as it was.
     const first = t.engine.postHumanMessage(t.room.id, "please fix the login page", "Phone");
     await t.engine.whenIdle();
-    expect(t.replies()).toEqual([["error", "⚠️ This conversation is open in the Claude app right now."]]);
+    expect(t.replies()).toEqual([["error", "⚠️ This chat is open in the Claude app right now."]]);
     expect(t.member()).toMatchObject({ status: "error" });
     expect(t.member().readSeq ?? 0).toBeLessThan(first.seq);
     mode = "ok";
@@ -1287,16 +1236,18 @@ describe("try again", () => {
     return { ...t, release: (r: { ok: boolean; error?: string; text?: string }) => release(r) };
   }
 
-  test("Try again works after Send now handed a waiting message to the reply that then failed", async () => {
+  test("Try again works after a message went into the reply that then failed", async () => {
     const t = heldChat({ steer: async () => true });
     t.engine.postHumanMessage(t.room.id, "build it", "Phone");
     await t.started(1);
     t.engine.postHumanMessage(t.room.id, "and the tests", "Phone");
-    expect(await t.engine.sendNow(t.room.id)).toBe(true);
+    // It went in by itself: the turn that waited for it is gone, and a tap has nothing left to send.
+    expect(await t.engine.sendNow(t.room.id)).toBe(false);
+    expect(t.engine.queuedTurns(t.room.id)).toEqual([]);
     t.release({ ok: false, error: "API Error: overloaded" });
     await t.engine.whenIdle();
     expect(t.replies().at(-1)?.[0]).toBe("error");
-    // The waiting turn Send now dropped (made after the reply, never run) isn't what's tried again: the reply is.
+    // The waiting turn the hand-over dropped (made after the reply, never run) isn't what's tried again: the reply is.
     t.engine.retry(t.room.id);
     await t.engine.whenIdle();
     expect(t.prompts).toHaveLength(2);
@@ -1325,7 +1276,7 @@ describe("try again", () => {
   test("Try again sends what the agent had again without making it the rewind point, even after a try that couldn't start", async () => {
     let mode: "break" | "busy" | "ok" = "break";
     const t = chatSetup(async (_call, _input, sink) => {
-      if (mode === "busy") return { ok: false, error: "This conversation is open in the Claude app right now." };
+      if (mode === "busy") return { ok: false, error: "This chat is open in the Claude app right now." };
       sink.taken?.();
       if (mode === "break") return { ok: false, error: "API Error: overloaded" };
       return { ok: true, text: "Migrated." };
@@ -1356,7 +1307,7 @@ describe("try again", () => {
     await t.engine.shutdown();
   });
 
-  test("Start fresh stops the reply and leaves a message the agent hadn't read unread, for Answer now", async () => {
+  test("Start fresh stops the reply and leaves a message the agent hadn't read unread, for Try again", async () => {
     const t = chatSetup(async (call, _input, sink) => {
       if (call > 1) return { ok: true, text: "Fresh answer." };
       sink.taken?.();
@@ -1370,7 +1321,7 @@ describe("try again", () => {
     await t.engine.whenIdle();
     expect(t.replies()[0][0]).toBe("stopped");
     expect(t.prompts).toEqual(["build it"]);
-    // Not answered by itself, and not lost: the app shows "Not answered · Answer now" under it.
+    // Not answered by itself, and not lost: the app shows "Not answered · Try again" under it.
     expect(t.member().readSeq ?? 0).toBeLessThan(waiting.seq);
     expect(t.member().status).toBe("idle");
     t.engine.retry(t.room.id);
@@ -1434,8 +1385,8 @@ describe("questions from an agent", () => {
   });
 });
 
-describe("send now", () => {
-  test("a message waiting behind a chat's running reply goes into that reply, and no second reply runs", async () => {
+describe("a message sent while the agent works", () => {
+  test("it goes into the chat's running reply by itself, and no second reply runs", async () => {
     const store = new Store(":memory:");
     const bus = new Bus();
     const inputs: string[] = [];
@@ -1468,8 +1419,9 @@ describe("send now", () => {
     engine.postHumanMessage(room.id, "build it", "Mac");
     for (let i = 0; i < 100 && !release; i++) await Bun.sleep(5);
     engine.postHumanMessage(room.id, "also add tests", "Phone");
-    expect(await engine.sendNow(room.id)).toBe(true);
-    expect(steered).toBe("also add tests");
+    expect(steered).toBe("also add tests"); // with no tap
+    expect(await engine.sendNow(room.id)).toBe(false); // an older app's Send now: nothing is waiting for it
+    expect(engine.queuedTurns(room.id)).toEqual([]);
     release!();
     await engine.whenIdle();
     expect(inputs).toEqual(["build it"]); // no second turn for the message that went in early
@@ -1516,8 +1468,7 @@ describe("send now", () => {
     store.insertMember({ id: newId("mb"), roomId: room.id, handle: "claude", provider: "mock", model: null, role: "", permissionMode: "ask", status: "idle", statusDetail: null, config: {}, createdAt: now, position: 0 });
     engine.postHumanMessage(room.id, "build it", "Mac");
     for (let i = 0; i < 100 && !release; i++) await Bun.sleep(5);
-    engine.postHumanMessage(room.id, "also add tests", "Phone");
-    expect(await engine.sendNow(room.id)).toBe(true);
+    engine.postHumanMessage(room.id, "also add tests", "Phone"); // into the reply, by itself
     await engine.whenIdle();
     const log = store.listMessages(room.id, { limit: 20 }).filter((m) => m.authorKind !== "system").map((m) => `${m.authorKind}: ${m.text}`);
     expect(log).toEqual(["human: build it", "agent: Working on step one.", "human: also add tests", "agent: Got your note, adding tests too."]);
@@ -1565,8 +1516,7 @@ describe("send now", () => {
     store.insertMember({ id: newId("mb"), roomId: room.id, handle: "claude", provider: "mock", model: null, role: "", permissionMode: "ask", status: "idle", statusDetail: null, config: {}, createdAt: now, position: 0 });
     engine.postHumanMessage(room.id, "show me", "Mac");
     for (let i = 0; i < 100 && !release; i++) await Bun.sleep(5);
-    engine.postHumanMessage(room.id, "and the other one", "Phone");
-    expect(await engine.sendNow(room.id)).toBe(true);
+    engine.postHumanMessage(room.id, "and the other one", "Phone"); // into the reply, by itself
     await engine.whenIdle();
     const replies = store.listMessages(room.id, { limit: 20 }).filter((m) => m.authorKind === "agent").map((m) => m.text);
     expect(replies).toEqual(["Before: ![a](/api/rooms/r/uploads/a)", "After: ![b](/api/rooms/r/uploads/b)"]);

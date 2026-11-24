@@ -5,16 +5,6 @@
   --c: var(--surface-3);
   color: var(--text-2);
 }
-/* The list's Group chats heading isn't a link (an agent's heading opens its page). */
-.csb-agent.static {
-  cursor: default;
-}
-@media (hover: hover) {
-  .csb-agent.static:hover {
-    background: none;
-    color: var(--text-2);
-  }
-}
 /* A group chat's avatars, stacked: as small as one avatar's room allows. */
 .group-avatar {
   flex: none;
@@ -29,11 +19,6 @@
 .group-avatar.sm .avatar:first-child,
 .group-avatar .avatar:first-child {
   margin-left: 0;
-}
-.csb-chat.pinned .group-avatar.sm .avatar {
-  width: 18px;
-  height: 18px;
-  font-size: 8px;
 }
 
 /* ---- New group chat ---- */

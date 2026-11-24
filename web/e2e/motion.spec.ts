@@ -1,6 +1,6 @@
 import type { APIRequestContext, Page, WebSocketRoute } from "@playwright/test";
 import type { Member, Message, Room } from "@crosstalk/shared";
-import { test, expect } from "./fixtures";
+import { test, expect, chatSettingsAll } from "./fixtures";
 
 /*
  * Motion (web/src/styles/motion.css, web/src/motion.ts), on a phone (390 px), in each engine:
@@ -204,9 +204,11 @@ test.describe("with motion", () => {
     try {
       await page.goto(`/#/room/${c.room.id}`);
       await watch(page);
-      await page.getByRole("button", { name: "Chat settings", exact: true }).click();
+      await chatSettingsAll(page);
       const sheet = page.getByRole("dialog", { name: "Chat settings", exact: true });
-      const cancel = sheet.getByRole("button", { name: "Cancel", exact: true });
+      // Any button of the sheet: Duplicate chat…, under This chat.
+      const cancel = sheet.getByRole("button", { name: "Duplicate chat…", exact: true });
+      await cancel.scrollIntoViewIfNeeded();
       // Pressed: a touch smaller, its colour the same as before the press (no flash). Let go off it: no click.
       await expect.poll(() => sheet.evaluate((d) => d.getAnimations().length)).toBe(0);
       const r = (await cancel.boundingBox())!;
@@ -225,10 +227,7 @@ test.describe("with motion", () => {
       const pinned = sheet.locator('label.switch[aria-label="Pinned"]');
       await pinned.click();
       await expect(pinned.locator("input")).toBeChecked();
-      // Unsaved: closing asks first, and the question fades in where the settings were.
-      await page.keyboard.press("Escape");
-      await expect(sheet.getByRole("alert")).toContainText("Discard changes?");
-      await sheet.getByRole("button", { name: "Keep editing", exact: true }).click();
+      // Saved as it's flipped (there's nothing unsaved to ask about on closing): flipped back.
       await pinned.click();
       await expect(pinned.locator("input")).not.toBeChecked();
 
@@ -248,7 +247,7 @@ test.describe("with motion", () => {
       expect(seen.animations.some((a) => a.what.endsWith("::after transition") && a.props.includes("transform")), "the switch's thumb").toBe(true);
       expect(seen.animations.some((a) => a.what.endsWith("::before transition") && a.props.includes("opacity")), "the switch's colour").toBe(true);
       const steps = seen.animations.filter((a) => a.what.startsWith("div.dialog-body") && a.what.endsWith("script"));
-      expect(steps.length, "the discard question and the second step fade in").toBeGreaterThanOrEqual(3);
+      expect(steps.length, "the second step fades in").toBeGreaterThanOrEqual(1);
       for (const s of steps) {
         expect(s.props).toEqual(["opacity"]);
         expect(s.ms).toBeLessThanOrEqual(150);
@@ -385,9 +384,10 @@ test.describe("with motion", () => {
       await page.evaluate(async () => (await import("/src/store.ts")).useStore.getState().toast("info", "Motion check: in time."));
       await expect(page.locator(".toast")).toBeVisible();
       seen.notice = await inPlaceBy(".toast");
+      // A chip under the message box opens the same sheet, on its section.
       await page.getByRole("button", { name: /^Permissions:/ }).click();
-      await expect(page.getByRole("dialog", { name: "Permissions", exact: true })).toBeVisible();
-      seen.menu = await inPlaceBy(".ctl-pop");
+      await expect(page.getByRole("dialog", { name: "Chat settings", exact: true }).getByRole("region", { name: "May do", exact: true })).toBeVisible();
+      seen.menu = await inPlaceBy(".app > .overlay .dialog");
       await page.keyboard.press("Escape");
       await expect(page.getByRole("dialog")).toHaveCount(0);
 
@@ -399,12 +399,12 @@ test.describe("with motion", () => {
         drawer: { names: "m-drawer-in", ms: expect.any(Number) },
         newChat: { names: "csb-menu-in", ms: expect.any(Number) },
         notice: { names: "m-toast-in", ms: expect.any(Number) },
-        menu: { names: "m-menu-in", ms: expect.any(Number) },
+        menu: { names: "m-sheet-in", ms: expect.any(Number) },
       });
       expect(seen.sheet.ms, "a sheet").toBeLessThanOrEqual(220);
       expect(seen.drawer.ms, "the drawer").toBeLessThanOrEqual(200);
       expect(seen.notice.ms, "a notice").toBeLessThanOrEqual(180);
-      expect(seen.menu.ms, "a chat's menu").toBeLessThanOrEqual(120);
+      expect(seen.menu.ms, "the chat's settings from a chip (a sheet now)").toBeLessThanOrEqual(220);
       expect(seen.newChat.ms, "the New chat menu").toBeLessThanOrEqual(120);
     } finally {
       await c.cleanup();
@@ -480,10 +480,11 @@ test.describe("with Reduce Motion", () => {
       await expect(opener).toBeVisible();
       await watch(page);
 
-      // A sheet, its switch, its "Discard changes?", a two-step question.
-      await opener.click();
+      // A sheet, its switch, a two-step question.
+      await chatSettingsAll(page);
       const sheet = page.getByRole("dialog", { name: "Chat settings", exact: true });
-      const cancel = sheet.getByRole("button", { name: "Cancel", exact: true });
+      const cancel = sheet.getByRole("button", { name: "Duplicate chat…", exact: true });
+      await cancel.scrollIntoViewIfNeeded();
       const r = (await cancel.boundingBox())!;
       await page.mouse.move(r.x + r.width / 2, r.y + r.height / 2);
       await page.mouse.down();
@@ -494,10 +495,12 @@ test.describe("with Reduce Motion", () => {
       await page.mouse.up();
       const pinned = sheet.locator('label.switch[aria-label="Pinned"]');
       await pinned.click();
+      await expect(pinned.locator("input")).toBeChecked();
+      await pinned.click();
+      await expect(pinned.locator("input")).not.toBeChecked();
       await page.keyboard.press("Escape");
-      await sheet.getByRole("button", { name: "Discard changes", exact: true }).click();
-      expect(await page.getByRole("dialog").count()).toBe(0);
-      await opener.click();
+      await expect(page.getByRole("dialog")).toHaveCount(0);
+      await chatSettingsAll(page);
       await page.getByRole("button", { name: "Delete chat", exact: true }).click();
       await page.getByRole("dialog", { name: "Delete this chat?", exact: true }).getByRole("button", { name: "Continue", exact: true }).click();
       await page.getByRole("dialog", { name: "Are you sure?", exact: true }).getByRole("button", { name: "Cancel", exact: true }).click();

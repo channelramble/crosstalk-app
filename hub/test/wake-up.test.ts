@@ -15,7 +15,7 @@ import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import type { BackgroundTask, Member, SendNowResult } from "@crosstalk/shared";
+import type { BackgroundTask, Member } from "@crosstalk/shared";
 import { registerDriver } from "../src/agents";
 import { BuiltinDriver } from "../src/agents/builtin";
 import { ClaudeDriver } from "../src/agents/claude";
@@ -238,7 +238,7 @@ describe("a settings change waiting for an agent's background job", () => {
     expect(h.starts()).toHaveLength(1);
   });
 
-  /** Send now while the reply's last words come, and a model change waiting for that reply. `knobs`: the fake's. */
+  /** A message sent while the reply's last words come, and a model change waiting for that reply. `knobs`: the fake's. */
   async function handedAsItEnds(knobs: Record<string, string>) {
     // Claude Code queues a message sent mid-reply and answers it in a turn of its own when the reply ends first.
     const h = hub({ FAKE_CLAUDE_QUEUE: "1", FAKE_CLAUDE_WAKE_MS: "600", ...knobs }, "claude-opus-5");
@@ -247,7 +247,8 @@ describe("a settings change waiting for an agent's background job", () => {
     h.app.updateMember(h.member.id, { model: "claude-opus-5-5" }, "iPhone");
     expect(h.notes().at(-1)).toBe("Model changed from Opus 5 to Opus 5.5 on iPhone. Claude Code answers on Opus 5 until this reply finishes.");
     h.say("Also check the retry count");
-    expect(await h.app.engine.sendNowWhy(h.chat.id)).toEqual({ sent: true });
+    // Into the reply by itself, and the chat says what it's answered with.
+    await until(() => h.app.engine.queuedTurns(h.chat.id).length === 0, "the message to go in");
     expect(h.notes().at(-1)).toBe("Answering now with the settings Claude Code started with. Your changes apply from its next reply.");
     // The reply ends before Claude Code has read it: Claude Code answers it next, in a turn of its own. (Before the fix
     // the change applied as the reply ended, and the message, already marked read, went with the process.)
@@ -264,7 +265,7 @@ describe("a settings change waiting for an agent's background job", () => {
     expect(h.transcript().some((l) => l.text === "No response requested.")).toBe(false);
   }
 
-  test("a message Send now handed to a reply as it ended is answered by that process, then the change applies", () => handedAsItEnds({}));
+  test("a message that went into a reply as it ended is answered by that process, then the change applies", () => handedAsItEnds({}));
 
   test("one still on its way down Claude Code's input as the reply ended: the 'idle' it said before reading it isn't taken for done", async () => {
     // Nothing but the turn that answers it may end the wait here: no quiet spell does.
@@ -372,7 +373,7 @@ describe("a settings change waiting for an agent's background job", () => {
     expect(h.app.engine.busyWork()).toEqual([]);
   });
 
-  test("Send now while the report is about to be answered by itself: it says so ('ownTurn'), and never 'try again' where the retry would be refused", async () => {
+  test("a message sent while the report is about to be answered by itself waits for that reply: an older app's Send now says so ('ownTurn'), and never 'try again' where the retry would be refused", async () => {
     const h = hub({ FAKE_CLAUDE_RUN_MODELS: "claude-opus-5,", FAKE_CLAUDE_WAKE_MS: "1500", FAKE_CLAUDE_WAKE_STREAM_MS: "2000" });
     h.say("Run the full test suite in the background, then carry on with the plan. BACKGROUND_JOB");
     await h.idle();
@@ -392,87 +393,6 @@ describe("a settings change waiting for an agent's background job", () => {
     expect(flag(h.starts()[1], "--permission-mode")).toBe("default");
     expect(h.inputs().at(-1)).toContain("What's next on the plan?");
     expect(h.inputs().at(-1)).toContain("Your background work reported back (above)");
-  });
-
-  test("with the switch off, Send now or Answer now while the report is about to be answered by itself: it says so ('ownTurn'), and never 'try again' where the retry would be refused", async () => {
-    const h = hub({ FAKE_CLAUDE_RUN_MODELS: "claude-opus-5,", FAKE_CLAUDE_WAKE_MS: "1500", FAKE_CLAUDE_WAKE_STREAM_MS: "2000" });
-    h.app.setHubSettings({ messagesFlow: false });
-    h.say("Run the full test suite in the background, then carry on with the plan. BACKGROUND_JOB");
-    await h.idle();
-    await until(() => h.job()?.status === "running", "the job to be reported running");
-    h.app.updateMember(h.member.id, { model: "claude-opus-5-5" }, "iPhone");
-    writeFileSync(h.files.jobDone, "");
-    await until(() => h.now().held?.owed === "report", "the report to be owed");
-    h.say("What's next on the plan?");
-    const owed: SendNowResult = { sent: false, why: "ownTurn", held: { change: "settings", helpers: true, owed: "report" } };
-    expect(await h.app.engine.sendNowWhy(h.chat.id, null, { currentSettings: true })).toEqual(owed);
-    expect(await h.app.engine.sendNowWhy(h.chat.id)).toEqual(owed);
-    // Tighter permissions as well: what holds the message is said first (it used to be "notYet", then "settings").
-    h.app.updateMember(h.member.id, { permissionMode: "ask" }, "iPhone");
-    expect(await h.app.engine.sendNowWhy(h.chat.id, null, { currentSettings: true })).toEqual({ sent: false, why: "helpers", held: { change: "permissions", helpers: true, owed: "report" } });
-    expect(h.notes().some((n) => n.startsWith("Answering now"))).toBe(false);
-    // The report's reply is stopped as it starts, and the process on Ask carries on from it and answers the message.
-    await until(() => h.starts().length === 2, "a process on the new settings");
-    await h.idle();
-    expect(flag(h.starts()[1], "--permission-mode")).toBe("default");
-    expect(h.inputs().at(-1)).toContain("What's next on the plan?");
-    expect(h.inputs().at(-1)).toContain("Your background work reported back (above)");
-  });
-
-  test("with the switch off, a message while the job runs waits for it, so the new model applies first; Answer now answers it on the process as it is", async () => {
-    const h = hub({ FAKE_CLAUDE_RUN_MODELS: "claude-opus-5,", FAKE_CLAUDE_WAKE_MS: "300" });
-    h.app.setHubSettings({ messagesFlow: false });
-    h.say("Run the full test suite in the background, then carry on with the plan. BACKGROUND_JOB");
-    await h.idle();
-    await until(() => h.job()?.status === "running", "the job to be reported running");
-    h.app.updateMember(h.member.id, { model: "claude-opus-5-5" }, "iPhone");
-    expect(h.now().held).toEqual({ change: "settings", helpers: true });
-    h.say("While that runs, what's next on the plan?");
-    await Bun.sleep(100);
-    expect(h.replies()).toHaveLength(1);
-    expect(h.app.engine.queuedTurns(h.chat.id)).toHaveLength(1);
-    expect(await h.app.engine.sendNowWhy(h.chat.id, null, { currentSettings: true })).toEqual({ sent: true });
-    await until(() => h.replies().length === 2, "the answer");
-    await h.idle();
-    // The same process, job and all, and the chat says so.
-    expect(h.starts()).toHaveLength(1);
-    expect(h.job()?.status).toBe("running");
-    expect(h.notes()).toContain("Answering now with the settings Claude Code started with. Your changes apply once its helpers finish.");
-    // The next one waits for the job this time: its report is answered on that process, then the new model applies first.
-    h.say("And after that?");
-    await Bun.sleep(100);
-    expect(h.replies()).toHaveLength(2);
-    expect(h.starts()).toHaveLength(1);
-    writeFileSync(h.files.jobDone, "");
-    await until(() => h.starts().length === 2, "a process on the new model");
-    await h.idle();
-    expect(flag(h.starts()[1], "--model")).toBe("claude-opus-5-5");
-    expect(h.inputs().at(-1)).toContain("And after that?");
-    expect(h.replies().filter((r) => r === "The test suite passed. Carrying on with the plan: fixing the flaky test next.")).toHaveLength(1);
-    expect(h.transcript().some((l) => l.text === "No response requested.")).toBe(false);
-  });
-
-  test("flipping the switch on with a message held for the job: it goes now on that process, once, and the new model still waits for the job", async () => {
-    const h = hub({ FAKE_CLAUDE_RUN_MODELS: "claude-opus-5,", FAKE_CLAUDE_WAKE_MS: "300" });
-    h.app.setHubSettings({ messagesFlow: false });
-    h.say("Run the full test suite in the background, then carry on with the plan. BACKGROUND_JOB");
-    await h.idle();
-    await until(() => h.job()?.status === "running", "the job to be reported running");
-    h.app.updateMember(h.member.id, { model: "claude-opus-5-5" }, "iPhone");
-    h.say("While that runs, what's next on the plan?");
-    await Bun.sleep(100);
-    expect(h.replies()).toHaveLength(1);
-    h.app.setHubSettings({ messagesFlow: true });
-    await until(() => h.replies().length === 2, "the answer");
-    await h.idle();
-    expect(h.inputs().filter((i) => i.includes("While that runs, what's next on the plan?"))).toHaveLength(1);
-    expect(h.starts()).toHaveLength(1);
-    expect(h.job()?.status).toBe("running");
-    // The model change's own note said when it applies: nothing more.
-    expect(h.notes()).toEqual(["Model changed from Default to Opus 5.5 on iPhone. Claude Code answers on Opus 5 until its helpers finish."]);
-    writeFileSync(h.files.jobDone, "");
-    await until(() => h.notes().includes("Now on Opus 5.5: the next reply uses it."), "the new model to apply");
-    await h.idle();
   });
 
   test("the report's request is refused by the usage limit before any words: the reply waits for the limit, the change applies, and it carries on from the report on the new model", async () => {
@@ -523,7 +443,7 @@ describe("Stop while a job runs and a message went in by itself", () => {
     await h.idle();
   };
 
-  test("Stop everything stops: Claude Code hands the message back, it answers nothing by itself, and Answer now delivers it once", async () => {
+  test("Stop everything stops: Claude Code hands the message back, it answers nothing by itself, and Try again delivers it once", async () => {
     const { h, yours } = await wentIn();
     await h.app.engine.stop(h.chat.id);
     await settle(h);
@@ -532,12 +452,12 @@ describe("Stop while a job runs and a message went in by itself", () => {
     expect(answers(h)).toEqual([]);
     expect(h.notes()).toEqual([]);
     expect(h.app.store.listTurns(h.chat.id).map((t) => t.status)).toEqual(["done", "stopped", "stopped"]);
-    // It's unread, with Answer now, and nothing is left owed that holds anything.
+    // It's unread, with Try again under it, and nothing is left owed that holds anything.
     expect(h.now().readSeq).toBeLessThan(yours.seq);
     expect(h.now().status).toBe("idle");
     expect(h.app.engine.busyWork()).toEqual([{ roomId: h.chat.id, memberId: h.member.id, why: "background" }]);
     h.app.engine.retry(h.chat.id);
-    await until(() => answers(h).length === 1, "Answer now to deliver it");
+    await until(() => answers(h).length === 1, "Try again to deliver it");
     await h.idle();
     expect(answers(h)).toHaveLength(1);
     expect(h.now().readSeq).toBeGreaterThanOrEqual(yours.seq);
@@ -549,74 +469,27 @@ describe("Stop while a job runs and a message went in by itself", () => {
     await h.idle();
   });
 
-  describe("with the switch off", () => {
-    /** The same, but nothing goes in by itself: Send now puts the message into Claude Code's queue. */
-    async function tapped() {
-      const h = hub({ FAKE_CLAUDE_QUEUE: "1" });
-      h.app.setHubSettings({ messagesFlow: false });
-      h.say("Run the full test suite in the background, then carry on with the plan. BACKGROUND_JOB");
-      await h.idle();
-      await until(() => h.job()?.status === "running", "the job to be reported running");
-      h.say("LONG_STEP: run the long check");
-      await until(() => h.replies().at(-1) === "Running the long check.", "the long step");
-      const yours = h.say(MESSAGE);
-      // It stays behind the reply until tapped.
-      await Bun.sleep(100);
-      expect(h.app.engine.queuedTurns(h.chat.id)).toHaveLength(1);
-      expect(h.inputs()).not.toContain(MESSAGE);
-      expect(await h.app.engine.sendNowWhy(h.chat.id)).toEqual({ sent: true });
-      expect(h.inputs().filter((i) => i === MESSAGE)).toHaveLength(1);
-      return { h, yours };
-    }
-    const end = async (h: ReturnType<typeof hub>) => {
-      writeFileSync(h.files.jobDone, "");
-      await until(() => h.job()?.status === "completed", "the job to finish");
-      await h.idle();
-    };
-
-    test("Stop everything: Claude Code hands the message back, it answers nothing by itself, and Answer now delivers it once", async () => {
-      const { h, yours } = await tapped();
-      await h.app.engine.stop(h.chat.id);
-      await settle(h);
-      expect(h.interrupts()).toEqual([{ subtype: "interrupt", cancel_queued: true }]);
-      expect(answers(h)).toEqual([]);
-      expect(h.now().readSeq).toBeLessThan(yours.seq);
-      h.app.engine.retry(h.chat.id, null, { currentSettings: true });
-      await until(() => answers(h).length === 1, "Answer now to deliver it");
-      await h.idle();
-      expect(answers(h)).toHaveLength(1);
-      expect(h.starts()).toHaveLength(1);
-      expect(h.job()?.status).toBe("running");
-      await end(h);
-    });
-
-    test("Stop and answer my message: answered next, on the same process, with the job alive", async () => {
-      const { h, yours } = await tapped();
-      await h.app.engine.stop(h.chat.id, undefined, { keepWaiting: true });
-      await until(() => answers(h).length === 1, "the answer");
-      await h.idle();
-      expect(answers(h)).toHaveLength(1);
-      expect(h.now().readSeq).toBeGreaterThanOrEqual(yours.seq);
-      expect(h.starts()).toHaveLength(1);
-      expect(h.job()?.status).toBe("running");
-      await end(h);
-    });
-
-    test("new settings waiting too: Stop everything, then Answer now under the message goes on that process, and says so", async () => {
-      const { h, yours } = await tapped();
-      h.app.updateMember(h.member.id, { model: "claude-opus-5-5" }, "iPhone");
-      await h.app.engine.stop(h.chat.id);
-      await settle(h);
-      expect(answers(h)).toEqual([]);
-      expect(h.now().readSeq).toBeLessThan(yours.seq);
-      expect(h.now()).toMatchObject({ status: "working", statusDetail: "Finishing helpers before your new settings apply" });
-      h.app.engine.retry(h.chat.id, null, { currentSettings: true });
-      await until(() => answers(h).length === 1, "Answer now to deliver it");
-      await h.idle();
-      expect(h.starts()).toHaveLength(1);
-      expect(h.notes().at(-1)).toBe("Answering now with the settings Claude Code started with. Your changes apply once its helpers finish.");
-      await end(h);
-    });
+  test("new settings waiting too: Stop everything, then Try again under the message goes on that process, with nothing more to say", async () => {
+    const { h, yours } = await wentIn();
+    h.app.updateMember(h.member.id, { model: "claude-opus-5-5" }, "iPhone");
+    const said = h.notes();
+    expect(said.at(-1)).toEndWith("until this reply and its helpers finish.");
+    await h.app.engine.stop(h.chat.id);
+    await settle(h);
+    expect(answers(h)).toEqual([]);
+    expect(h.now().readSeq).toBeLessThan(yours.seq);
+    expect(h.now()).toMatchObject({ status: "working", statusDetail: "Finishing helpers before your new settings apply" });
+    h.app.engine.retry(h.chat.id);
+    await until(() => answers(h).length === 1, "Try again to deliver it");
+    await h.idle();
+    expect(answers(h)).toHaveLength(1);
+    expect(h.starts()).toHaveLength(1);
+    expect(h.job()?.status).toBe("running");
+    // The model change's own note said when it applies.
+    expect(h.notes()).toEqual(said);
+    writeFileSync(h.files.jobDone, "");
+    await until(() => h.job()?.status === "completed", "the job to finish");
+    await h.idle();
   });
 
   test("a receipt that comes after the reply has ended still counts: the reply waits for it, and the message is unread as it ends", async () => {
@@ -627,7 +500,7 @@ describe("Stop while a job runs and a message went in by itself", () => {
     expect(h.now().readSeq).toBeLessThan(yours.seq);
     expect(h.notes()).toEqual([]);
     h.app.engine.retry(h.chat.id);
-    await until(() => answers(h).length === 1, "Answer now to deliver it");
+    await until(() => answers(h).length === 1, "Try again to deliver it");
     await h.idle();
     expect(h.starts()).toHaveLength(1);
   });
@@ -670,9 +543,9 @@ describe("Stop while a job runs and a message went in by itself", () => {
     await until(() => h.replies().at(-1) === "Running the long check.", "the long step");
     writeFileSync(h.files.jobDone, "");
     await until(() => h.job()?.status === "completed", "the job's report");
-    // Nothing keeps helpers at work now, so this is a tap.
+    // No helper is at work now: it goes in all the same.
     h.say(MESSAGE);
-    expect(await h.app.engine.sendNowWhy(h.chat.id)).toEqual({ sent: true });
+    await until(() => h.app.engine.queuedTurns(h.chat.id).length === 0, "the message to go in");
     await h.app.engine.stop(h.chat.id);
     await until(() => answers(h).length === 1, "the answer");
     await h.idle();
@@ -861,7 +734,7 @@ describe("a change the old process may not answer on, waiting for its background
     h.app.updateMember(h.member.id, { config: { ...h.now().config, account: work.id }, model: "work-model" }, "iPhone");
     expect(h.now()).toMatchObject({ statusDetail: "Finishing helpers before your account switch applies", held: { change: "account", helpers: true } });
     writeFileSync(h.files.jobDone, "");
-    const said = "Claude Code's helpers reported back after you switched accounts. The new account starts a fresh session without that conversation, so their report wasn't answered: ask again if you still need it.";
+    const said = "Claude Code's helpers reported back after you switched accounts. The new account starts fresh, without what was said before, so their report wasn't answered: ask again if you still need it.";
     await until(() => h.notes().includes(said), "the chat to say the report didn't carry over");
     await Bun.sleep(1800); // past when the old process would have answered it
     // Nothing ran on the account the person moved away from after the job: no reply, nothing in its session.
@@ -1046,7 +919,7 @@ describe("Crosstalk's own agent never keeps a message for later (it starts no re
 
   /**
    * Its chat on the stand-in NanoGPT, whose answer to request number `holdAt` (from 0: its first) waits until `release`
-   * (so Send now lands while it's on its way).
+   * (so a message sent then goes in while it's on its way).
    */
   async function agentChat(replies: ScriptedReply[], holdAt = 0) {
     let release!: () => void;
@@ -1094,14 +967,14 @@ describe("Crosstalk's own agent never keeps a message for later (it starts no re
     };
   }
 
-  test("handed over as its last answer is written, it's read in the same reply, on the settings it started with; a new model waiting applies after", async () => {
+  test("sent as its last answer is written, it goes in and is read in the same reply, on the settings it started with; a new model waiting applies after", async () => {
     const h = await agentChat([{ text: "Here is the plan: retry the network call twice." }, { text: "The retry count is fine: two retries are enough." }, { text: "You're welcome." }]);
     h.say("Fix the flaky test");
     await until(h.holding, "its first answer to be on its way");
     h.app.updateMember(h.member.id, { model: OTHER }, "iPhone");
     expect(h.notes().at(-1)).toEndWith("until this reply finishes.");
     h.say("Also check the retry count");
-    expect(await h.app.engine.sendNowWhy(h.chat.id)).toEqual({ sent: true });
+    await until(() => h.app.engine.queuedTurns(h.chat.id).length === 0, "the message to go in");
     expect(h.notes().at(-1)).toStartWith("Answering now with the settings");
     h.release();
     await until(() => h.notes().some((n) => n.startsWith("Now on")), "the new model to apply");
@@ -1121,12 +994,12 @@ describe("Crosstalk's own agent never keeps a message for later (it starts no re
   const handedIn = (h: { app: App; chat: { id: string } }, text: string) => h.app.store.listMessages(h.chat.id).find((m) => m.text === text)!;
   const asksWith = (chat: Record<string, unknown> | undefined, text: string) => ((chat?.messages ?? []) as { role: string; content: unknown }[]).some((m) => m.role === "user" && String(m.content).includes(text));
 
-  test("handed over while a reply's request is on its way, and the service refuses the model: unread again, and the next try on the model picked since carries it", async () => {
+  test("sent while a reply's request is on its way, and the service refuses the model: unread again, and the next try on the model picked since carries it", async () => {
     const h = await agentChat([{ status: 404, error: "model not found" }, { text: "The retry count is fine: two retries are enough." }]);
     h.say("Fix the flaky test");
     await until(h.holding, "its request to be on its way");
     h.say("Also check the retry count");
-    expect(await h.app.engine.sendNowWhy(h.chat.id)).toEqual({ sent: true });
+    await until(() => h.app.engine.queuedTurns(h.chat.id).length === 0, "the message to go in");
     h.release();
     await h.idle();
     expect(h.replies()[0]).toStartWith("⚠️ NanoGPT doesn't have the model");
@@ -1142,16 +1015,16 @@ describe("Crosstalk's own agent never keeps a message for later (it starts no re
     expect(h.now().readSeq).toBeGreaterThanOrEqual(handedIn(h, "Also check the retry count").seq!);
   });
 
-  test("handed over, then the reply is stopped before it read it: unread again, and the next message brings it along", async () => {
+  test("sent while it works, then the reply is stopped before it read it: unread again, and the next message brings it along", async () => {
     const h = await agentChat([{ text: "The retry count is fine, and you're welcome." }]);
     h.say("Fix the flaky test");
     await until(h.holding, "its request to be on its way");
     h.say("Also check the retry count");
-    expect(await h.app.engine.sendNowWhy(h.chat.id)).toEqual({ sent: true });
+    await until(() => h.app.engine.queuedTurns(h.chat.id).length === 0, "the message to go in");
     await h.app.engine.stop(h.chat.id);
     h.release();
     await h.idle();
-    expect(h.app.store.listTurns(h.chat.id).map((t) => t.status)).toEqual(["stopped", "stopped"]); // the reply, and the turn Send now took the message from
+    expect(h.app.store.listTurns(h.chat.id).map((t) => t.status)).toEqual(["stopped", "stopped"]); // the reply, and the turn the message left as it went in
     expect(h.now().readSeq).toBeLessThan(handedIn(h, "Also check the retry count").seq!);
     h.say("Thanks");
     await h.idle();
@@ -1161,7 +1034,7 @@ describe("Crosstalk's own agent never keeps a message for later (it starts no re
     expect(asksWith(h.fake.state.chats[0], "Thanks")).toBe(true);
   });
 
-  test("Send now during /compact: it can't take the message (it's a summary, not an answer), and the reply after it answers it", async () => {
+  test("a message sent during /compact: it can't take the message (it's a summary, not an answer), an older app's Send now says so, and the reply after it answers it", async () => {
     const h = await agentChat([{ text: "Retry the network call twice." }, { text: "The fix is in and the tests pass." }, { text: "The flaky test was planned and fixed." }, { text: "The retry count is fine: two retries are enough." }], 2);
     h.say("Fix the flaky test");
     await h.idle();
@@ -1173,9 +1046,58 @@ describe("Crosstalk's own agent never keeps a message for later (it starts no re
     expect(await h.app.engine.sendNowWhy(h.chat.id)).toEqual({ sent: false, why: "unsupported" });
     h.release();
     await h.idle();
-    expect(h.replies().slice(-2)).toEqual(["Done: the conversation so far is summarised, and the chat goes on from the summary.", "The retry count is fine: two retries are enough."]);
+    expect(h.replies().slice(-2)).toEqual(["Done: the chat so far is summarised, and it goes on from the summary.", "The retry count is fine: two retries are enough."]);
     // The summary's request had no message of the person's in it; the reply after it did.
     expect(asksWith(h.fake.state.chats[2], "Also check the retry count")).toBe(false);
     expect(asksWith(h.fake.state.chats[3], "Also check the retry count")).toBe(true);
+  });
+});
+
+describe("Stop helpers: what an agent still runs once its reply has ended", () => {
+  async function jobRunning(model: string | null = null) {
+    const h = hub({ FAKE_CLAUDE_QUEUE: "1" }, model);
+    h.say("Run the full test suite in the background, then carry on with the plan. BACKGROUND_JOB");
+    await h.idle();
+    await until(() => h.job()?.status === "running", "the job to be reported running");
+    return h;
+  }
+
+  test("the job is listed as stopped by you, nothing says it's busy or lost, and the next message carries on in the same chat", async () => {
+    const h = await jobRunning();
+    expect(await h.app.engine.stopHelpers(h.chat.id)).toBe(1);
+    expect(h.job()).toMatchObject({ status: "stopped", error: "You stopped it." });
+    expect(h.app.engine.busyWork()).toEqual([]);
+    expect(h.now()).toMatchObject({ status: "idle" });
+    // Nothing was lost by accident: the chat doesn't say so.
+    await Bun.sleep(100);
+    expect(h.notes()).toEqual([]);
+    // Again: nothing left to stop.
+    expect(await h.app.engine.stopHelpers(h.chat.id)).toBe(0);
+    h.say("Carry on");
+    await h.idle();
+    expect(h.starts()).toHaveLength(2);
+    expect(flag(h.starts()[1], "--resume")).toBe(h.app.store.getMemberSession(h.member.id).sessionId as string);
+    expect(h.notes()).toEqual([]);
+  });
+
+  test("a model change that waited for the job applies at once", async () => {
+    const h = await jobRunning("claude-opus-5");
+    h.app.updateMember(h.member.id, { model: "claude-opus-5-5" }, "iPhone");
+    expect(h.now()).toMatchObject({ status: "working", statusDetail: "Finishing helpers before your new settings apply" });
+    expect(await h.app.engine.stopHelpers(h.chat.id, h.member.id)).toBe(1);
+    await until(() => h.notes().includes("Now on Opus 5.5: the next reply uses it."), "the new model to apply");
+    expect(h.now().held).toBeUndefined();
+    expect(h.now()).toMatchObject({ status: "idle", statusDetail: null });
+    h.say("Carry on");
+    await h.idle();
+    expect(flag(h.starts()[1], "--model")).toBe("claude-opus-5-5");
+  });
+
+  test("an agent with a reply running is left alone: Stop is for that", async () => {
+    const h = hub({ FAKE_CLAUDE_QUEUE: "1" });
+    h.say("Run the full test suite in the background, then carry on with the plan. BACKGROUND_JOB SLOW");
+    await until(() => h.app.engine.runningTurns(h.chat.id).length === 1, "the reply to start");
+    expect(await h.app.engine.stopHelpers(h.chat.id)).toBe(0);
+    await h.app.engine.stop(h.chat.id);
   });
 });

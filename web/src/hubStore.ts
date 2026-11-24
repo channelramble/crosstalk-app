@@ -20,11 +20,10 @@ import type {
   MacStatus,
   Member,
   Message,
-  PoolOffer,
-  PoolView,
   Provider,
   ProviderStatus,
   PtyInfo,
+  ReplyStart,
   Room,
   ServerEvent,
   StateSnapshot,
@@ -36,8 +35,6 @@ import type {
 import { PROTOCOL_VERSION } from "@crosstalk/shared";
 import { api, ApiError, Live, type Connection } from "./api";
 import { putCatalog, refreshCatalogs } from "./catalogs";
-import { normalizePool } from "./pool";
-import { normalizeOffer } from "./poolChat";
 import { signInsShown } from "./signIn";
 
 export interface RoomData {
@@ -92,17 +89,16 @@ export interface HubData {
   roomData: Record<string, RoomData>;
   /** Each agent's background work (helpers it summoned, workflows), by member id. */
   tasks: Record<string, BackgroundTask[]>;
+  /**
+   * Since when each agent's running reply has run, by member id: from the state and then `turn` events, so the chat list
+   * can say "Working · 12m" of a chat this device hasn't opened. An older hub's state has none: then only replies seen
+   * starting are in it.
+   */
+  replyStarts: Record<string, ReplyStart>;
   /** The hub's disk, for the low-space warning (null until known, or from an older hub). */
   storage: StorageStatus | null;
   /** How the hub machine's memory is doing (memory.ts; null until known, or from an older hub). */
   memory: MachineMemory | null;
-  /** Settings → Model pool (null until the screen first loads it; kept in step by `pool` events after that). */
-  pool: PoolView | null;
-  /**
-   * The model pool as a model to chat with (poolChat.ts): from the state and `poolOffer` events, so the New chat menu
-   * has it without loading the whole pool. Null from a hub older than the offer.
-   */
-  poolOffer: PoolOffer | null;
   /** Settings → Image editor (null until Settings first loads it; kept in step by `imageEditor` events after that). */
   imageEditor: ImageEditorStatus | null;
   /** On a Mac hub: privacy dialogs waiting on its screen (from the state, then `macDialogs` events). */
@@ -145,13 +141,6 @@ export interface HubActions {
   resizePty(ptyId: string, cols: number, rows: number): void;
   /** Whether this device is looking at the app (the hub skips push notifications it would see anyway). */
   presence(visible: boolean): void;
-  /** Loads the model pool (GET /api/pool). */
-  loadPool(): Promise<PoolView>;
-  /**
-   * A model pool request that answers with the pool (PUT /api/pool, start, stop…). Its answer is kept unless a `pool`
-   * event came while it ran: the hub sends one for every change, so the events are then the newer word.
-   */
-  poolCall(method: string, path: string, body?: unknown, timeoutMs?: number): Promise<PoolView>;
   /**
    * The image editor: how it is (no `on`), or switched on or off (`force`: even while it's editing). Its answer is kept
    * unless an `imageEditor` event came while it ran.
@@ -237,6 +226,12 @@ export function keepPin(known: Room | undefined, next: Room): Room {
 export const SLOW_SYNC_MS = 1_500;
 /** Back after this long with the connection still up: the app catches up anyway, quietly. */
 const RESYNC_AFTER_MS = 5 * 60_000;
+/**
+ * Hidden this long (a phone asleep, another app in front), what's on screen may be old the moment it's back: a socket
+ * that died meanwhile is only found out seconds later, and until then a reply that has ended would still say it's
+ * working. So the screen counts as catching up at once, and the state is asked for again without waiting for the socket.
+ */
+export const STALE_AFTER_MS = 10_000;
 /** While the socket stays down, whether this device is still signed in there is asked at most this often. */
 const SIGN_IN_CHECK_MS = 15_000;
 /**
@@ -273,10 +268,9 @@ export const emptyHubData = (conn: Connection): HubData => ({
   ptys: {},
   roomData: {},
   tasks: {},
+  replyStarts: {},
   storage: null,
   memory: null,
-  pool: null,
-  poolOffer: null,
   imageEditor: null,
   macDialogs: [],
   asks: {},
@@ -286,6 +280,22 @@ export const emptyHubData = (conn: Connection): HubData => ({
   signInSessions: {},
   bookmarked: null,
 });
+
+/**
+ * Since when each agent's running reply has run, after a turn's news: a reply that runs is noted (with its turn), and
+ * one that ended, or waits for a usage limit, is forgotten — only by its own turn, so a queued one's news never ends
+ * the running one's. The same map back when nothing changed.
+ */
+export function replyStartsAfter(starts: Record<string, ReplyStart>, turn: Pick<Turn, "id" | "memberId" | "status" | "startedAt" | "createdAt">): Record<string, ReplyStart> {
+  const known = starts[turn.memberId];
+  if (turn.status === "running") {
+    const at = turn.startedAt ?? turn.createdAt;
+    return known?.turnId === turn.id && known.at === at ? starts : { ...starts, [turn.memberId]: { turnId: turn.id, at } };
+  }
+  if (turn.status === "queued" || known?.turnId !== turn.id) return starts;
+  const { [turn.memberId]: _ended, ...rest } = starts;
+  return rest;
+}
 
 /** One machine's hub: its own connection, WebSocket and data. The app keeps one of these per paired machine. */
 export function createHubStore(conn: Connection, hooks: HubHooks): StoreApi<HubState> {
@@ -301,9 +311,7 @@ export function createHubStore(conn: Connection, hooks: HubHooks): StoreApi<HubS
   let blip: ReturnType<typeof setTimeout> | undefined;
   /** A start waiting for its socket to open before it asks for the state (see start): lets it go on. */
   let opening: (() => void) | null = null;
-  /** `pool` events so far, so a pool request's answer never rolls back a newer event. */
-  let poolEvents = 0;
-  /** `imageEditor` events so far, the same way. */
+  /** `imageEditor` events so far, so an image editor request's answer never rolls back a newer event. */
   let imageEditorEvents = 0;
   const historyRequests = new Map<string, symbol>();
   /** A chat's asks list on its way, with the asks live events touched meanwhile (see mergeAsks). */
@@ -400,13 +408,6 @@ export function createHubStore(conn: Connection, hooks: HubHooks): StoreApi<HubS
           break;
         case "memory":
           set({ memory: e.memory });
-          break;
-        case "pool":
-          poolEvents++;
-          set({ pool: normalizePool(e.pool) });
-          break;
-        case "poolOffer":
-          set({ poolOffer: normalizeOffer(e.offer) });
           break;
         case "imageEditor":
           imageEditorEvents++;
@@ -527,9 +528,10 @@ export function createHubStore(conn: Connection, hooks: HubHooks): StoreApi<HubS
           break;
         case "turn":
           set((s) => {
+            const replyStarts = replyStartsAfter(s.replyStarts, e.turn);
             const rd = s.roomData[e.turn.roomId];
-            if (!rd) return s;
-            return { roomData: { ...s.roomData, [e.turn.roomId]: { ...rd, turns: { ...rd.turns, [e.turn.id]: e.turn } } } };
+            if (!rd) return replyStarts === s.replyStarts ? s : { replyStarts };
+            return { replyStarts, roomData: { ...s.roomData, [e.turn.roomId]: { ...rd, turns: { ...rd.turns, [e.turn.id]: e.turn } } } };
           });
           break;
         case "activity":
@@ -694,6 +696,11 @@ export function createHubStore(conn: Connection, hooks: HubHooks): StoreApi<HubS
           (away) => {
             if (generation === connectionGeneration && away > RESYNC_AFTER_MS) void get().refresh().catch(() => {});
           },
+          // Back after a while: out of date until the state has come again (asked for now, over HTTP, whatever the
+          // socket turns out to be; one that died asks again once it's replaced).
+          (away) => {
+            if (generation === connectionGeneration && away >= STALE_AFTER_MS && get().loadedAt !== null) void get().refresh({ missed: true }).catch(() => {});
+          },
         );
         await opened;
         if (generation !== connectionGeneration) return;
@@ -754,7 +761,11 @@ export function createHubStore(conn: Connection, hooks: HubHooks): StoreApi<HubS
             signIns: snap.signIns ? signInsShown(snap.signIns) : null,
             signInSessions: Object.fromEntries((snap.signInSessions ?? []).map((x) => [x.id, x])),
             bookmarked: snap.bookmarked ?? null,
-            poolOffer: snap.pool ? normalizeOffer(snap.pool) : null,
+            // For the chat list (chatList.ts): an older hub says neither, and what events have told stays. A hub that
+            // does lists every agent with a helper at work, so a list of running ones it leaves out is out of date
+            // (that chat's own history brings its finished ones back when it's next opened).
+            replyStarts: snap.replyStarts ?? s.replyStarts,
+            tasks: snap.tasks ? { ...Object.fromEntries(Object.entries(s.tasks).filter(([, list]) => !list.some((t) => t.status === "running"))), ...snap.tasks } : s.tasks,
             rooms: Object.fromEntries(snap.rooms.map((r) => [r.id, keepRead(s.rooms[r.id], r)])),
             roomActivity: snap.roomActivity ?? {},
             members: byId(snap.members),
@@ -773,12 +784,13 @@ export function createHubStore(conn: Connection, hooks: HubHooks): StoreApi<HubS
             syncError: null,
           }));
           // Snapshot fetches must not undo newer live state or resurrect a deleted member/room.
-          for (const e of events) if (["hub", "room", "room.deleted", "member", "member.deleted", "approval", "usage", "provider", "account", "account.deleted", "roomActivity", "macDialogs", "templates", "signin.needs", "signin.session", "bookmark"].includes(e.t)) apply(e, true);
+          for (const e of events) if (["hub", "room", "room.deleted", "member", "member.deleted", "approval", "usage", "provider", "account", "account.deleted", "roomActivity", "macDialogs", "templates", "signin.needs", "signin.session", "bookmark", "tasks"].includes(e.t)) apply(e, true);
+          // Replies that started or ended meanwhile (only since when they run: the open chat's turns load again below).
+          set((s) => ({ replyStarts: events.reduce((starts, e) => (e.t === "turn" ? replyStartsAfter(starts, e.turn) : starts), s.replyStarts) }));
           snapshotEvents = null;
           // The chat on screen was deleted while this device wasn't listening.
           if (hadOpen && !get().rooms[rid!]) hooks.roomGone(rid!);
-          // Pool events may have been missed while the connection was down: a pool on screen loads again.
-          if (get().pool) void get().loadPool().catch(() => {});
+          // Its events may have been missed while the connection was down: an image editor on screen loads again.
           if (get().imageEditor) void get().imageEditorCall().catch(() => {});
           if (rid && get().rooms[rid]) await get().loadHistory(rid);
           if (current()) {
@@ -956,18 +968,6 @@ export function createHubStore(conn: Connection, hooks: HubHooks): StoreApi<HubS
 
       presence(visible) {
         live?.send({ t: "presence", visible });
-      },
-
-      loadPool() {
-        return get().poolCall("GET", "/api/pool");
-      },
-
-      async poolCall(method, path, body, timeoutMs) {
-        const generation = connectionGeneration;
-        const seen = poolEvents;
-        const view = normalizePool(await api<PoolView>(method, path, body, conn, timeoutMs));
-        if (generation === connectionGeneration && seen === poolEvents) set({ pool: view });
-        return view;
       },
 
       async loadMac() {

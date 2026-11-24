@@ -1,4 +1,4 @@
-import { test, expect, noHorizontalOverflow } from "./fixtures";
+import { test, expect, noHorizontalOverflow, chatSettingsAll } from "./fixtures";
 
 test("in a group chat @everyone means everyone in turn, @name means only them, and the settings open without losing a draft", async ({ page, request, token }) => {
   const headers = { authorization: `Bearer ${token}` };
@@ -14,13 +14,13 @@ test("in a group chat @everyone means everyone in turn, @name means only them, a
     await expect(answers).toHaveText("Everyone answers, in turn: @first, then @second.");
     await expect(page.getByRole("button", { name: "Send to all: @first, then @second", exact: true })).toHaveText("Send to all");
     await noHorizontalOverflow(page);
-    await page.getByRole("button", { name: "Chat settings", exact: true }).click();
-    const dialog = page.getByRole("dialog", { name: "Group chat settings", exact: true });
-    await expect(dialog.getByRole("radio", { name: /^The lead answers/ })).toHaveAttribute("aria-checked", "true");
-    await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+    await chatSettingsAll(page);
+    const dialog = page.getByRole("dialog", { name: "Chat settings", exact: true });
+    await expect(dialog.getByRole("radio", { name: /^One leads, the others help when asked/ })).toHaveAttribute("aria-checked", "true");
+    await dialog.getByRole("button", { name: "Close", exact: true }).click();
     await expect(message).toHaveValue("@EVERYONE check the change");
     await message.fill("@SECOND take this one");
-    await expect(answers).toHaveText("Only @second will answer. The others read it on their next turn.");
+    await expect(answers).toHaveText("Only @second will answer. The others read it when they next reply.");
     await page.getByRole("button", { name: "Send to @second", exact: true }).click();
     await expect.poll(async () => {
       const history = await (await request.get(`http://127.0.0.1:8451/api/rooms/${room.id}/history`, { headers })).json();

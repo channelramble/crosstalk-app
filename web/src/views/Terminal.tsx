@@ -6,6 +6,13 @@ import { api } from "../api";
 import { machineName, onPtyData, useStore } from "../store";
 import { onZoom, screenWidth, zoomFactor } from "../zoom";
 import { newerThan, oneTimeCode, plainText } from "../terminalText";
+import { onTheme, terminalColors } from "../themeDevice";
+
+/** The terminal in the theme's colours (OLED black's own unless a theme is chosen). */
+const termTheme = () => {
+  const { background, foreground, cursor, selectionBackground } = terminalColors();
+  return { background, foreground, cursor, selectionBackground };
+};
 
 // xterm maps clicks and taps in unzoomed pixels, so it sits outside the page's zoom (styles.css .term-unzoom) and the
 // text and page size goes into its font instead.
@@ -22,7 +29,7 @@ export function Terminal({ ptyId, tall, onUrl, onCode, takeFocus = true }: { pty
   const sendPty = useStore((s) => s.sendPty);
   const resizePty = useStore((s) => s.resizePty);
   const connected = useStore((s) => s.status === "open");
-  const machine = useStore((s) => (s.conn ? machineName(s.conn, s.hub) : "the hub"));
+  const machine = useStore((s) => (s.conn ? machineName(s.conn, s.hub) : "the machine"));
 
   useEffect(() => {
     const el = box.current;
@@ -33,8 +40,15 @@ export function Terminal({ ptyId, tall, onUrl, onCode, takeFocus = true }: { pty
       cursorBlink: true,
       convertEol: false,
       scrollback: 5000,
-      theme: { background: "#000000", foreground: "#e8e8ea", cursor: "#3d95ff", selectionBackground: "#3d95ff55" },
+      theme: termTheme(),
+      // Under a theme, a program's own colours are nudged until they read on its page (yellow on a light one).
+      minimumContrastRatio: terminalColors().themed ? 4.5 : 1,
       allowProposedApi: true,
+    });
+    // The theme changed while the terminal is open (Settings → This device → Theme).
+    const unTheme = onTheme(() => {
+      term.options.theme = termTheme();
+      term.options.minimumContrastRatio = terminalColors().themed ? 4.5 : 1;
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
@@ -141,6 +155,7 @@ export function Terminal({ ptyId, tall, onUrl, onCode, takeFocus = true }: { pty
     // Not for one watched in passing (an install beside a form): a phone would open its keyboard over what's being read.
     if (takeFocus) term.focus();
     return () => {
+      unTheme();
       alive = false;
       off();
       offStatus();

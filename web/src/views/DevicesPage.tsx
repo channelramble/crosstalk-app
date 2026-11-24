@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { ComputersCard } from "./ComputersCard";
 import QRCode from "qrcode";
 import { ChevronLeft, Laptop, Monitor, Plus, Smartphone, Tablet } from "lucide-react";
-import type { Device, MachineInfo } from "@crosstalk/shared";
+import { settingsPath, type Device, type MachineInfo } from "@crosstalk/shared";
 import { api, currentConnection, isNative } from "../api";
 import { pushSupported, rememberPushOff, subscribe } from "../push";
 import { useMachines, useStore } from "../store";
@@ -188,23 +188,23 @@ export function NotificationsCard() {
     <section className="card" style={{ marginTop: 16 }} aria-label="Notifications on this device">
       <h3>Notifications on this device</h3>
       <p className="muted small" style={{ margin: "4px 0 10px" }}>
-        Get a notification when an agent needs approval, hits an error, or finishes a long task, even with the app closed.
+        Get a notification when an agent needs approval, hits an error, or finishes a long reply, even with the app closed.
       </p>
       {other && home && shown && (
         <p className="help" role="note">
           {linked === false
-            ? `Notifications from ${shown.name} don't reach ${thisDevice()}: ${shown.name} isn't linked with ${home.name}. Link it in Settings → Machines → Add a machine that runs Crosstalk.`
+            ? `Notifications from ${shown.name} don't reach ${thisDevice()}: ${shown.name} isn't linked with ${home.name}. Link it in ${settingsPath("machines", "Add a machine that runs Crosstalk")}.`
             : `Notifications from ${shown.name} come through ${home.name}: turning them on here covers both.`}
         </p>
       )}
       {isNative ? (
         <p className="small">The app shows notifications while it's running. Background notifications for the native app are coming in a later version.</p>
       ) : !supported ? (
-        <p className="small">This browser can't receive push notifications{location.protocol !== "https:" ? " over plain http — open the hub through its https (Tailscale) address" : ""}.</p>
+        <p className="small">This browser can't receive push notifications{location.protocol !== "https:" ? " over plain http — open Crosstalk through its https (Tailscale) address" : ""}.</p>
       ) : iosNotInstalled ? (
         <p className="small">On iPhone and iPad, add Crosstalk to your Home Screen first (Share → Add to Home Screen), then turn notifications on from the installed app.</p>
       ) : !conn ? (
-        <p className="small">Notifications come through the machine this app opens from ({location.host}). Add it to {thisDevice()} again in Settings → Machines to turn them on.</p>
+        <p className="small">Notifications come through the machine this app opens from ({location.host}). Add it to {thisDevice()} again in {settingsPath("machines")} to turn them on.</p>
       ) : error && !state ? (
         <div role="alert">
           <p className="small" style={{ margin: "0 0 6px" }}>Couldn't check notifications on {home?.name ?? "this machine"}: {error}</p>
@@ -239,6 +239,15 @@ export function NotificationsCard() {
   );
 }
 
+/** An address only the machine itself can open (its own loopback), so nothing to give another device. */
+export function onlyThisMachine(address: string): boolean {
+  try {
+    return /^(localhost|127\.\d+\.\d+\.\d+|\[?::1\]?)$/.test(new URL(address).hostname);
+  } catch {
+    return false;
+  }
+}
+
 export function PairDialog({ onClose }: { onClose: () => void }) {
   const hub = useStore((s) => s.hub);
   const toast = useStore((s) => s.toast);
@@ -247,6 +256,8 @@ export function PairDialog({ onClose }: { onClose: () => void }) {
   const [error, setError] = useState("");
   const base = hub?.publicUrl || currentConnection()?.baseUrl || location.origin;
   const link = code ? `${base}/#pair=${code.code}` : "";
+  // Opened on the machine itself, which isn't on a Tailscale network yet: its only address is one no other device can open.
+  const unreachable = onlyThisMachine(base);
   const load = () => {
     setError("");
     api<{ code: string; expiresAt: number; url: string | null }>("POST", "/api/pairing-codes")
@@ -294,10 +305,20 @@ export function PairDialog({ onClose }: { onClose: () => void }) {
             Make a new code
           </button>
         </div>
+      ) : unreachable ? (
+        <div role="note">
+          <p style={{ marginTop: 0 }}>
+            <b>Another device can't reach this machine yet.</b> Crosstalk is only at an address this machine itself can open ({base}).
+          </p>
+          <p className="small">
+            Install <a href="https://tailscale.com/download" target="_blank" rel="noreferrer">Tailscale</a> on this machine and on your phone, sign in to both with the same account, turn on HTTPS Certificates on its{" "}
+            <a href="https://login.tailscale.com/admin/dns" target="_blank" rel="noreferrer">DNS page</a>, then run Crosstalk's install line here once more. It ends with a QR code for the phone.
+          </p>
+        </div>
       ) : (
         <div style={{ textAlign: "center" }}>
           <p className="small muted" style={{ marginTop: 0 }}>
-            On the new device, scan this with the camera, or open the Crosstalk app and enter the hub address and code.
+            On the new device, scan this with the camera, or open the Crosstalk app and enter this machine's address and the code.
           </p>
           {qr && <img src={qr} alt="Pairing QR code" width={220} height={220} style={{ borderRadius: 12, background: "white", padding: 6 }} />}
           <div style={{ margin: "12px 0 6px" }}>

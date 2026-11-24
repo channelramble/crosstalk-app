@@ -10,7 +10,7 @@ const NO_ACCOUNTS: Record<string, AgentAccount> = {};
  * the model picker the other screens use (AgentOptions: the same list, sizes, "No tools" marks, and the lines that say what a
  * model costs to run), on the models the hub listed for this row, so a change asks nothing of anyone: the pick goes with Ask,
  * and the hub keeps it for next time then. Under it, what asks on that model have cost. A row whose model can't be picked
- * here says why instead (the model pool runs one model; another machine needs a Crosstalk update first).
+ * here says why instead (another machine needs a Crosstalk update first).
  */
 export function AskModelPicker({ choice, pick, onChange }: { choice: AskChoice; pick: AskModelPick; onChange: (pick: AskModelPick) => void }) {
   const fixed = fixedModelLine(choice);

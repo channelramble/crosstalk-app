@@ -3,7 +3,7 @@ import { test, expect, noHorizontalOverflow } from "./fixtures";
 
 const alpha = { name: "alpha", label: "Alpha Mac", user: "owner", host: "100.64.0.2", online: false, detail: "Asleep" };
 const beta = { ...alpha, name: "beta", label: "Beta Mac", host: "100.64.0.3" };
-const card = (page: Page) => page.getByRole("region", { name: "Computers agents can use", exact: true });
+const card = (page: Page) => page.getByRole("region", { name: "Remote computers", exact: true });
 const row = (page: Page, label: string) => card(page).locator(".list-row").filter({ hasText: label });
 
 // Every computer endpoint is intercepted: these tests must never generate real SSH keys or connect to a machine.

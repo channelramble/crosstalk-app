@@ -35,11 +35,11 @@ afterEach(async () => {
 afterAll(() => {
   // Back to what providers/all.ts registers.
   registerDriver("claude", (ctx) => {
-    if (!ctx.bin) throw new Error("Claude Code isn't installed on the hub. Install it under Agents & sign-ins.");
+    if (!ctx.bin) throw new Error("Claude Code isn't installed on the machine. Install it under Agents & sign-ins.");
     return new ClaudeDriver(ctx, ctx.bin);
   });
   registerDriver("codex", (ctx) => {
-    if (!ctx.bin) throw new Error("Codex isn't installed on the hub. Install it under Agents & sign-ins.");
+    if (!ctx.bin) throw new Error("Codex isn't installed on the machine. Install it under Agents & sign-ins.");
     return new CodexDriver(ctx, ctx.bin);
   });
 });
@@ -449,19 +449,6 @@ describe("through the hub", () => {
     const developer = h.codex(h.app.store.listMembers(codex.id)[0].id)!;
     expect(developer).toContain("The user reads your replies in Crosstalk");
     expect(developer).toContain(ALONGSIDE.codex);
-  });
-
-  test("with Keep going while helpers work off, the words are the same: nothing in them says how soon a message arrives", async () => {
-    const h = hub();
-    h.app.setHubSettings({ messagesFlow: false });
-    const claude = h.app.chats.create({ provider: "claude", name: "A", cwd: join(h.dir, "a") } as never);
-    h.app.engine.postHumanMessage(claude.id, "hello", "iPhone");
-    await h.idle();
-    expect(h.claude()[0]).toContain(ALONGSIDE.claude);
-    const codex = h.app.chats.create({ provider: "codex", name: "B", cwd: join(h.dir, "b") } as never);
-    h.app.engine.postHumanMessage(codex.id, "hello", "iPhone");
-    await h.idle();
-    expect(h.codex(h.app.store.listMembers(codex.id)[0].id)).toContain(ALONGSIDE.codex);
   });
 
   test("a group chat gets it as it answers, and Build & review only what a loop can take", async () => {

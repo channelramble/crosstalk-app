@@ -43,7 +43,7 @@
 // The model list needs no key and none of these requests runs a model. The only one that carries a key is that plan read.
 
 import { createHash } from "node:crypto";
-import { CATALOG_SHOWN, planLabel, type CatalogModel, type CatalogSearch, type ServicePlan, type TokenPrice } from "@crosstalk/shared";
+import { settingsPath, CATALOG_SHOWN, planLabel, type CatalogModel, type CatalogSearch, type ServicePlan, type TokenPrice } from "@crosstalk/shared";
 import type { Price } from "./prices";
 
 /** The one catalogue the hub searches today. */
@@ -115,7 +115,7 @@ export const PRICING_URL = "https://featherless.ai/pricing";
 export function chatNotice(plan: ServicePlan | null): string | null {
   if (plan?.kind === "credits") return null;
   const risk = "Featherless can cancel an account used that way without a refund.";
-  const limit = `paid per token, so set a spending limit in Settings → Costs. See ${PRICING_URL}.`;
+  const limit = `paid per token, so set a spending limit in ${settingsPath("costs")}. See ${PRICING_URL}.`;
   if (plan?.kind === "chat") return `Featherless says this key is on its ${planLabel(plan)} plan, which doesn't allow agents or API use: ${risk} Agents need its Developer plan: ${limit}`;
   const chatPlan = `Featherless's $25 Chat plan doesn't allow agents or API use: ${risk}`;
   // A plan it names that Crosstalk can't vouch for (one of the paused plans built for agents, say): what the two plans on

@@ -1,0 +1,375 @@
+/*
+ * The chat list by state (views/ChatSidebar.tsx, ChatRow.tsx, GroupFold.tsx): Pinned, Needs you, Working, Recent. Each
+ * row is the chat's avatar, its name, and under it its state in words; the row of Screen, Bookmarks, Terminal and
+ * Settings sits under the list like a phone's tab bar. What the list shares with the rest of the sidebar (the head, New
+ * chat, search, a machine's line, a row's options) is in styles.css; how it moves is in motion-lists.css.
+ */
+
+.chat-sidebar {
+  /* A row's avatar, and where its words start: what lines up under them (Show all, a row's options) starts there too. */
+  --csb-avatar: 24px;
+  --csb-indent: calc(8px + var(--csb-avatar) + 10px);
+}
+
+/* ------------------------------------------------------------ sections */
+
+.csb-group {
+  margin-top: 10px;
+}
+.csb-scroll > .csb-group:first-child {
+  margin-top: 2px;
+}
+/* A section's heading: its name and how many chats it holds, small, with the fold control at its end. */
+.csb-group-head {
+  min-height: 30px;
+}
+.csb-group-head > .csb-heading {
+  flex: 1;
+  min-width: 0;
+}
+.csb-heading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 4px 8px;
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+}
+.csb-count {
+  color: var(--text-3);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+/* Needs you is the one heading in colour: the same orange its rows' words have. */
+.csb-needs .csb-heading,
+.csb-needs .csb-count {
+  color: var(--orange);
+}
+/* What a folded section holds, on the line its rows were on, under its name. */
+.csb-fold-said {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 10px 4px 8px;
+  font-size: 12.5px;
+  color: var(--text-3);
+}
+.csb-empty {
+  margin: 10px 10px 4px;
+  font-size: 13px;
+  color: var(--text-3);
+}
+.csb-more {
+  padding: 6px 10px 6px var(--csb-indent);
+  border: 0;
+  background: none;
+  color: var(--text-3);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+/* ------------------------------------------------------------ a chat's row */
+
+.csb-chat {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 46px;
+  padding: 5px 10px 5px 8px;
+  border: 0;
+  border-radius: 10px;
+  background: none;
+  color: var(--text-2);
+  font-size: 13.5px;
+  text-align: left;
+  cursor: pointer;
+}
+@media (hover: hover) {
+  .csb-chat:hover {
+    background: var(--surface);
+    color: var(--text);
+  }
+}
+/* The open chat, tinted in its agent's colour. */
+.csb-chat.active {
+  background: linear-gradient(90deg, color-mix(in srgb, var(--c) 20%, var(--surface)) 0%, var(--surface) 85%);
+  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--c) 70%, transparent);
+  color: var(--text);
+}
+/* Whose chat it is: the agent's mark, a service's icon or a group's stack, in a column of one width so names line up. */
+.csb-chat > .avatar.sm {
+  width: var(--csb-avatar);
+  height: var(--csb-avatar);
+  border-radius: 30%;
+}
+.csb-chat > .group-avatar.sm {
+  width: var(--csb-avatar);
+}
+.csb-chat > .group-avatar.sm .avatar {
+  width: calc(var(--csb-avatar) - 8px);
+  height: calc(var(--csb-avatar) - 8px);
+  border-radius: 30%;
+  border-color: var(--csb-bg, var(--bg));
+  font-size: 8px;
+}
+.csb-chat > .group-avatar.sm .avatar svg {
+  width: 62%;
+  height: 62%;
+}
+.csb-chat-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+/* A chat's name stands out from the line under it; one with a reply no one has read is bold, with its dot (styles.css). */
+.csb-chat-name {
+  color: color-mix(in srgb, var(--text) 70%, var(--text-2));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.3;
+}
+/* The second line: the state in words (with its colour as an accent beside them), or where the chat lives and when. */
+.csb-chat-sub {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.3;
+  color: var(--text-3);
+}
+.csb-chat-words {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.csb-chat-sub.is-needs {
+  color: var(--orange);
+}
+.csb-chat-sub.is-error {
+  color: var(--red);
+}
+.csb-chat-sub.is-busy,
+.csb-chat-sub.is-helpers {
+  color: var(--text-2);
+}
+.csb-chat-sub .csb-dot {
+  width: 7px;
+  height: 7px;
+  margin: 0;
+}
+/* Working, or waiting for a limit: a ring a little bigger than a solid dot, so it reads as a ring at this size. */
+.csb-chat-sub .csb-dot.busy,
+.csb-chat-sub .csb-dot.waiting {
+  width: 10px;
+  height: 10px;
+}
+.csb-chat .reply-dot {
+  margin: 0 2px 0 4px;
+}
+
+/* A row's ⋯: with a mouse it comes up over the row's end when the row is pointed at or focused. */
+.csb-row .csb-row-more {
+  position: absolute;
+  top: 50%;
+  right: 4px;
+  width: 28px;
+  height: 28px;
+  min-width: 0;
+  min-height: 0;
+  transform: translateY(-50%);
+  background: var(--surface-2);
+  opacity: 0;
+}
+.csb-row:focus-within .csb-row-more,
+.csb-row .csb-row-more[aria-expanded="true"] {
+  opacity: 1;
+}
+@media (hover: hover) {
+  .csb-row:hover .csb-row-more {
+    opacity: 1;
+  }
+  .csb-row .csb-row-more:hover {
+    background: var(--surface-3);
+    color: var(--text);
+  }
+}
+/*
+ * On a touch screen a row has no ⋯ (its options open on a long press, and the row's end is the unread dot's alone). The
+ * button is still there for a keyboard and a screen reader, at no size, so a finger never lands on it; a keyboard's
+ * focus draws it.
+ */
+@media (pointer: coarse) {
+  .csb-row .csb-row-more:not(:focus-visible) {
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    opacity: 0;
+  }
+  .csb-row .csb-row-more:focus-visible {
+    width: 40px;
+    height: 40px;
+    opacity: 1;
+  }
+}
+.csb-row-tray {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px 8px var(--csb-indent);
+}
+
+/* "Hold a chat to pin it": once, on a touch screen, at the top of the list. */
+.csb-hint {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 2px 0 6px;
+  padding: 0 0 0 12px;
+  border-radius: 10px;
+  background-color: var(--surface);
+  color: var(--text-2);
+  font-size: 13px;
+}
+.csb-hint svg {
+  flex: none;
+}
+.csb-hint-text {
+  flex: 1;
+  min-width: 0;
+}
+.csb-hint-close {
+  flex: none;
+  color: var(--text-3);
+}
+
+/* ------------------------------------------------------------ the row under the list */
+
+.csb-foot {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px 6px;
+  border-top: 0.5px solid var(--sep);
+}
+.csb-tabs {
+  display: flex;
+  gap: 2px;
+}
+.csb-tab {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 46px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  padding: 5px 0 4px;
+  border: 0;
+  border-radius: 10px;
+  background: none;
+  color: var(--text-2);
+  cursor: pointer;
+}
+.csb-tab-icon {
+  display: grid;
+  place-items: center;
+  height: 20px;
+}
+.csb-tab-label {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10.5px;
+  font-weight: 550;
+  line-height: 1.2;
+}
+/* The screen that's open: tinted. */
+.csb-tab.active {
+  background: var(--accent-2);
+  color: var(--accent);
+}
+@media (hover: hover) {
+  .csb-tab:not(.active):hover {
+    background: var(--surface);
+    color: var(--text);
+  }
+}
+/* The machine's screen is being shown now: a green dot at the icon's corner. */
+.csb-tab .csb-live {
+  position: absolute;
+  top: 6px;
+  left: calc(50% + 7px);
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--green, #30d158);
+  box-shadow: 0 0 0 2px var(--csb-bg, var(--bg));
+}
+
+/* ------------------------------------------------------------ fingers need bigger rows than pointers */
+
+@media (max-width: 760px), (pointer: coarse) {
+  .chat-sidebar {
+    --csb-avatar: 28px;
+  }
+  .csb-group-head {
+    min-height: 36px;
+  }
+  .csb-heading {
+    padding: 6px 8px;
+    font-size: 13px;
+  }
+  /* The fold control keeps a finger's size without making the heading's line taller than its words need. */
+  .csb-group-head > .csb-fold {
+    margin: -4px 0;
+  }
+  .csb-chat {
+    min-height: 56px;
+    padding: 7px 10px 7px 8px;
+    font-size: 15px;
+  }
+  .csb-chat-sub {
+    font-size: 13px;
+  }
+  .csb-more {
+    min-height: 40px;
+    font-size: 13px;
+  }
+  .csb-row-tray {
+    padding-left: 12px;
+  }
+  .csb-tab {
+    min-height: 50px;
+  }
+  .csb-tab-icon {
+    height: 22px;
+  }
+}
+/* The narrowest phones (the drawer is 275 px at 320): the four labels still fit whole. */
+@media (max-width: 360px) {
+  .csb-foot {
+    padding: 4px 3px;
+  }
+  .csb-tabs {
+    gap: 0;
+  }
+  .csb-tab-label {
+    font-size: 10.5px;
+    letter-spacing: -0.01em;
+  }
+}

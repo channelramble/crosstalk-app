@@ -1,7 +1,7 @@
 // Settings → Set up with an AI agent (docs/SETUP-FOR-AGENTS.md): the hub's setup checklist in plain words, and what to
 // give an AI agent on that machine. Pure, for the unit tests; the section itself is views/AgentSetupSection.tsx.
 import type { BrowserOsConnect, BrowserOsConnectRow, SetupChecklist, SetupFix, SetupItem, SetupState } from "@crosstalk/shared";
-import { tabForSection } from "./settingsTabs";
+import { pageForSection } from "./settingsTabs";
 
 /** Each state as the list says it. */
 export const STATE_WORDS: Record<SetupState, string> = { user: "Needs you", missing: "To do", unknown: "Not checked", done: "Done" };
@@ -143,11 +143,11 @@ export function browserosNote(c: SetupChecklist): string | null {
 }
 
 /**
- * Where "Go there" goes for a fix, when it names a section of Settings. Which tab holds it is settingsTabs.ts's to
+ * Where "Go there" goes for a fix, when it names a section of Settings. Which page holds it is settingsTabs.ts's to
  * know, so a new section the hub points at works here the day it's grouped.
  */
 export function goThere(fix: SetupFix | null): string | null {
-  return fix?.target && tabForSection(fix.target) ? fix.target : null;
+  return fix?.target && pageForSection(fix.target) ? fix.target : null;
 }
 
 /** "Open login.tailscale.com", for a fix's web page. */

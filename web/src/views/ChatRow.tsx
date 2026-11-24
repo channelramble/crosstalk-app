@@ -1,16 +1,17 @@
 // A chat's row in the chat list, with its options: pin it to the top, unpin it, or move it among the pinned (pins.ts).
-// The options open from the row's ⋯ button, a long press on a phone or a right click, in a tray under the row (a menu
-// floating over the list could be cut off where it scrolls). Move up and Move down work everywhere, by touch, keyboard
-// and screen reader; on a desktop, pinned rows can be dragged into place too.
+// The options open from a long press on a touch screen, the row's ⋯ button with a mouse or a keyboard, or a right
+// click, in a tray under the row (a menu floating over the list could be cut off where it scrolls). On a touch screen
+// the ⋯ isn't drawn (a row's right end is for the unread dot alone), but it's still there for a keyboard and a screen
+// reader. Move up and Move down work everywhere, by touch, keyboard and screen reader; on a desktop, pinned rows can be
+// dragged into place too.
 
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from "react";
 import { ArrowDown, ArrowUp, Ellipsis, Pin, PinOff } from "lucide-react";
-import { newPinOrder, pinnedFirst, PINNED_GROUP } from "../chatList";
+import { newPinOrder, pinnedFirst } from "../chatList";
 import { leave } from "../motion";
 import { movePin, pinFailed, setPin, type PinRow } from "../pins";
 import { useTouchScreen } from "../ui";
 import { revealInList } from "./ChatListMotion";
-import { FoldableGroup, type GroupFold } from "./GroupFold";
 
 export type { PinRow } from "../pins";
 
@@ -57,7 +58,7 @@ const lowerHalf = (e: DragEvent) => {
 /**
  * The chat list's pins: its rows split into the pinned ones (every machine's, in your order) and the rest, and what
  * each row's options do. One request at a time, and nothing moves until its machine has said so. `unfold` is told
- * where a chat went — Pinned, or the group it drops back into — so a folded one opens rather than swallowing the row.
+ * where a chat went — Pinned, or the section it drops back into — so a folded one opens rather than swallowing the row.
  */
 export function usePinnedList(chats: PinRow[], searching: boolean, unfold?: { pinned?: () => void; unpinned?: (c: PinRow) => void }) {
   const { pinned, rest } = useMemo(() => pinnedFirst(chats, (c) => c.room), [chats]);
@@ -70,7 +71,7 @@ export function usePinnedList(chats: PinRow[], searching: boolean, unfold?: { pi
   // The row being dragged (a ref: the next dragover can come before React has drawn this one), and where it would land.
   const dragged = useRef<string | null>(null);
   const [drag, setDrag] = useState<{ from: string; over: string | null; below: boolean } | null>(null);
-  // Chats unpinned here stay in view in their agent's group (even past Show all), so you see where they went.
+  // Chats unpinned here stay in view where they land (even past Recent's Show all), so you see where they went.
   const [unpinned, setUnpinned] = useState<ReadonlySet<string>>(() => new Set());
   // Where focus goes once a change is on screen: React may have moved the row, and focus with it is lost. At once, and
   // the row brought into view from where it now is in the list: a focus move's own scrolling would go by where its
@@ -154,7 +155,7 @@ export function usePinnedList(chats: PinRow[], searching: boolean, unfold?: { pi
       onPin: () =>
         void run(key, async () => {
           await setPin(c.machine, c.room.id, { pinned: true, order: newPinOrder(pinned.map((p) => p.room)) });
-          // Pinned may be folded away, and the row has left its agent's group: it opens, so the row is there to see
+          // Pinned may be folded away, and the row has left its own section: it opens, so the row is there to see
           // and to put focus back on, instead of the chat and the focus both vanishing.
           unfold?.pinned?.();
         }, { close: true, focus: ["more"] }),
@@ -162,7 +163,7 @@ export function usePinnedList(chats: PinRow[], searching: boolean, unfold?: { pi
         void run(key, async () => {
           await setPin(c.machine, c.room.id, { pinned: false });
           setUnpinned((s) => new Set(s).add(key));
-          // The group it lands in may be folded away: it opens, so the row is there to see and to put focus back on.
+          // The section it lands in may be folded away: it opens, so the row is there to see and to put focus back on.
           unfold?.unpinned?.(c);
         }, { close: true, focus: ["more"] }),
       // The tray stays open, on the same button when it's still there.
@@ -174,29 +175,11 @@ export function usePinnedList(chats: PinRow[], searching: boolean, unfold?: { pi
   return { pinned, rest, row, kept: (c: PinRow) => unpinned.has(keyOf(c)) };
 }
 
-/** The list's first section: every machine's pinned chats. It folds away like any other group (GroupFold.tsx). */
-export function PinnedSection({ children, ...fold }: GroupFold & { children: ReactNode }) {
-  return (
-    <FoldableGroup
-      className="csb-pinned"
-      group={PINNED_GROUP}
-      label="Pinned"
-      title="pinned"
-      heading={
-        <h2 className="csb-heading">
-          <Pin size={13} aria-hidden="true" />
-          Pinned
-        </h2>
-      }
-      {...fold}
-    >
-      {children}
-    </FoldableGroup>
-  );
-}
-
-/** A chat's row (`children`: the button that opens it) with its ⋯ button and its options' tray. */
-export function ChatRow({ id, name, pins, children }: { id: string; name: string; pins: RowPins; children: ReactNode }) {
+/**
+ * A chat's row (`children`: the button that opens it) with its ⋯ button and its options' tray. `onHold`: a long press
+ * (or a right click) opened the options, which is what the list's "Hold a chat to pin it" waits to see once.
+ */
+export function ChatRow({ id, name, pins, onHold, children }: { id: string; name: string; pins: RowPins; onHold?: () => void; children: ReactNode }) {
   const tray = useId();
   const item = useRef<HTMLDivElement>(null);
   const more = useRef<HTMLButtonElement>(null);
@@ -205,6 +188,8 @@ export function ChatRow({ id, name, pins, children }: { id: string; name: string
   const pressed = useRef(false);
   const onOpen = useRef(pins.onOpen);
   onOpen.current = pins.onOpen;
+  const held = useRef(onHold);
+  held.current = onHold;
   const { open, busy, pinned, place, drag } = pins;
 
   // The tray closes on a tap anywhere else, or Escape (back on the ⋯ button).
@@ -261,6 +246,7 @@ export function ChatRow({ id, name, pins, children }: { id: string; name: string
             pressed.current = true;
             navigator.vibrate?.(10);
             onOpen.current(true);
+            held.current?.();
           }, LONG_PRESS_MS);
           press.current = { x: e.clientX, y: e.clientY, timer };
         }}
@@ -284,6 +270,7 @@ export function ChatRow({ id, name, pins, children }: { id: string; name: string
           endPress();
           pressed.current = true;
           onOpen.current(true);
+          held.current?.();
         }}
       >
         {children}

@@ -52,10 +52,10 @@ test("the Refuseless preset: OpenCode first, on its chat address, with where the
 });
 
 test("what a chat's permission setting means on OpenCode, as the rules the hub writes for it", () => {
-  expect(permissionInfo("opencode", "ask")).toMatchObject({ short: "Asks first", help: "Can read the project. Asks you before reading elsewhere, and before file edits, commands, web fetches and the browser, except ones you've already allowed." });
-  expect(permissionInfo("opencode", "edits")).toMatchObject({ short: "Can edit", help: "Edits files in the project on its own. Asks you before anything outside it, and before commands, web fetches and the browser." });
+  expect(permissionInfo("opencode", "ask")).toMatchObject({ short: "Asks first", help: "Can read the chat's folder. Asks you before reading elsewhere, and before file edits, commands, web fetches and the browser, except ones you've already allowed." });
+  expect(permissionInfo("opencode", "edits")).toMatchObject({ short: "Can edit", help: "Edits files in the chat's folder on its own. Asks you before anything outside it, and before commands, web fetches and the browser." });
   // No safety check of its own stands behind Auto, unlike Claude Code's: it's a short list of read commands, and that's said.
-  expect(permissionInfo("opencode", "auto")).toMatchObject({ short: "Auto", help: "Edits files in the project and runs simple read commands (ls, cat, grep, git status, git diff, git log) on its own. Asks you before anything outside it, and before other commands, web fetches and the browser." });
+  expect(permissionInfo("opencode", "auto")).toMatchObject({ short: "Auto", help: "Edits files in the chat's folder and runs simple read commands (ls, cat, grep, git status, git diff, git log) on its own. Asks you before anything outside it, and before other commands, web fetches and the browser." });
   expect(permissionInfo("opencode", "full")).toMatchObject({ short: "Full access", tone: "red" });
 });
 

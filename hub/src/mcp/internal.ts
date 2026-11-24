@@ -16,8 +16,51 @@ export async function handleInternal(app: App, req: Request, url: URL): Promise<
   if (!memberId || !app.checkInternalToken(memberId, req.headers.get("x-crosstalk-token") ?? "")) return json({ error: "forbidden" }, 403);
   const body = req.method === "POST" ? ((await req.json().catch(() => ({}))) as Record<string, any>) : {}; // eslint-disable-line @typescript-eslint/no-explicit-any
   const member = app.store.getMember(memberId);
-  if (!member) return json({ error: "unknown member" }, 404);
+  if (!member) {
+    // A helper on another account (helpers.ts) is never saved, so none of the hub's tools know it. Only Claude Code's
+    // permission prompt comes through for one: what it may not do without asking becomes a card in the chat it works for.
+    if (url.pathname === "/internal/approve" && app.helpers.helperMember(memberId)) {
+      const toolName = String(body.tool_name ?? "tool");
+      const input = (body.input ?? {}) as Record<string, unknown>;
+      if (toolName === "AskUserQuestion") return json({ behavior: "deny", message: "A helper can't ask the person questions. Decide with your best judgment and say what you assumed in your report." });
+      const decision = await app.helpers.approvalFor(memberId, describeToolCall(toolName, input));
+      return json(decision === "deny" ? { behavior: "deny", message: "The human denied this in Crosstalk." } : { behavior: "allow", updatedInput: input });
+    }
+    return json({ error: "unknown member" }, 404);
+  }
   const room = app.store.getRoom(member.roomId)!;
+
+  // The machine's screen (screen/index.ts): each answers with words, and what the screen looks like after.
+  if (url.pathname.startsWith("/internal/screen/")) {
+    const op = url.pathname.slice("/internal/screen/".length);
+    try {
+      const shot = async (text: string) => {
+        const s = await app.screen.screenshot();
+        return json({ text: `${text} The screenshot is ${s.width} × ${s.height}.`, image: Buffer.from(s.png).toString("base64") });
+      };
+      switch (op) {
+        case "screenshot":
+          return await shot("This is the screen now.");
+        case "click":
+          return await shot(await app.screen.click(body as never));
+        case "move":
+          return await shot(await app.screen.move(body as never));
+        case "drag":
+          return await shot(await app.screen.drag(body as never));
+        case "scroll":
+          return await shot(await app.screen.scroll(body as never));
+        case "type":
+          return await shot(await app.screen.type(body as never));
+        case "key":
+          return await shot(await app.screen.key(body as never));
+        case "windows":
+          return json({ text: await app.screen.windowsForAgent() });
+      }
+      return json({ error: "not found" }, 404);
+    } catch (e) {
+      return json({ text: e instanceof Error ? e.message : String(e), error: true });
+    }
+  }
 
   switch (url.pathname) {
     case "/internal/members": {
@@ -115,6 +158,15 @@ export async function handleInternal(app: App, req: Request, url: URL): Promise<
         return json({ text: e instanceof Error ? e.message : String(e), error: true });
       }
     }
+    case "/internal/helper/start":
+    case "/internal/helper/result": {
+      // Helpers on another account (helpers.ts). What it can't do is said in words the agent can act on.
+      try {
+        return json(url.pathname.endsWith("/start") ? await app.helpers.start(member, body, req.signal) : await app.helpers.result(member, body, req.signal));
+      } catch (e) {
+        return json({ text: e instanceof Error ? e.message : String(e), error: true });
+      }
+    }
     case "/internal/helper_model": {
       // The user asked in the chat for helper agents on another model (model-lock.ts).
       try {
@@ -127,7 +179,7 @@ export async function handleInternal(app: App, req: Request, url: URL): Promise<
       // Teamwork: a chat's agent asks the other agent one question (limits and plan checks in askHelper).
       const question = String(body.question ?? "").trim();
       if (!question) return json({ error: "Write the question to ask." }, 400);
-      return json({ answer: await askHelper(app, member.id, question.slice(0, 8000)) });
+      return json({ answer: await askHelper(app, member.id, question.slice(0, 8000), typeof body.who === "string" ? body.who : null) });
     }
   }
   return json({ error: "not found" }, 404);

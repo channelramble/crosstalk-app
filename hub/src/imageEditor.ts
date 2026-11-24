@@ -313,6 +313,8 @@ export class ImageEditor {
   private stopping: Promise<void> | null = null;
   /** The server the hub started (this run, or a hub before a restart): its process group ends with it. */
   private started: number | null = null;
+  /** The server process last measured (`measured`): only ever read, for the memory guard (`heavy`). */
+  private measuredPid: number | null = null;
   private child: ChildProcess | null = null;
   /** How the server this hub started last ended, when a signal ended it (from outside). */
   private ended: NodeJS.Signals | null = null;
@@ -453,11 +455,14 @@ export class ImageEditor {
    *    there, and the guard measures it like any other server it didn't start (the switch in Settings can turn that
    *    one off too, which is why it is still "ours").
    */
-  heavy(): { bytes: number | null; port: number | null } {
+  heavy(): { bytes: number | null; port: number | null; pid?: number } {
     const on = this.state !== "off" && this.state !== "error";
     const measured = on && this.memoryMB !== null ? this.memoryMB * 1024 ** 2 : 0;
     const most = on ? Math.max(measured, editorNeedBytes(this.deps.dir) ?? 0) : 0;
-    return most > 0 ? { bytes: most, port: null } : { bytes: null, port: this.port() };
+    // `pid`: the server those bytes were measured on (else the one the hub started), so the guard's look at the
+    // process table doesn't list the same memory a second time under "python".
+    const pid = this.measuredPid ?? this.started;
+    return most > 0 ? { bytes: most, port: null, ...(pid ? { pid } : {}) } : { bytes: null, port: this.port() };
   }
 
   private snapshot(): ImageEditorStatus {
@@ -831,6 +836,7 @@ export class ImageEditor {
   /** Its memory (what Activity Monitor shows), whether people's edits are running or waiting, and warm-ups. */
   private async measured(): Promise<{ memoryMB: number | null; busy: boolean; warmups: string[] }> {
     const pid = (await this.listener()) ?? (this.started && alive(this.started) ? this.started : null);
+    this.measuredPid = pid;
     let mb: number | null = null;
     if (pid) {
       try {

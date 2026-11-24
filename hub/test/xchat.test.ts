@@ -486,7 +486,7 @@ describe("list_chats", () => {
     const head = out.split("\n")[0];
     expect(head).toStartWith("Machines: Mac mini (this one), ");
     expect(head.slice("Machines: ".length).split(", ").sort()).toEqual(
-      ["Mac mini (this one)", "MacBook (can't reach it right now)", "NAS (needs a Crosstalk update)", "Old Mac (no longer accepts this machine's sign-in)", "Pi (not connected for this yet)"].sort(),
+      ["Mac mini (this one)", "MacBook (can't reach it right now)", "NAS (needs a Crosstalk update)", "Old Mac (no longer accepts this machine)", "Pi (not connected for this yet)"].sort(),
     );
     expect(out).toContain(`${s.room.id} "Side project" · Mac mini`); // this machine's chats are still there
     // One machine only; an ambiguous name lists the matches.
@@ -948,7 +948,7 @@ describe("send_to_chat and wait_for_reply", () => {
     const waiting = later((signal) => h.app.xchat.toolSend(s.member, { chat: t.room.id, text: "Ping again", wait_minutes: 1 }, signal));
     await until("the message to arrive", () => relaysIn(h, t).length === 2);
     await h.app.engine.stop(s.room.id);
-    expect(await waiting).toBe('Stopped waiting: your turn ended. The reply will be in "API server" on Mac mini.');
+    expect(await waiting).toBe('Stopped waiting: your reply ended. The reply will be in "API server" on Mac mini.');
   });
 
   test("a reply waiting 30 s or more for the user's approval there returns early; wait_for_reply picks it up afterwards", async () => {

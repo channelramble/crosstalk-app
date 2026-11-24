@@ -3,7 +3,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { AgentAccount, Member, ModelOption, Provider, Room, UsageSnapshot } from "@crosstalk/shared";
 
-// What a chat on an AI service and the Usage page say about it. The menu called the default compaction point "near full"
+// What a chat on an AI service and the Usage page say about it. The chat's settings called the default compaction point "near full"
 // while it compacts at 250,000 tokens on a 1M model, so sizes later than that looked earlier; and a service, which reports
 // no limits to Crosstalk, was promised some ("Limits appear after the agent's first turn", "Not checked yet"), above real
 // plans' cards.
@@ -16,7 +16,7 @@ g.localStorage ??= { getItem: () => null, setItem() {}, removeItem() {} };
 g.navigator ??= { userAgent: "test" };
 g.document ??= { addEventListener() {}, removeEventListener() {}, visibilityState: "visible", querySelector: () => null };
 g.matchMedia ??= () => ({ matches: false, addEventListener() {}, removeEventListener() {} });
-const { ContextPop } = await import("./views/ChatControls");
+const { ChatMemory, PlanLimits } = await import("./views/ChatSettingsSheet");
 const { UsageCard } = await import("./views/UsagePage");
 const { usageCards } = await import("./usageWords");
 const { useStore } = await import("./store");
@@ -37,7 +37,7 @@ const usageOf = (provider: Provider, id: string, windows: UsageSnapshot["windows
 const accountsOf = (...list: AgentAccount[]) => Object.fromEntries(list.map((a) => [accountKey(a.provider, a.id), a]));
 
 const pop = (provider: Provider, model: Partial<ModelOption> | undefined, m = member(provider)) =>
-  renderToStaticMarkup(createElement(ContextPop, { room, member: m, model: model as ModelOption | undefined, patch: async () => {}, onDone: () => {} }));
+  renderToStaticMarkup(createElement(ChatMemory, { room, member: m, model: model as ModelOption | undefined, onCompactAt: () => {} }));
 const compact = (provider: Provider, contextWindow: number | undefined, more: Partial<ModelOption> = {}) => options(pop(provider, contextWindow ? { id: "m", label: "M", efforts: [], contextWindow, ...more } : undefined));
 
 test("the menu says where a chat on a service really compacts, and keeps offering the sizes past it", () => {
@@ -74,21 +74,18 @@ test("no window known, or another agent: as it was", () => {
   expect(compact("codex", 272_000, { compactAt: 245_000 })[0]).toBe("Codex's default (245k)");
 });
 
-test("the context menu has no Plan limits on a service, unless it does report some", () => {
+test("a chat's settings show no Plan limits on a service, unless it does report some", () => {
+  const limits = (provider: Provider, m = member(provider)) => words(renderToStaticMarkup(createElement(PlanLimits, { member: m })));
   Object.assign(first, { accounts: accountsOf(service("opencode")), usage: {} });
-  const none = words(pop("opencode", undefined));
-  expect(none).not.toContain("Plan limits");
-  expect(none).not.toContain("Not checked yet");
-  // Its name stays: it's what finds it on every screen.
-  expect(pop("opencode", undefined)).toContain('aria-label="Context and plan limits"');
+  expect(limits("opencode")).toBe("");
 
   Object.assign(first, { usage: { [accountKey("opencode", "svc1")]: usageOf("opencode", "svc1", [{ label: "Weekly", usedPercent: 12, resetsAt: null }]) } });
-  expect(words(pop("opencode", undefined))).toContain("Plan limits");
+  expect(limits("opencode")).toContain("Plan limits");
 
   // A plan sign-in, or an account this device hasn't heard about, keeps what it had.
   Object.assign(first, { accounts: accountsOf(signIn("claude")), usage: {} });
-  expect(words(pop("claude", undefined, member("claude", "default")))).toContain("Plan limits");
-  expect(words(pop("claude", undefined, member("claude", "default")))).toContain("Not checked yet");
+  expect(limits("claude", member("claude", "default"))).toContain("Plan limits");
+  expect(limits("claude", member("claude", "default"))).toContain("Not checked yet");
 });
 
 const NOW = 1000;
@@ -110,9 +107,9 @@ test("Usage: plans first, then services, and no cards for the agents themselves"
 test("a Usage card says what's true of its account", () => {
   const onService = card(service("opencode"));
   expect(onService).toContain("OpenCode · Refuseless");
-  expect(onService).toContain("This service doesn't report limits to Crosstalk. What it costs is under Costs.");
+  expect(onService).toContain("This account doesn't report limits to Crosstalk. What it costs is under Costs.");
   expect(onService).not.toContain("Limits appear after");
-  expect(card(signIn("claude"))).toContain("Limits appear after the agent's first turn.");
+  expect(card(signIn("claude"))).toContain("Limits appear after the agent's first reply.");
   // What a hub did report goes first, on a service too.
   const reported = usageOf("opencode", "svc1", [{ label: "Weekly", usedPercent: 12, resetsAt: null }]);
   expect(card(service("opencode"), reported)).toContain("12% used");

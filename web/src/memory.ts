@@ -15,14 +15,31 @@ export const MEMORY_PILL: Record<MemoryBand, { label: string; tone: "" | "orange
   unknown: null,
 };
 
-/** Whether the card is worth a person's screen: only when there is something to say or to do. */
+/** Whether the card has something to say about the machine: only while it is getting full. */
 export const showMemory = (m: MachineMemory | null): m is MachineMemory => !!m && (m.band === "busy" || m.band === "tight" || m.band === "full");
 
-/** Under the heading: how much of the machine the heavy things hold. "10.9 GB of 16.0 GB" */
+/**
+ * Whether the card has its switch ("Free memory by itself"): on a machine that says whether it acts (older ones never
+ * do) and can read its memory. That switch is why the card is there while memory is fine, too.
+ */
+export const hasMemorySwitch = (m: MachineMemory | null): m is MachineMemory => !!m && m.acts !== undefined && m.band !== "unknown";
+
+/** Under the list: how much of the machine what is listed holds. "10.9 GB of 16.0 GB" */
 export function memoryTaken(m: MachineMemory): string | null {
-  if (m.takenBytes === null || m.ramBytes <= 0) return null;
-  return `${bytesText(m.takenBytes)} of ${bytesText(m.ramBytes)}`;
+  // A newer machine lists agents, their browser and your own programs too, which `takenBytes` leaves out (it is what
+  // the next model has to fit beside): the sentence is about the list above it, so it adds up the list.
+  const listed = m.holders.some((h) => h.kind) ? m.holders.reduce((n, h) => n + (h.bytes ?? 0), 0) || null : m.takenBytes;
+  if (listed === null || m.ramBytes <= 0) return null;
+  return `${bytesText(listed)} of ${bytesText(m.ramBytes)}`;
 }
+
+/** The one sentence under the switch. */
+export const memoryActHelp = (machine: string) =>
+  `When ${machine} is about to run out of memory, Crosstalk asks the agent that is filling it to close its pages, and stops that reply if it keeps growing.`;
+
+/** The card's last line: what Crosstalk will and won't stop, which depends on the switch. */
+export const memoryPromise = (m: MachineMemory) =>
+  m.acts ? "Crosstalk never stops anything you started yourself." : "Crosstalk never stops anything by itself, and never anything you started.";
 
 /** Said once, under the list: swap is the slow part, and this is the number that shows it. */
 export function memorySwap(m: MachineMemory): string | null {

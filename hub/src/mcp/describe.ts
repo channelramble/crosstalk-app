@@ -1,7 +1,7 @@
 import { PROVIDER_INFO, type ApprovalKind } from "@crosstalk/shared";
 
 /** Turn a tool call into a readable approval card. */
-export function describeToolCall(toolName: string, input: Record<string, unknown>): { kind: ApprovalKind; title: string; detail: string } {
+export function describeToolCall(toolName: string, input: Record<string, unknown>, on?: string | null): { kind: ApprovalKind; title: string; detail: string } {
   const s = (v: unknown) => (typeof v === "string" ? v : JSON.stringify(v, null, 2));
   switch (toolName) {
     case "Bash":
@@ -30,14 +30,54 @@ export function describeToolCall(toolName: string, input: Record<string, unknown
     case "ToolSearch":
       return { kind: "tool", title: "Looked up tools", detail: s(input.query ?? "") };
     default: {
+      const onScreen = screenToolTitle(toolName.replace(/^mcp__crosstalk__/, ""), input);
+      if (onScreen) return { kind: "tool", title: onScreen, detail: "" };
+      const helper = helperToolTitle(toolName.replace(/^mcp__crosstalk__/, ""), input, on);
+      if (helper) return { kind: "tool", title: helper, detail: s(input.task ?? "") };
       const chats = chatToolTitle(toolName.replace(/^mcp__crosstalk__/, ""), input);
       if (chats) return { kind: "tool", title: chats, detail: s(input.text ?? input.query ?? "") };
       const asked = /^mcp__crosstalk__ask_(\w+)$/.exec(toolName)?.[1];
       const name = asked ? (PROVIDER_INFO as Record<string, { name: string }>)[asked]?.name : undefined;
       if (name) return { kind: "tool", title: `Asked ${name}: ${oneLine(s(input.question ?? ""), 120)}`, detail: s(input.question ?? "") };
+      if (asked === "agent") return { kind: "tool", title: `Asked ${typeof input.who === "string" && input.who ? oneLine(input.who, 40) : "another agent"}: ${oneLine(s(input.question ?? ""), 120)}`, detail: s(input.question ?? "") };
       return { kind: "tool", title: `Use ${toolName}`, detail: truncate(JSON.stringify(input, null, 2), 6000) };
     }
   }
+}
+
+/** What an agent did on the machine's screen, in words (screen tools); null for any other tool. Typed text isn't quoted in full. */
+export function screenToolTitle(tool: string, input: Record<string, unknown>): string | null {
+  const at = () => `${Math.round(Number(input.x))}, ${Math.round(Number(input.y))}`;
+  switch (tool) {
+    case "screen_screenshot":
+      return "Looked at the screen";
+    case "screen_click":
+      return `${Number(input.count) > 1 ? "Double-clicked" : input.button === "right" ? "Right-clicked" : "Clicked"} on the screen at ${at()}`;
+    case "screen_move":
+      return `Moved the pointer to ${at()}`;
+    case "screen_drag":
+      return "Dragged on the screen";
+    case "screen_scroll":
+      return `Scrolled ${typeof input.direction === "string" ? input.direction : "down"} on the screen`;
+    case "screen_type":
+      return `Typed on the screen: ${oneLine(String(input.text ?? ""), 60)}`;
+    case "screen_key":
+      return `Pressed ${oneLine(String(input.keys ?? ""), 40)}`;
+    case "screen_windows":
+      return "Listed the windows on the screen";
+  }
+  return null;
+}
+
+/**
+ * What an agent did with helpers on another account, in words (helpers.ts tools); null for any other tool. `on`: that
+ * account as the person knows it ("Claude API key"), when the caller knows it.
+ */
+export function helperToolTitle(tool: string, input: Record<string, unknown>, on?: string | null): string | null {
+  const str = (v: unknown) => (typeof v === "string" ? v : "");
+  if (tool === "start_helper") return `Started a helper${on ? ` on ${on}` : ""}: ${oneLine(str(input.name) || str(input.task), 100)}`;
+  if (tool === "helper_result") return "Waited for helpers";
+  return null;
 }
 
 /** What an agent did with the user's other chats, in words (xchat.ts tools); null for any other tool. */

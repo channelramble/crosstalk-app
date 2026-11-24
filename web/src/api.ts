@@ -130,8 +130,8 @@ export async function api<T = unknown>(method: string, path: string, body?: unkn
     throw new ApiError(
       0,
       timedOut
-        ? `The hub didn't answer.${android && isNative ? " If it's on your home network, allow Crosstalk's local network access in Android Settings → Apps → Crosstalk → Permissions." : ""} Check that it's running and that this device is on your Tailscale network.`
-        : "Can't reach the hub. Check that it's running and that this device is on your Tailscale network.",
+        ? `The machine didn't answer.${android && isNative ? " If it's on your home network, allow Crosstalk's local network access in Android Settings → Apps → Crosstalk → Permissions." : ""} Check that Crosstalk is running on it and that this device is on your Tailscale network.`
+        : "Can't reach the machine. Check that Crosstalk is running on it and that this device is on your Tailscale network.",
     );
   } finally {
     clearTimeout(timer);
@@ -202,6 +202,8 @@ const TIMING: LiveTiming = { heartbeatMs: 15_000, timeoutMs: 5_000, wakeMs: 3_00
  * Reconnecting WebSocket that delivers hub events. A socket can die quietly while a phone sleeps: when the page comes
  * back, a ping with a short deadline finds out, and a dead one is replaced at once. An answer means the socket stayed
  * up, so nothing was missed: `onResume` then gets how long the page was away (the app catches up only after a while).
+ * `onWake` hears of it the moment the page is back, before anyone knows whether the socket lived: how long it was
+ * away, so what's on screen can be said to be out of date at once rather than after the ping's deadline.
  */
 export class Live {
   private ws: WebSocket | null = null;
@@ -221,6 +223,7 @@ export class Live {
     private onStatus: (s: Status) => void,
     private timing: LiveTiming = TIMING,
     private onResume?: (awayMs: number) => void,
+    private onWake?: (awayMs: number) => void,
   ) {
     if (typeof document !== "undefined" && document.visibilityState === "hidden") this.hiddenAt = Date.now();
     this.open();
@@ -240,6 +243,7 @@ export class Live {
     if (this.closed || document.visibilityState !== "visible") return;
     const away = this.hiddenAt === null ? 0 : Date.now() - this.hiddenAt;
     this.hiddenAt = null;
+    if (away > 0) this.onWake?.(away);
     if (!this.ws || this.ws.readyState > 1) {
       this.retry = 0;
       this.open();

@@ -1,28 +1,39 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Bookmark, ChevronDown, HardDrive, PanelLeft, PanelLeftClose, Plus, Search, Server, Settings, ShieldAlert, SquareTerminal, Users, X } from "lucide-react";
-import { PROVIDER_INFO, type AgentAccount, type ChatProvider, type Room } from "@crosstalk/shared";
-import { accountKey } from "../accounts";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
+import { Bookmark, ChevronDown, MonitorSmartphone, HardDrive, PanelLeft, PanelLeftClose, Pin, Plus, Search, Server, Settings, SquareTerminal, X } from "lucide-react";
+import { helperAtWork, type Member, type Room } from "@crosstalk/shared";
 import { useLinked } from "../linkedMachines";
-import { ChatRow, PinnedSection, usePinnedList, type PinRow } from "./ChatRow";
+import { ChatRow, usePinnedList, type PinRow } from "./ChatRow";
 import { FoldableGroup, saysWhatsInside, type GroupFold } from "./GroupFold";
 import { ListMotion, useFreshMarks } from "./ChatListMotion";
 import { useEntrance } from "../motion";
 import { usesApiKey, useMachines, useStore, type Machine } from "../store";
-import { useSidebar } from "../sidebar";
+import { SIDEBAR_MAX, SIDEBAR_MIN, SIDEBAR_WIDTH, useSidebar } from "../sidebar";
+import { SHORTCUT, SHORTCUT_KEYS } from "../shortcuts";
+import { zoomFactor } from "../zoom";
 import { searchTerm } from "../search";
-import { GROUP_CHATS_GROUP, PINNED_GROUP, SHOWN, chatMatches, foldMark, folderName, isFolded, isUnread, keepInView, linkedNotHere, membersByRoom, needsYou, rowStates, shownRows, type RowState } from "../chatList";
-import { chatGroups, chatIdentity, serviceWhereWords, type ChatGroup } from "../chatIdentity";
+import { HOLD_HINT_KEY, SECTION_TITLE, SHOWN, canFold, chatMatches, heldSections, isFolded, isUnread, keepInView, linkedNotHere, listSections, membersByRoom, needsYou, placesOf, requestsByRoom, rowLabel, rowStateWords, rowStates, sectionFold, sectionOf, shownRows, type HeldPlaces, type ListRow, type ListSection, type RowFacts } from "../chatList";
+import { chatIdentity } from "../chatIdentity";
 import { NewChatMenu, useChatStarters } from "./NewChatMenu";
-import { limitBackWords } from "../limitWait";
-import { poolAgentFor, poolWhereWords } from "../poolChat";
-import { ApiBadge, ChatAvatar, Logo, ProviderAvatar, ServiceAvatar, formatBytes, timeAgo, useBookPosture, useInterval, useIsMobile } from "../ui";
-import { MachineTag, useMachineName } from "./MachinePicker";
+import { ApiBadge, ChatAvatar, Logo, formatBytes, useBookPosture, useInterval, useIsMobile, useTouchScreen } from "../ui";
+import { MachineTag } from "./MachinePicker";
 import { MessageHits } from "./MessageHits";
 import { GroupAvatar } from "./GroupAvatar";
 import { groupMatches, groupNames } from "../groupChat";
 
-/** What a row's dot says. */
-const STATE_LABEL: Record<RowState, string> = { needs: "Needs you", busy: "Working", waiting: "Waiting for its usage limit", error: "Stopped with an error" };
+/** One chat as the list draws it: its machine, its state, and its key in the list (machine/chat). */
+type Row = PinRow & ListRow & { key: string };
+
+/** A finger resting on the list holds its rows in place for this long at most (a lift the page never heard of). */
+const HOLD_MS = 8000;
+
+/** Whether this device has seen to "Hold a chat to pin it" (a browser that refuses storage is shown it each time). */
+function holdHintSeen(): boolean {
+  try {
+    return localStorage.getItem(HOLD_HINT_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Opens the sidebar: the drawer on a phone, or the docked sidebar when it's collapsed. Hidden while it's docked open.
@@ -109,29 +120,41 @@ function openSettingsAt(id: string) {
   setTimeout(() => document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" }), 150);
 }
 
-/** Every chat on every machine, grouped by agent, plus new chat, search, what needs you, and settings. */
+/**
+ * Every chat on every machine, by state — Pinned, Needs you, Working, Recent — each row saying its state in words, plus
+ * new chat, search, and the row of Screen, Bookmarks, Terminal and Settings under it.
+ */
 export function ChatSidebar({ drawer = false }: { drawer?: boolean }) {
   const view = useStore((s) => s.view);
   const roomId = useStore((s) => s.roomId);
-  const agent = useStore((s) => s.agent);
   const openRoom = useStore((s) => s.openRoom);
-  const openAgent = useStore((s) => s.openAgent);
   const setView = useStore((s) => s.setView);
+  const hubScreen = useStore((s) => s.hub?.screen);
   const activate = useStore((s) => s.activate);
   const reconnectNow = useStore((s) => s.reconnectNow);
   const machines = useMachines((m) => m.list);
-  // The open machine's pool, for its group's heading (New chat from it starts on the pool).
-  const poolOffer = useStore((s) => s.poolOffer);
-  const mobile = useIsMobile();
   const book = useBookPosture();
+  const touch = useTouchScreen();
   const multi = machines.length > 1;
-  const chats = useMemo(
-    () => machines.flatMap((m) => Object.values(m.rooms).filter((r) => r.chat).map((room) => ({ room, machine: m }))).sort((a, b) => b.room.updatedAt - a.room.updatedAt),
-    [machines],
+  // Each chat's agents on each machine, worked out once: a group chat's are found by their names too, and a one-agent
+  // chat's first one says what the chat is (its service and model, chatIdentity.ts).
+  const roomMembers = useMemo(() => new Map(machines.map((m) => [m.key, membersByRoom(m.members)])), [machines]);
+  const groupOf = (r: Room, m: Machine): Member[] => roomMembers.get(m.key)?.get(r.id) ?? [];
+  // Each chat's waiting requests, for its words ("Needs your OK · 2") and its place under Needs you.
+  const requests = useMemo(() => new Map(machines.map((m) => [m.key, requestsByRoom(m.members, m.approvals)])), [machines]);
+  // Every chat with what the list sorts it by: its state (what its agents say, the requests waiting, and the helpers
+  // still at work once a reply has ended) and when it last asked for something.
+  const rows = useMemo(
+    () =>
+      machines.flatMap((machine) => {
+        const states = rowStates(machine.members, machine.approvals, machine.tasks);
+        const asked = requests.get(machine.key);
+        return Object.values(machine.rooms)
+          .filter((room) => room.chat)
+          .map((room): Row => ({ room, machine, key: `${machine.key}/${room.id}`, state: states.get(room.id), askedAt: asked?.get(room.id)?.newest ?? null }));
+      }),
+    [machines, requests],
   );
-  const states = useMemo(() => new Map(machines.map((m) => [m.key, rowStates(m.members, m.approvals)])), [machines]);
-  const stateOf = (r: Room, m: Machine) => states.get(m.key)?.get(r.id);
-  const approvals = useMemo(() => machines.flatMap((m) => Object.values(m.approvals).filter((a) => a.status === "pending")), [machines]);
   // The machine shortest of space, when any is low.
   const storageLow = useMemo(() => machines.filter((m) => m.storage?.low).sort((a, b) => a.storage!.free - b.storage!.free)[0] ?? null, [machines]);
   const storage = storageLow?.storage ?? null;
@@ -148,7 +171,7 @@ export function ChatSidebar({ drawer = false }: { drawer?: boolean }) {
   const setQuery = useSidebar((s) => s.setQuery);
   const all = useSidebar((s) => s.all);
   const setAll = useSidebar((s) => s.setAll);
-  // Which groups this device folded away.
+  // Which sections this device folded away.
   const folded = useSidebar((s) => s.folded);
   const setFolded = useSidebar((s) => s.setFolded);
   const setCreating = useSidebar((s) => s.setCreating);
@@ -156,11 +179,73 @@ export function ChatSidebar({ drawer = false }: { drawer?: boolean }) {
   const newBox = useRef<HTMLDivElement>(null);
   const newButton = useRef<HTMLButtonElement>(null);
   const scroller = useRef<HTMLElement>(null);
-  // "5m ago" moves on by itself.
+  const search = useRef<HTMLInputElement>(null);
+  // How wide the docked list is (dragged at its edge, SidebarResizer); a drawer has its own width.
+  const width = useSidebar((s) => s.width);
+  // Asked for from the keyboard (shortcuts.ts), maybe just before this list was drawn (its drawer opening): the search
+  // to type in, or the New chat menu with its first choice focused.
+  const asked = useSidebar((s) => s.asked);
+  useEffect(() => {
+    if (asked.search <= answered.search) return;
+    answered.search = asked.search;
+    search.current?.focus();
+    search.current?.select();
+  }, [asked.search]);
+  const [menuByKey, setMenuByKey] = useState(0);
+  useEffect(() => {
+    if (asked.create <= answered.create) return;
+    answered.create = asked.create;
+    if (newButton.current?.disabled) return;
+    setNewMenu(true);
+    setMenuByKey((n) => n + 1);
+  }, [asked.create]);
+  useEffect(() => {
+    if (menuByKey) newBox.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
+  }, [menuByKey]);
+  // "5m ago" and "Working · 12m" move on by themselves.
   const [, tick] = useState(0);
   useInterval(() => tick((n) => n + 1), 60_000);
   // A row's mark that just came on (a reply, a question for you, an error) pops; one drawn with the list doesn't.
   const freshMark = useFreshMarks();
+  // "Hold a chat to pin it", once, on a touch screen (where a row has no ⋯): until a long press or a tap on its ✕.
+  const [hintSeen, setHintSeen] = useState(holdHintSeen);
+  const seeHint = () => {
+    if (hintSeen) return;
+    setHintSeen(true);
+    try {
+      localStorage.setItem(HOLD_HINT_KEY, "1");
+    } catch {
+      // storage unavailable: it's shown again next time
+    }
+  };
+
+  // A finger on the list: its rows stay where they are until it lifts (chatList.ts heldSections), so a chat that
+  // changes state just then doesn't slide out from under the tap. Touch events, not pointer ones: those end as soon
+  // as the browser takes the gesture for scrolling, and a finger scrolling is still a finger on the list.
+  const [touching, setTouching] = useState(false);
+  const places = useRef<HeldPlaces | null>(null);
+  const letGo = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const hold = () => {
+    clearTimeout(letGo.current);
+    // A lift the page never hears of (the row under the finger went) must not hold the list for good.
+    letGo.current = setTimeout(() => setTouching(false), HOLD_MS);
+    setTouching(true);
+  };
+  useEffect(() => {
+    if (!touching) return;
+    const lifted = (e: TouchEvent) => {
+      if (e.touches.length) return;
+      clearTimeout(letGo.current);
+      setTouching(false);
+    };
+    window.addEventListener("touchend", lifted, true);
+    window.addEventListener("touchcancel", lifted, true);
+    return () => {
+      window.removeEventListener("touchend", lifted, true);
+      window.removeEventListener("touchcancel", lifted, true);
+    };
+  }, [touching]);
+  useEffect(() => () => clearTimeout(letGo.current), []);
 
   // Back where it was (the drawer isn't drawn while it's closed), with the chat on screen in view.
   useLayoutEffect(() => {
@@ -198,64 +283,73 @@ export function ChatSidebar({ drawer = false }: { drawer?: boolean }) {
     fn();
     if (drawer) setDrawer(false);
   };
+  // With a keyboard: ↓ from the search goes into the chats, ↓ and ↑ move through them (↑ from the first goes back to
+  // the search), Home and End reach the first and the last. Enter in the search opens the first chat it found, and
+  // the search has done its job; Esc empties it, then leaves it for the message box.
+  const chatRows = () => Array.from(scroller.current?.querySelectorAll<HTMLElement>("button.csb-chat") ?? []);
+  const toMessageBox = () => document.querySelector<HTMLElement>('.main textarea[aria-label="Message"]')?.focus();
+  const searchKey = (e: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (e.nativeEvent.isComposing) return;
+    if (e.key === "ArrowDown") {
+      const first = chatRows()[0];
+      if (!first) return;
+      e.preventDefault();
+      first.focus();
+    } else if (e.key === "Enter" && query.trim()) {
+      const first = chatRows()[0];
+      if (!first) return;
+      e.preventDefault();
+      first.click();
+      setQuery("");
+      requestAnimationFrame(toMessageBox);
+    } else if (e.key === "Escape") {
+      if (query) {
+        // The search is emptied; a second Esc leaves it (or closes the drawer, as ever).
+        e.preventDefault();
+        e.stopPropagation();
+        setQuery("");
+      } else if (!drawer) {
+        e.currentTarget.blur();
+        toMessageBox();
+      }
+    }
+  };
+  const listKey = (e: ReactKeyboardEvent<HTMLElement>) => {
+    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key) || e.altKey || e.metaKey || e.ctrlKey) return;
+    const at = (e.target as HTMLElement).closest<HTMLElement>("button.csb-chat");
+    if (!at) return;
+    const all = chatRows();
+    const i = all.indexOf(at);
+    const to = e.key === "Home" ? all[0] : e.key === "End" ? all[all.length - 1] : e.key === "ArrowDown" ? all[i + 1] : i === 0 ? search.current : all[i - 1];
+    if (!to) return;
+    e.preventDefault();
+    to.focus();
+  };
   // What the New chat menu offers: the agents, the AI services added here, and the servers running here that aren't
   // added yet (only looked for while the menu is open).
   const starters = useChatStarters(newMenu);
   const canStart = starters.agents.length > 0 || starters.yours.length > 0;
   const q = query.trim().toLowerCase();
-  // Each chat's agents on each machine, worked out once: a group chat's are found by their names too, and a one-agent
-  // chat's first one says what the chat is (its service and model, chatIdentity.ts).
-  const roomMembers = useMemo(() => new Map(machines.map((m) => [m.key, membersByRoom(m.members)])), [machines]);
-  const groupOf = (r: Room, m: Machine) => roomMembers.get(m.key)?.get(r.id) ?? [];
-  // Each machine's own pool: a chat on it is the pool and its model, not two services of the same name (chatIdentity.ts).
-  const identityOf = (r: Room, m: Machine) => chatIdentity(r, groupOf(r, m)[0], m.accounts, m.poolOffer);
-  // A chat on a service of yours is found by that service and its model too, because that's what the row says it is.
+  const identityOf = (r: Room, m: Machine) => chatIdentity(r, groupOf(r, m)[0], m.accounts);
+  // A chat on a service of yours is found by that service and its model too, because that's what its avatar says it is.
   const searchable = (r: Room, m: Machine) => {
     const id = identityOf(r, m);
     return id.service ? [id.name, id.model ?? ""].join(" ") : null;
   };
   const matches = (r: Room, m: Machine) => chatMatches(r, q, multi ? m.name : null, searchable(r, m)) || (!!r.chat?.group && groupMatches(groupOf(r, m), q));
-  const waiting = useMemo(() => [...new Set(approvals.map((a) => a.roomId))], [approvals]);
   /**
-   * Whether a chat needs a look: the one predicate behind both the newest-few cut (it stays in view past it) and what
-   * a folded group counts, so the two can never say different things about the same chat.
+   * Whether a chat needs a look: the one predicate behind both Recent's newest-few cut (it stays in view past it) and
+   * what a folded section counts, so the two can never say different things about the same chat.
    */
-  const look = (c: PinRow) => keepInView(c.room, stateOf(c.room, c.machine));
-  /** Which group a chat drops back into when it's unpinned: a group chat's own, or its agent's, service's or the pool's. */
-  const groupKeyOf = (c: PinRow) => (c.room.chat?.group ? GROUP_CHATS_GROUP : identityOf(c.room, c.machine).groupKey);
-  // Pinned chats first, every machine's, in the order you set (ChatRow.tsx); the rest by agent, newest first. An
-  // unpinned chat stays in view where it lands (pins.kept), so a folded group there opens: otherwise the row — and the
-  // focus that follows it — would vanish into a heading that only says a chat more. A pin opens Pinned the same way.
-  const pins = usePinnedList(chats, !!q, { pinned: () => setFolded(PINNED_GROUP, false), unpinned: (c) => setFolded(groupKeyOf(c), false) });
-  const pinnedShown = pins.pinned.filter(({ room, machine }) => matches(room, machine));
-  // The list's groups: each agent's, then one for every AI service that has chats (chatIdentity.ts).
-  const groups = useMemo(
-    () =>
-      chatGroups(
-        chats
-          .filter(({ room }) => !room.chat?.group)
-          // The machine's name goes along: two machines can run a model of one name, and then the heading says which.
-          .map(({ room, machine }) => ({ identity: chatIdentity(room, roomMembers.get(machine.key)?.get(room.id)?.[0], machine.accounts, machine.poolOffer), machine: machine.key, machineName: multi ? machine.name : null })),
-        poolOffer,
-      ),
-    [chats, roomMembers, poolOffer, multi],
-  );
-  const groupChats = pins.rest.filter(({ room, machine }) => !!room.chat?.group && matches(room, machine));
-  /**
-   * What a group's fold control shows and does: it's folded when this device folded it (sidebar.ts), and it says how
-   * many chats are inside and how many of them need a look, because folding hides those rows too. A group with no
-   * chats folds as well, so a list of only your own models can put the agents' empty groups away. No control while a
-   * search is on: every match shows wherever it is, as "Show all" already does.
-   */
-  const foldOf = (key: string, rows: PinRow[], where?: string | null): GroupFold => ({
-    folded: isFolded(folded, key, !!q),
-    foldable: !q,
-    count: rows.length,
-    attention: rows.filter(look).length,
-    mark: foldMark(rows.map((c) => stateOf(c.room, c.machine))),
-    where,
-    onFold: (v) => setFolded(key, v),
-  });
+  const look = (c: Row) => keepInView(c.room, c.state);
+  // Pinned chats first, every machine's, in the order you set (ChatRow.tsx); the rest by state. An unpinned chat stays
+  // in view where it lands (pins.kept), so a folded section there opens: otherwise the row — and the focus that follows
+  // it — would vanish into a heading that only says a chat more. A pin opens Pinned the same way.
+  const pins = usePinnedList(rows, !!q, { pinned: () => setFolded("pinned", false), unpinned: (c) => setFolded(sectionOf({ room: { pinnedAt: null }, state: (c as Row).state }), false) });
+  // The list as it is, and as it's drawn: with a finger on it, every row stays where it was when the finger came down.
+  const live = listSections(rows.filter((c) => matches(c.room, c.machine)));
+  if (!touching || !places.current) places.current = placesOf(live, (c) => c.key);
+  const sections = touching ? heldSections(places.current, live, (c) => c.key) : live;
 
   // A chat with one of the agents, or a group chat (several of them, or two of one with different models).
   const startNew = () => setNewMenu(!newMenu);
@@ -266,20 +360,30 @@ export function ChatSidebar({ drawer = false }: { drawer?: boolean }) {
    */
   const lines: string[] = [];
 
-  // A chat's row, in its agent's group or under Pinned (where every agent's chats are, each with its agent's mark).
-  const row = (c: PinRow, pinned = false) => {
-    const { room: r, machine } = c;
-    const group = r.chat?.group ? groupOf(r, machine) : null;
+  // A chat's row: whose it is (its avatar), its name, and its state in words, or where it lives and when.
+  const row = (c: Row) => {
+    const { room: r, machine, state, key } = c;
+    const members = groupOf(r, machine);
+    const group = r.chat?.group ? members : null;
     // A chat on an AI service shows that service, not the agent that drives it.
     const identity = identityOf(r, machine);
-    const state = stateOf(r, machine);
-    // Waiting for a usage limit: the row says when the chat comes back, worked out on this device so the time is the
-    // one on this clock ("Back at 3:20 PM"); the dot's label says the whole thing.
-    const waits = state === "waiting" ? Object.values(machine.members).find((x) => x.roomId === r.id && x.status === "waiting") : undefined;
-    const back = waits?.wait ? limitBackWords(waits.wait) : waits ? "Back soon" : "";
-    const stateSaid = state ? (back ? `${STATE_LABEL[state]} · ${back}` : STATE_LABEL[state]) : "";
     const unread = isUnread(r);
-    const key = `${machine.key}/${r.id}`;
+    const facts: RowFacts = {
+      name: r.name,
+      cwd: r.cwd,
+      updatedAt: r.updatedAt,
+      state,
+      requests: requests.get(machine.key)?.get(r.id),
+      // How long its reply has run: since the first of its agents' running replies started.
+      workingSince: members.reduce<number | null>((first, m) => {
+        const at = machine.replyStarts[m.id]?.at;
+        return at && (first === null || at < first) ? at : first;
+      }, null),
+      helpers: members.reduce((n, m) => n + (machine.tasks[m.id] ?? []).filter(helperAtWork).length, 0),
+      // Waiting for a usage limit: when the chat comes back, worked out on this device so the time is this clock's.
+      wait: members.find((m) => m.status === "waiting")?.wait,
+      who: group?.length ? groupNames(group) : null,
+    };
     const options = pins.row(c);
     lines.push(`r:${key}`);
     // Its options open: the row is taller, so the lines under it move.
@@ -287,63 +391,40 @@ export function ChatSidebar({ drawer = false }: { drawer?: boolean }) {
     // What wants a look pops as it comes on (working, or waiting for a limit, is said by the dot's own look).
     const pop = freshMark(key, state === "needs" || state === "error" ? state : !state && unread ? "unread" : "") ? "m-pop" : "";
     return (
-      <ChatRow key={key} id={key} name={r.name} pins={options}>
+      <ChatRow key={key} id={key} name={r.name} pins={options} onHold={seeHint}>
         <button
-          className={`csb-chat ${pinned ? "pinned" : ""} ${group ? "group" : ""} ${view === "room" && roomId === r.id ? "active" : ""} ${unread ? "unread" : ""}`}
+          className={`csb-chat ${group ? "group" : ""} ${view === "room" && roomId === r.id ? "active" : ""} ${unread ? "unread" : ""}`}
           style={{ ["--c" as string]: group ? "var(--text-3)" : identity.color }}
           onClick={() => go(() => openRoom(r.id))}
+          // One label that reads the whole row: its name, its state, when, and its machine when there are several.
+          aria-label={rowLabel(facts, { unread, machine: multi ? machine.name : null })}
           title={multi ? `${r.name} · on ${machine.name}` : r.name}
         >
-          {pinned && (group ? <GroupAvatar members={group} size="sm" /> : <ChatAvatar identity={identity} size="sm" />)}
+          {group ? <GroupAvatar members={group} size="sm" /> : <ChatAvatar identity={identity} size="sm" />}
           <span className="csb-chat-text">
             <span className="csb-chat-name">{r.name}</span>
-            {/* On a phone, a second line: which folder (a group chat's: who's in it), and when — or, while it waits for a
-                usage limit, when it comes back. */}
-            {mobile && (
-              <span className="csb-chat-sub">
-                {group?.length ? groupNames(group) : folderName(r.cwd)} · {back || timeAgo(r.updatedAt)}
-              </span>
-            )}
+            <span className={`csb-chat-sub ${state ? `is-${state}` : ""}`}>
+              {/* The state's colour beside its words: an accent, never the only thing that says it. Helpers at work
+                  turn like an agent at work. */}
+              {state && <span className={`csb-dot ${state === "helpers" ? "busy" : state} ${state === "needs" || state === "error" ? pop : ""}`} aria-hidden="true" />}
+              <span className="csb-chat-words">{rowStateWords(facts)}</span>
+            </span>
           </span>
           {usesApiKey(r.id)(machine) && <ApiBadge />}
           {multi && <MachineTag name={machine.name} />}
-          {/* On a bigger screen there's no second line: the words go beside the dot. */}
-          {!mobile && back && <span className="csb-wait">{back}</span>}
-          {state ? (
-            <span className={`csb-dot ${state} ${pop}`} aria-label={stateSaid} title={stateSaid} />
-          ) : unread ? (
-            <span className={`reply-dot ${pop}`} aria-label="New reply" title="New reply" />
-          ) : (
-            !mobile && <span className="csb-time">{timeAgo(r.updatedAt)}</span>
-          )}
+          {unread && <span className={`reply-dot ${state ? "" : pop}`} aria-hidden="true" />}
         </button>
       </ChatRow>
     );
   };
 
-  /** A group: its heading, then "No chats yet.", its rows and Show all, or, folded, what it holds. Its lines go in order. */
-  const section = (key: string, fold: GroupFold, props: { title: string; label?: string; heading: ReactNode }, shown: PinRow[], empty: ReactNode, more: ReactNode) => {
-    lines.push(`g:${key}`);
-    if (empty) lines.push(`e:${key}`);
-    const rows = shown.map((c) => row(c));
-    if (more) lines.push(`a:${key}`);
-    if (saysWhatsInside(fold)) lines.push(`s:${key}`);
-    return (
-      <FoldableGroup key={key} group={key} {...props} {...fold}>
-        {empty}
-        {rows}
-        {more}
-      </FoldableGroup>
-    );
-  };
-  /** Show all, or Show fewer, under a group that has more than it shows. */
-  const moreOf = (key: string, list: PinRow[], shown: PinRow[]) =>
-    !q &&
-    (all[key] ? list.length > SHOWN : list.length > shown.length) && (
-      <button className="csb-more" onClick={() => setAll(key, !all[key])}>
-        {all[key] ? "Show fewer" : `Show all ${list.length}`}
-      </button>
-    );
+  /** What a section's fold control shows and does (GroupFold.tsx): folded on this device, it says what's inside. */
+  const foldOf = (section: ListSection, inside: Row[]): GroupFold => ({
+    folded: isFolded(folded, section, !!q),
+    foldable: canFold(section),
+    ...sectionFold(section, inside),
+    onFold: (v) => setFolded(section, v),
+  });
 
   // The list, line by line, top to bottom (`lines` follows it).
   const list: ReactNode[] = [];
@@ -371,82 +452,83 @@ export function ChatSidebar({ drawer = false }: { drawer?: boolean }) {
       </div>,
     );
   }
-  if (waiting.length > 0 && !q) {
-    lines.push("w");
+  if (touch && !hintSeen && !q && rows.length > 0) {
+    lines.push("h");
     list.push(
-      <button key="w" className="csb-waiting" data-line="w" onClick={() => go(() => openRoom(waiting[0]))}>
-        <ShieldAlert size={16} aria-hidden="true" />
-        {approvals.every((a) => a.kind === "question") ? (approvals.length === 1 ? "An agent has a question for you" : `${approvals.length} questions are waiting for you`) : approvals.length === 1 ? "1 approval is waiting for you" : `${approvals.length} approvals are waiting for you`}
-      </button>,
+      <p key="h" className="csb-hint" data-line="h">
+        <Pin size={13} aria-hidden="true" />
+        <span className="csb-hint-text">Hold a chat to pin it</span>
+        <button className="icon-btn csb-hint-close" onClick={seeHint} aria-label="Hide this tip">
+          <X size={15} />
+        </button>
+      </p>,
     );
   }
-  if (pinnedShown.length > 0) {
-    const fold = foldOf(PINNED_GROUP, pinnedShown);
-    lines.push(`g:${PINNED_GROUP}`);
-    const rows = pinnedShown.map((c) => row(c, true));
-    if (saysWhatsInside(fold)) lines.push(`s:${PINNED_GROUP}`);
+  if (q) {
+    // A search: every chat it finds, in one list in the same order, without the headings.
+    const found = sections.flatMap((s) => s.rows);
     list.push(
-      <PinnedSection key={PINNED_GROUP} {...fold}>
-        {rows}
-      </PinnedSection>,
+      found.length ? (
+        <div key="found" className="csb-found" role="group" aria-label="Chats found">
+          {found.map(row)}
+        </div>
+      ) : (
+        <p key="e" className="csb-empty" data-line="e">
+          No chats match.
+        </p>
+      ),
+    );
+  } else if (!sections.length) {
+    lines.push("e");
+    list.push(
+      <p key="e" className="csb-empty" data-line="e">
+        {loading ? "Loading chats…" : "No chats yet."}
+      </p>,
     );
   }
-  for (const g of groups) {
-    const mine = (c: PinRow) => !c.room.chat?.group && identityOf(c.room, c.machine).groupKey === g.key;
-    const rows = pins.rest.filter((c) => mine(c) && matches(c.room, c.machine));
-    const machineName = multi ? machines.find((m) => m.key === g.machine)?.name ?? null : null;
-    // Two machines can run a model of one name (chatGroups tells services apart by agent, which is the same for
-    // both): then the fold control says where, as the heading's own name always does.
-    const where = !g.provider && groups.filter((x) => x.title === g.title).length > 1 ? (g.pool ? poolWhereWords(g.pool) : serviceWhereWords(g.service as AgentAccount, machineName)) : null;
-    const fold = foldOf(g.key, rows, where);
-    // The newest few, plus any that needs a look (a new reply, working, waiting for you, stopped with an error), or
-    // that you just unpinned. Folded, none of them: folding is a choice, and the heading says what's inside.
-    const shown = fold.folded ? [] : all[g.key] || q ? rows : shownRows(rows, (c) => look(c) || pins.kept(c));
-    // Its pinned chats are up under Pinned: "No chats yet" only without any.
-    const none = !rows.length && !pinnedShown.some(mine);
-    const heading = g.provider ? (
-      <AgentHeader provider={g.provider} active={view === "agent" && agent === g.provider} onClick={() => go(() => openAgent(g.provider!))} />
-    ) : (
-      <ServiceHeader
-        group={g}
-        machine={machineName}
-        onClick={() =>
-          go(() =>
-            // The pool's heading starts a chat on the pool itself, whatever state it's in (its own dialog says so); a
-            // service's starts one on that service.
-            setCreating(
-              g.pool
-                ? { kind: "pool", provider: (poolAgentFor(g.pool, g.agent, g.agent) ?? g.agent) as ChatProvider, offer: g.pool, machine: g.machine }
-                : { kind: "service", provider: g.service!.provider as ChatProvider, account: g.service!.id, model: g.service!.endpoint?.models[0] ?? null, label: g.title, machine: g.machine },
-            ),
-          )
+  for (const { section, rows: inside } of q ? [] : sections) {
+    const fold = foldOf(section, inside);
+    // Recent: the newest few, plus any with a reply you haven't read, or that you just unpinned. The other sections
+    // show every chat they hold. Folded, none of them: folding is a choice, and the heading says what's inside.
+    const cut = section === "recent" && !all[section];
+    const shown = fold.folded ? [] : cut ? shownRows(inside, (c) => look(c) || pins.kept(c)) : inside;
+    const more = section === "recent" && !fold.folded && (all[section] ? inside.length > SHOWN : inside.length > shown.length);
+    lines.push(`g:${section}`);
+    const drawn = shown.map(row);
+    if (more) lines.push(`a:${section}`);
+    if (saysWhatsInside(fold)) lines.push(`s:${section}`);
+    list.push(
+      <FoldableGroup
+        key={section}
+        className={`csb-${section}`}
+        group={section}
+        label={SECTION_TITLE[section]}
+        title={section}
+        heading={
+          <h2 className="csb-heading">
+            {section === "pinned" && <Pin size={13} aria-hidden="true" />}
+            {SECTION_TITLE[section]}{" "}
+            <span className="csb-count">{inside.length}</span>
+          </h2>
         }
-      />
+        {...fold}
+      >
+        {drawn}
+        {more && (
+          <button className="csb-more" onClick={() => setAll(section, !all[section])}>
+            {all[section] ? "Show fewer" : `Show all ${inside.length}`}
+          </button>
+        )}
+      </FoldableGroup>,
     );
-    const empty = none && <p className="csb-empty">{q ? "No matches." : loading ? "Loading chats…" : "No chats yet."}</p>;
-    list.push(section(g.key, fold, { title: g.title, heading }, shown, empty, moreOf(g.key, rows, shown)));
-  }
-  // Group chats, after each agent's chats: newest first, the newest few plus any that needs a look, like an agent's, and
-  // they fold away like one too. Not there at all without any (New chat starts one).
-  if (groupChats.length > 0) {
-    const fold = foldOf(GROUP_CHATS_GROUP, groupChats);
-    const shown = fold.folded ? [] : all[GROUP_CHATS_GROUP] || q ? groupChats : shownRows(groupChats, (c) => look(c) || pins.kept(c));
-    const heading = (
-      <div className="csb-agent static">
-        <span className="avatar sm group-mark" aria-hidden="true">
-          <Users size={12} />
-        </span>
-        <span className="csb-agent-name">Group chats</span>
-      </div>
-    );
-    list.push(section(GROUP_CHATS_GROUP, fold, { title: "group", label: "Group chats", heading }, shown, null, moreOf(GROUP_CHATS_GROUP, groupChats, shown)));
   }
   // 2 or more characters also look inside every chat's messages, on every machine (search.ts).
   if (searchTerm(query)) list.push(<MessageHits key="hits" query={query} go={go} />);
   const order = lines.join("\n");
+  const settings = ["settings", "setup", "devices"].includes(view);
 
   return (
-    <aside className={`chat-sidebar ${drawer ? "drawer" : ""}`} aria-label="Chats">
+    <aside className={`chat-sidebar ${drawer ? "drawer" : ""}`} aria-label="Chats" style={drawer || width === SIDEBAR_WIDTH ? undefined : { ["--csb-w" as string]: `${width}px` }}>
       <div className="csb-head">
         <button className="csb-brand" onClick={() => go(() => setView("rooms"))} aria-label="Home">
           <Logo className="logo" />
@@ -462,7 +544,7 @@ export function ChatSidebar({ drawer = false }: { drawer?: boolean }) {
 
       <div className="csb-actions">
         <div ref={newBox} style={{ display: "contents" }}>
-          <button ref={newButton} className="btn block csb-new" onClick={startNew} disabled={!canStart} aria-expanded={newMenu}>
+          <button ref={newButton} className="btn block csb-new" onClick={startNew} disabled={!canStart} aria-expanded={newMenu} aria-keyshortcuts={SHORTCUT_KEYS.create} title={touch ? undefined : `New chat (${SHORTCUT.create})`}>
             <Plus size={16} /> New chat
             <ChevronDown size={15} style={{ marginLeft: "auto" }} />
           </button>
@@ -478,11 +560,18 @@ export function ChatSidebar({ drawer = false }: { drawer?: boolean }) {
         </div>
         <label className="csb-search">
           <Search size={15} aria-hidden="true" />
-          <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search chats" aria-label="Search chats" autoCapitalize="off" autoCorrect="off" spellCheck={false} />
-          {query && (
+          <input ref={search} value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={searchKey} placeholder="Search chats" aria-label="Search chats" aria-keyshortcuts={SHORTCUT_KEYS.search} autoCapitalize="off" autoCorrect="off" spellCheck={false} />
+          {query ? (
             <button className="icon-btn" onClick={() => setQuery("")} aria-label="Clear search">
               <X size={14} />
             </button>
+          ) : (
+            // With a keyboard at hand: how to get here from anywhere.
+            !touch && (
+              <kbd className="csb-key" aria-hidden="true">
+                {SHORTCUT.search}
+              </kbd>
+            )
           )}
         </label>
       </div>
@@ -494,6 +583,8 @@ export function ChatSidebar({ drawer = false }: { drawer?: boolean }) {
         // Searching (filtering as you type, and clearing it) and chats still coming in are drawn as they are.
         still={!!q || loading}
         onScroll={(e) => useSidebar.getState().setScrollTop(e.currentTarget.scrollTop)}
+        onTouchStart={hold}
+        onKeyDown={listKey}
       >
         {list}
       </ListMotion>
@@ -511,55 +602,100 @@ export function ChatSidebar({ drawer = false }: { drawer?: boolean }) {
           >
             <HardDrive size={16} aria-hidden="true" />
             {storage.free < storage.reserve
-              ? `${multi ? storageLow!.name : "Hub"} storage is full: uploads paused`
-              : `${multi ? storageLow!.name : "Hub"} storage is low: ${formatBytes(storage.free)} free`}
+              ? `${multi ? storageLow!.name : "This machine's"} storage is full: uploads paused`
+              : `${multi ? storageLow!.name : "This machine's"} storage is low: ${formatBytes(storage.free)} free`}
           </button>
         )}
-        <button className={`csb-link ${view === "bookmarks" ? "active" : ""}`} onClick={() => go(() => setView("bookmarks"))}>
-          <Bookmark size={17} /> Bookmarks
-        </button>
-        <button className={`csb-link ${view === "terminal" ? "active" : ""}`} onClick={() => go(() => setView("terminal"))}>
-          <SquareTerminal size={17} /> Terminal
-        </button>
-        <button className={`csb-link ${["settings", "setup", "devices"].includes(view) ? "active" : ""}`} onClick={() => go(() => setView("settings"))}>
-          <Settings size={17} /> Settings
-        </button>
+        {/* One row, like a phone's tab bar, so the chats keep the height: where the app's other screens are. */}
+        <nav className="csb-tabs" aria-label="More">
+          {/* A machine that can show its screen (or could, once set up): hubs from before that don't offer it. */}
+          {hubScreen !== undefined && (
+            <FootTab label="Screen" active={view === "screen"} live={hubScreen.ready} onClick={() => go(() => setView("screen"))}>
+              <MonitorSmartphone size={20} aria-hidden="true" />
+            </FootTab>
+          )}
+          <FootTab label="Bookmarks" active={view === "bookmarks"} onClick={() => go(() => setView("bookmarks"))}>
+            <Bookmark size={20} aria-hidden="true" />
+          </FootTab>
+          <FootTab label="Terminal" active={view === "terminal"} onClick={() => go(() => setView("terminal"))}>
+            <SquareTerminal size={20} aria-hidden="true" />
+          </FootTab>
+          <FootTab label="Settings" active={settings} onClick={() => go(() => setView("settings"))}>
+            <Settings size={20} aria-hidden="true" />
+          </FootTab>
+        </nav>
       </div>
     </aside>
   );
 }
 
+/** The keyboard's requests the list has answered (sidebar.ts `asked`): kept here, so a list drawn just after one still answers it. */
+const answered = { search: 0, create: 0 };
+
 /**
- * A service's group heading: its name, and where it runs. Tapping it starts a new chat on that service, which is the one
- * thing a service has no page for (which agent drives it is in the chat's own settings). The model pool says where it
- * runs in its own words ("across 3 machines"), because its address is the main machine's, not where the model is.
+ * The docked chats' right edge: drag it to make the list wider or narrower (← and → with a keyboard, Home and End for
+ * the narrowest and the widest), and double-click it to put it back. The width is kept on this device (sidebar.ts).
  */
-function ServiceHeader({ group, machine, onClick }: { group: ChatGroup; machine: string | null; onClick: () => void }) {
-  const where = group.pool ? poolWhereWords(group.pool) : serviceWhereWords(group.service as AgentAccount, machine);
+export function SidebarResizer() {
+  const width = useSidebar((s) => s.width);
+  const setWidth = useSidebar((s) => s.setWidth);
+  const drag = useRef<{ x: number; width: number } | null>(null);
+  const end = () => {
+    if (!drag.current) return;
+    drag.current = null;
+    document.documentElement.classList.remove("resizing");
+    // Kept once the drag is over.
+    setWidth(useSidebar.getState().width);
+  };
+  useEffect(() => () => document.documentElement.classList.remove("resizing"), []);
   return (
-    <button className="csb-agent" onClick={onClick} title={`New chat with ${group.title}`} aria-label={`New chat with ${group.title}, ${where}`}>
-      <ServiceAvatar where={group.where ?? "web"} size="sm" label={group.title} />
-      <span className="csb-agent-name ellipsis">{group.title}</span>
-      <Plus size={14} aria-hidden="true" />
-    </button>
+    <div
+      className="csb-resizer"
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="Chat list width"
+      aria-valuenow={width}
+      aria-valuemin={SIDEBAR_MIN}
+      aria-valuemax={SIDEBAR_MAX}
+      tabIndex={0}
+      title="Drag to resize the chat list. Double-click to put it back."
+      onPointerDown={(e) => {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        e.currentTarget.focus({ preventScroll: true });
+        e.currentTarget.setPointerCapture(e.pointerId);
+        // From how wide the list is drawn: a small window holds it narrower than it was left. Distances on screen are
+        // drawn bigger by the text size (zoom.ts), and the width is in the page's own pixels.
+        const drawn = e.currentTarget.previousElementSibling?.getBoundingClientRect().width;
+        drag.current = { x: e.clientX, width: drawn ? drawn / zoomFactor() : width };
+        document.documentElement.classList.add("resizing");
+      }}
+      onPointerMove={(e) => {
+        const d = drag.current;
+        if (d) setWidth(d.width + (e.clientX - d.x) / zoomFactor(), false);
+      }}
+      onPointerUp={end}
+      onPointerCancel={end}
+      onLostPointerCapture={end}
+      onDoubleClick={() => setWidth(SIDEBAR_WIDTH)}
+      onKeyDown={(e) => {
+        const to = e.key === "ArrowLeft" ? width - 16 : e.key === "ArrowRight" ? width + 16 : e.key === "Home" ? SIDEBAR_MIN : e.key === "End" ? SIDEBAR_MAX : null;
+        if (to === null) return;
+        e.preventDefault();
+        setWidth(to);
+      }}
+    />
   );
 }
 
-/** An agent's group heading: tap for its page (new chat, sessions on the machine). Shows the tightest plan limit. */
-function AgentHeader({ provider, active, onClick }: { provider: ChatProvider; active: boolean; onClick: () => void }) {
-  const usage = useStore((s) => s.usage[accountKey(provider, "default")]);
-  const top = (usage?.windows ?? []).filter((w) => w.usedPercent !== null).sort((a, b) => (b.usedPercent ?? 0) - (a.usedPercent ?? 0))[0];
-  const pct = top ? Math.round(top.usedPercent ?? 0) : null;
-  const machine = useMachineName();
+/** One of the row of screens under the list: its icon with a small label under it, tinted while that screen is open. */
+function FootTab({ label, active, live, onClick, children }: { label: string; active: boolean; live?: boolean; onClick: () => void; children: ReactNode }) {
   return (
-    <button className={`csb-agent ${active ? "active" : ""}`} onClick={onClick} title={`${PROVIDER_INFO[provider].name}: chats and sessions on ${machine}`}>
-      <ProviderAvatar provider={provider} size="sm" />
-      <span className="csb-agent-name">{PROVIDER_INFO[provider].name}</span>
-      {pct !== null && (
-        <span className={`csb-usage ${pct >= 90 ? "full" : pct >= 70 ? "warn" : ""}`} title={`${top!.label}: ${pct}% used`}>
-          {pct}%
-        </span>
-      )}
+    <button className={`csb-tab ${active ? "active" : ""}`} onClick={onClick} aria-current={active ? "page" : undefined}>
+      <span className="csb-tab-icon">{children}</span>
+      <span className="csb-tab-label">{label}</span>
+      {/* The machine's screen is being shown now. */}
+      {live && <span className="csb-live" aria-label="live" />}
     </button>
   );
 }

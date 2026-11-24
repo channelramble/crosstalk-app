@@ -7,6 +7,7 @@
 // been run against a newer one. OpenCode 1 (npm opencode-ai) installs the same `opencode` command with another config and
 // other tool names, so a version 1 found on this machine is said to be the wrong one, unless Crosstalk's own copy is there:
 // that one is looked for first (`ownBin`), and the person's other copy stays for their terminal.
+import { withNpm } from "./node";
 import { OPENCODE_VERSION } from "@crosstalk/shared";
 import { run, type ProviderModule } from "./index";
 
@@ -35,12 +36,12 @@ export const opencodeProvider: ProviderModule = {
   installCommand: [
     "bash",
     "-lc",
-    `set -e; if ! command -v npm >/dev/null 2>&1; then echo "OpenCode needs Node.js (npm). Install it first."; exit 1; fi; ${OPENCODE_INSTALL_LINE}; echo; echo "Installed: $($HOME/.npm-global/bin/opencode --version)"`,
+    `set -e; ${withNpm("OpenCode")}; ${OPENCODE_INSTALL_LINE}; echo; echo "Installed: $($HOME/.npm-global/bin/opencode --version)"`,
   ],
 
   // Nothing to sign in to. All that can be wrong is the version.
   async checkAuth(app, bin) {
     const error = await openCodeWrongVersion(bin, app.providers.agentEnv());
-    return error ? { signedIn: null, error } : { signedIn: true, authMethod: "AI service" };
+    return error ? { signedIn: null, error } : { signedIn: true, authMethod: "Accounts you add" };
   },
 };

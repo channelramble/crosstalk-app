@@ -14,8 +14,46 @@ const link = (n: number) => `https://accounts.google.com/o/oauth2/v2/auth?redire
 const ask = (n: number) => process.stdout.write(`Please visit the following URL to authorize the application:\n\n${link(n)}\n\nEnter the authorization code: `);
 let tries = 0;
 process.stdout.write("\x1b[2J\x1b[H");
-ask(1);
-for await (const line of console) {
+// FAKE_GEMINI_FIRST_RUN: a Gemini CLI that has never run on this machine, as 0.71 is. It asks whether to trust the
+// folder (unless GEMINI_CLI_TRUST_WORKSPACE says so) and how to sign in, each drawn in a box with its choices numbered,
+// and goes on to the link only when Google's is picked: Enter on the choice it has ready, or the choice's number.
+// FAKE_GEMINI_KEYS_OUT: the keys it was sent for them, one per line, for the test to read.
+const firstRun = process.env.FAKE_GEMINI_FIRST_RUN === "1";
+let stage: "trust" | "auth" | "code" = firstRun ? (process.env.GEMINI_CLI_TRUST_WORKSPACE === "true" && !process.env.FAKE_GEMINI_IGNORE_TRUST_ENV ? "auth" : "trust") : "code";
+const box = (lines: string[]) => process.stdout.write(`╭────────────╮\r\n${lines.map((l) => `│ ${l}`).join("\r\n")}\r\n╰────────────╯\r\n`);
+const trust = () => box(["Do you trust the files in this folder?", "", "● 1. Trust folder (gemini-signin)", "  2. Trust parent folder (run)", "  3. Don't trust"]);
+const auth = () => box(["How would you like to authenticate for this project?", "", "● 1. Sign in with Google", "  2. Use Gemini API Key", "  3. Vertex AI", "", "No authentication method selected.", "(Use Enter to select)"]);
+if (stage === "trust") trust();
+else if (stage === "auth") auth();
+else ask(1);
+if (stage !== "code") {
+  process.stdin.setRawMode?.(true);
+  const { appendFileSync } = await import("node:fs");
+  await new Promise<void>((done) => {
+    const onKey = (b: Buffer) => {
+      const key = b.toString();
+      if (process.env.FAKE_GEMINI_KEYS_OUT) appendFileSync(process.env.FAKE_GEMINI_KEYS_OUT, `${stage}:${JSON.stringify(key)}\n`);
+      if (stage === "trust" && (key === "\r" || key === "1")) {
+        stage = "auth";
+        process.stdout.write("\x1b[2J\x1b[H");
+        auth();
+      } else if (stage === "auth" && (key === "\r" || key === "1")) {
+        stage = "code";
+        process.stdin.off("data", onKey);
+        process.stdin.setRawMode?.(false);
+        process.stdout.write("\x1b[2J\x1b[H╭────╮\r\n│ Logging in with Google... Restarting Gemini CLI to continue.\r\n╰────╯\r\n");
+        ask(1);
+        done();
+      } else if (stage === "auth" && (key === "2" || key === "3")) {
+        process.stdout.write("\r\nNot Google's sign-in.\r\n");
+        process.exit(3);
+      }
+    };
+    process.stdin.on("data", onKey);
+  });
+}
+// One line typed (or pasted) at "Enter the authorization code: ".
+function onLine(line: string) {
   process.stdout.write(`${line}\r\n`);
   const code = line.trim();
   if (code === expected) {
@@ -26,7 +64,7 @@ for await (const line of console) {
     }
     process.stdout.write("\x1b[2J\x1b[H > Type your message or @path/to/file\n");
     setInterval(() => {}, 60_000);
-    continue;
+    return;
   }
   tries++;
   process.stderr.write("Failed to authenticate with authorization code:invalid_grant\n");
@@ -36,4 +74,18 @@ for await (const line of console) {
   }
   process.stderr.write("\nFailed to authenticate with user code. Retrying...\n");
   ask(tries + 1);
+}
+if (firstRun) {
+  // Its input was read key by key for the questions: the code is read the same way, a line at a time.
+  let typed = "";
+  process.stdin.on("data", (b: Buffer) => {
+    typed += b.toString();
+    for (let at = typed.search(/[\r\n]/); at >= 0; at = typed.search(/[\r\n]/)) {
+      const line = typed.slice(0, at);
+      typed = typed.slice(at + 1);
+      if (line) onLine(line);
+    }
+  });
+} else {
+  for await (const line of console) onLine(line);
 }

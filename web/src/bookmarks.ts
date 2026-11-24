@@ -2,6 +2,7 @@
 // keeps the bookmarks of its own chats, so the screen asks every machine and lists them together. Pure functions here
 // (the web unit tests have no DOM); views/BookmarksPage.tsx and views/BookmarkButton.tsx use them.
 
+import { settingsPath } from "@crosstalk/shared";
 import type { Bookmark, BookmarkList } from "@crosstalk/shared";
 import { ApiError, api, type Connection } from "./api";
 
@@ -32,7 +33,7 @@ export function bookmarkWho(b: Pick<Bookmark, "who" | "agent">, chatAgent?: stri
 export function bookmarksProblem(e: unknown): string {
   if (e instanceof ApiError) {
     if (e.status === 404 || e.status === 405) return "It runs an older Crosstalk without bookmarks. Update it to keep its messages here.";
-    if (e.status === 401) return "It signed this device out. Pair it again in Settings → Machines.";
+    if (e.status === 401) return `It signed this device out. Pair it again in ${settingsPath("machines")}.`;
     if (e.status === 0) return e.message;
     return `It answered with an error (${e.message.replace(/\s+/g, " ").trim().slice(0, 120)}). Try again in a moment.`;
   }

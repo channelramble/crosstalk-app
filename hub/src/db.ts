@@ -830,7 +830,7 @@ export class Store {
   }
   /**
    * A member's newest turn that ran and has ended (done, failed or stopped), if any. A turn that waited and was dropped
-   * before it started (Send now handed its message to the running reply, Take back removed it) never ran: it's left
+   * before it started (its message went into the running reply, Take back removed it) never ran: it's left
    * out, though it was made after the reply that was running.
    */
   lastEndedTurn(memberId: string): Turn | null {

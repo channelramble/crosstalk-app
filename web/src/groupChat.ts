@@ -2,7 +2,9 @@
 // draft (as the hub will route it: Engine.postHumanMessage), the turn order, and the words the chat screen says them in.
 // Pure on purpose (no React, no store): groupChat.test.ts.
 
-import { groupAnswers, isGroupChat, parseMentions, PROVIDER_INFO, slugHandle, turnOrder, type GroupAnswers, type Member, type Message, type Provider, type Room, type Turn } from "@crosstalk/shared";
+import { CHAT_PROVIDERS, groupAnswers, isGroupChat, isServiceOnlyAgent, parseMentions, PROVIDER_INFO, settingsPath, slugHandle, turnOrder, type AgentAccount, type ChatProvider, type GroupAnswers, type Member, type Message, type Provider, type Room, type Turn } from "@crosstalk/shared";
+import { accountDescription } from "./accounts";
+import { serviceWhere, serviceWhereWords, type ServiceWhere } from "./chatIdentity";
 
 export { isGroupChat };
 
@@ -53,12 +55,12 @@ export function answersLine(a: Answering): string {
   const names = a.who.map(at);
   switch (a.how) {
     case "named":
-      return `Only ${listed(names)} will answer. The others read it on their next turn.`;
+      return `Only ${listed(names)} will answer. The others read it when they next reply.`;
     case "all":
     case "turns":
       return a.who.length > 1 ? `Everyone answers, in turn: ${inTurn(names)}.` : `${names[0]} answers.`;
     case "review":
-      return a.who.length > 1 ? `${names[0]} builds it, then ${names[1]} checks the work.` : `${names[0]} builds it. Add another agent to check its work.`;
+      return a.who.length > 1 ? `${names[0]} builds it, then ${names[1]} reviews it.` : `${names[0]} builds it. Add another agent to review its work.`;
     case "lead":
       return `${names[0]} answers. Type @ to pick who answers.`;
   }
@@ -86,12 +88,107 @@ export function sendName(a: Answering): string {
   return label.endsWith(who) ? label : `${label}: ${who}`;
 }
 
-/** What New chat and the chat's settings offer for a message that names nobody. */
+/** The one choice a group chat has about its agents, as New group chat and the chat's settings name it. */
+export const HOW_TOGETHER = "How they work together";
+
+/**
+ * What that choice offers, in a person's words: what happens to a message that @names nobody. The same three in New
+ * group chat and in the chat's settings; who leads, the review rounds and working at the same time are behind "More".
+ */
 export const ANSWER_OPTIONS: { id: GroupAnswers; label: string; help: string }[] = [
-  { id: "lead", label: "The lead answers", help: "One agent answers what you send. @name someone to hear from them instead." },
+  { id: "lead", label: "One leads, the others help when asked", help: "The lead answers what you send. @name another agent to hear from it instead." },
   { id: "turns", label: "Everyone answers in turn", help: "Each agent answers, one after the other, the lead first. Each reads what the others said." },
-  { id: "review", label: "Build & review", help: "The lead does the work, the next agent checks it, and they go back and forth until it's approved." },
+  { id: "review", label: "One builds, another reviews", help: "The lead does the work, the next agent reviews it, and they go back and forth until it's approved." },
 ];
+
+/** The lead's part in each way of working together, as the line under the Lead picker says it. */
+export function leadHelp(answers: GroupAnswers): string {
+  return answers === "turns" ? "Answers first; the others follow in the order above." : answers === "review" ? "Does the work; the next agent in the list reviews it." : "Answers what you send when you @name nobody.";
+}
+
+/**
+ * "More" at a glance, so who leads is never a surprise behind a fold: "@claude leads", and with a review how many rounds,
+ * and that agents may work at the same time when they may.
+ */
+export function moreLine(o: { lead: string; answers: GroupAnswers; rounds: number; parallel: boolean }): string {
+  return [`@${o.lead} leads`, o.answers === "review" ? `up to ${o.rounds} review round${o.rounds === 1 ? "" : "s"}` : null, o.parallel ? "may work at the same time" : null].filter(Boolean).join(" · ");
+}
+
+/** Review rounds as a chat keeps them (Room.maxHops: the lead's work and its review are two hand-overs). */
+export const roundsOf = (maxHops: number) => Math.max(1, Math.ceil(maxHops / 2));
+export const hopsOf = (rounds: number) => rounds * 2 - 1;
+
+/** One account that can be an agent of a group chat: a row of "Add an agent". */
+export interface GroupAgentOption {
+  /** Stable key: the agent and the account. */
+  id: string;
+  /** The agent that runs it: Claude Code or Codex. */
+  provider: ChatProvider;
+  account: string;
+  /** What the row is called: the agent, the agent and the account's name, or a service's own name. */
+  title: string;
+  /** The line under it: whose plan, an API key, or a service's model and where it runs. */
+  help: string;
+  /** Null for the agent's own accounts (its avatar); where a service of yours runs (its own avatar). */
+  where: ServiceWhere | null;
+  /** The model a service starts on (its first); null for the agent's own accounts (their default). */
+  model: string | null;
+  /** Why it can't be added right now, in two or three words; null when it can. */
+  why: string | null;
+}
+
+/**
+ * Every account on a machine that can answer in a group chat, one row each: Claude Code and Codex on their own sign-ins
+ * and API keys, then the AI services and models of your own that one of them runs (this machine's first, then the
+ * online ones). An agent that isn't installed has no rows but its own, which says so; an account that's signed out
+ * stays listed, saying that, so it isn't simply missing. `left`: the services only Crosstalk's own agent or OpenCode
+ * run, which can't be in a group chat (hub Chats.createGroup), by name.
+ */
+export function groupAgentOptions(input: { accounts: readonly AgentAccount[]; providers: Partial<Record<Provider, { installed?: boolean; signedIn?: boolean | null } | undefined>>; machine?: string | null }): { options: GroupAgentOption[]; left: string[] } {
+  const own: GroupAgentOption[] = [];
+  const services: { a: AgentAccount; row: GroupAgentOption }[] = [];
+  for (const provider of CHAT_PROVIDERS) {
+    const agent = PROVIDER_INFO[provider].name;
+    const st = input.providers[provider];
+    const mine = input.accounts.filter((a) => a.provider === provider);
+    const main = mine.find((a) => a.id === "default");
+    const mainIn = main ? main.signedIn : st?.signedIn ?? null;
+    own.push({
+      id: `${provider}:default`,
+      provider,
+      account: "default",
+      title: agent,
+      help: main?.account ? `Your plan · ${main.account}` : "Your plan",
+      where: null,
+      model: null,
+      why: !st?.installed ? "Not installed" : mainIn === false ? "Not signed in" : null,
+    });
+    // Its other accounts only where the agent itself is there to run them.
+    if (!st?.installed) continue;
+    for (const a of mine) {
+      if (a.id === "default") continue;
+      const why = a.signedIn === false ? (a.kind === "signin" || !a.kind ? "Not signed in" : a.kind === "apikey" ? "Key not working" : "Not answering") : null;
+      if (a.kind === "endpoint") {
+        if (!a.endpoint) continue;
+        const model = a.endpoint.models[0] ?? null;
+        services.push({ a, row: { id: `${provider}:${a.id}`, provider, account: a.id, title: a.label, help: [model ?? "No model yet", serviceWhereWords(a, input.machine), `with ${agent}`].join(" · "), where: serviceWhere(a), model, why: model ? why : "No model yet" } });
+      } else {
+        own.push({ id: `${provider}:${a.id}`, provider, account: a.id, title: `${agent} · ${a.label}`, help: a.kind === "apikey" ? "API key, billed per use" : accountDescription("Another plan", a.account), where: null, model: null, why });
+      }
+    }
+  }
+  services.sort((x, y) => Number(x.row.where === "web") - Number(y.row.where === "web") || x.a.label.localeCompare(y.a.label) || CHAT_PROVIDERS.indexOf(x.row.provider) - CHAT_PROVIDERS.indexOf(y.row.provider));
+  const left = [...new Set(input.accounts.filter((a) => a.kind === "endpoint" && isServiceOnlyAgent(a.provider)).map((a) => a.label))].sort((a, b) => a.localeCompare(b));
+  return { options: [...own, ...services.map((s) => s.row)], left };
+}
+
+/** The quiet line under "Add an agent" about services that can't join: only said where there are some. */
+export function leftOutLine(left: readonly string[]): string | null {
+  if (!left.length) return null;
+  const one = left.length === 1;
+  const names = left.length > 3 ? `${left.slice(0, 2).join(", ")} and ${left.length - 2} more` : listed(left);
+  return `${names} can't join a group chat: ${one ? "its agent works" : "their agents work"} in a chat of ${one ? "its" : "their"} own. To use ${one ? "it" : "one"} here, add it for Claude Code or Codex in ${settingsPath("ai-services")}.`;
+}
 
 /**
  * Who's working and who's next in a group chat, from its turns: the agents whose replies run now (oldest first), then

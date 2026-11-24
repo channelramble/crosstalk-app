@@ -1,3 +1,4 @@
+import { settingsPath } from "@crosstalk/shared";
 import { useEffect, useState } from "react";
 import { api, isNative, normalizeBaseUrl, pairDevice } from "../api";
 import { useStore } from "../store";
@@ -31,6 +32,9 @@ function parseLink(s: string): { hub?: string; code?: string } {
   }
 }
 
+/** Safari on an iPhone or iPad, not the Home Screen app: what's paired here stays in Safari, and the app would start unpaired. */
+const iosInSafari = typeof navigator !== "undefined" && /iPhone|iPad|iPod/.test(navigator.userAgent) && !(navigator as Navigator & { standalone?: boolean }).standalone;
+
 export function Pairing() {
   const connect = useStore((s) => s.connect);
   const [needsHub, setNeedsHub] = useState(isNative);
@@ -57,14 +61,15 @@ export function Pairing() {
       const link = parseLink(hub);
       if (link.code && !c) c = link.code;
       base = normalizeBaseUrl(link.hub ?? hub);
-      if (!base) return setError("Enter your hub's address.");
+      if (!base) return setError("Enter your machine's address.");
     }
     if (c.replace(/[^A-Za-z0-9]/g, "").length < 8) return setError("Enter the 8-character code.");
     setBusy(true);
     try {
       const conn = await pairDevice(base, c, name.trim() || defaultDeviceName());
       if (base) localStorage.setItem("crosstalk.lastHub", base);
-      history.replaceState(null, "", location.pathname + "#/");
+      // (The entry keeps what the app wrote on it: back.ts.)
+      history.replaceState(history.state, "", location.pathname + "#/");
       await connect(conn);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -82,9 +87,14 @@ export function Pairing() {
           Claude Code and Codex on your own machine, from any device.
         </p>
         <div className="divider" />
+        {iosInSafari && !isNative && (
+          <p className="pair-first" role="note">
+            <b>On an iPhone, make it an app first.</b> Tap Share, then <b>Add to Home Screen</b>, and open Crosstalk from its new icon. Pair there{code ? <> with the code <span className="kbd">{code}</span></> : null}: the icon is what gets notifications, and it doesn't share this page's pairing.
+          </p>
+        )}
         {needsHub && (
           <label className="field" style={{ textAlign: "left" }}>
-            <span>Hub address</span>
+            <span>Machine address</span>
             <input
               className="input"
               placeholder="https://your-box.your-tailnet.ts.net"
@@ -99,7 +109,7 @@ export function Pairing() {
               spellCheck={false}
               inputMode="url"
             />
-            <span className="help">The address your hub's installer printed. You can also paste a pairing link.</span>
+            <span className="help">The address Crosstalk's installer printed. You can also paste a pairing link.</span>
           </label>
         )}
         <label className="field" style={{ textAlign: "left" }}>
@@ -116,8 +126,8 @@ export function Pairing() {
             inputMode="text"
           />
           <span className="help">
-            Shown when the hub starts for the first time, or under <b>Settings → Devices → Pair a new device</b> on a device that's already paired. You can also run{" "}
-            <span className="kbd">crosstalk-hub pair</span> on the server.
+            Shown when Crosstalk starts for the first time, or under <b>{settingsPath("devices", "Pair a new device")}</b> on a device that's already paired. You can also run{" "}
+            <span className="kbd">crosstalk-hub pair</span> on the machine.
           </span>
         </label>
         <label className="field" style={{ textAlign: "left" }}>

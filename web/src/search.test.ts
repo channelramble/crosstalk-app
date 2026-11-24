@@ -107,7 +107,7 @@ describe("a machine that can't be searched", () => {
     expect(searchProblem(new ApiError(404, "not found"))).toBe("It runs an older Crosstalk that can't search yet. Update it, then try again.");
     expect(searchProblem(new ApiError(405, "x"))).toContain("older Crosstalk");
     expect(searchProblem(new ApiError(401, "unauthorized"))).toBe("It signed this device out. Pair it again in Settings → Machines.");
-    expect(searchProblem(new ApiError(0, "Can't reach the hub. Check that it's running and that this device is on your Tailscale network."))).toBe("Can't reach the hub. Check that it's running and that this device is on your Tailscale network.");
+    expect(searchProblem(new ApiError(0, "Can't reach the machine. Check that Crosstalk is running on it and that this device is on your Tailscale network."))).toBe("Can't reach the machine. Check that Crosstalk is running on it and that this device is on your Tailscale network.");
     expect(searchProblem(new ApiError(500, "disk I/O error"))).toBe("It answered with an error (disk I/O error). Try again in a moment.");
     expect(searchProblem(new Error("boom"))).toBe("boom");
     expect(searchProblem("weird")).toBe("Something went wrong. Try again.");

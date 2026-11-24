@@ -30,7 +30,7 @@ pub fn run(args: &[String]) -> i32 {
                     println!("Pairing code: {}  (works once, for {} minutes)", code.code, pair::MINUTES);
                     match &code.link {
                         Some(link) => println!("Link: {link}"),
-                        None => println!("This hub isn't published with Tailscale, so phones can't reach it yet."),
+                        None => println!("Crosstalk isn't on your Tailscale network here, so phones can't reach it yet."),
                     }
                 }
                 0

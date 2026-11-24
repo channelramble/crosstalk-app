@@ -3,7 +3,7 @@ import { Bot, CheckCircle2, ChevronDown, CircleX, CircleAlert, Clock, Info, Ligh
 import { PROVIDER_INFO, helperAtWork, isNoRewindAgent, type Activity, type BackgroundTask, type Member, type Room, type SendNowResult } from "@crosstalk/shared";
 import { api } from "../api";
 import { useStore } from "../store";
-import { Dialog, MemberAvatar, statusLabel, useInterval } from "../ui";
+import { Dialog, MemberAvatar, statusLabel, useInterval, useMedia } from "../ui";
 import { ActivityBlock } from "./ActivityBlock";
 import { currentTurn, workOrder } from "../workOrder";
 import { stepLabel, statusWords } from "../statusWords";
@@ -100,7 +100,8 @@ function ChatStatus({ room, member, members, name, stop = false }: { room: Room;
   // In a group chat, only a message that's this agent's to answer waits on it (as the hub routes it).
   const forThis = room.chat?.group && members ? (m: { text: string }) => whoAnswers(room, members, m.text).who.some((x) => x.id === member.id) : undefined;
   const flows = useStore((s) => !!s.hub?.messagesFlow);
-  const helpers = useStore((s) => (s.tasks[member.id] ?? []).some(helperAtWork));
+  // A machine that always delivers a message into the running reply by itself (HubInfo.flowsIn) never has the bar for it.
+  const helpers = useStore((s) => !!s.hub?.flowsIn || (s.tasks[member.id] ?? []).some(helperAtWork));
   const waiting = data ? sendNowState(member, Object.values(data.turns), data.messages, forThis, flows ? { helpers } : undefined) : null;
   const who = name ?? PROVIDER_INFO[member.provider]?.name ?? `@${member.handle}`;
   const sendNow = async () => {
@@ -274,7 +275,7 @@ function GroupWorkingPanel({ room, members }: { room: Room; members: Member[] })
   if (!active.length && (statusKnown || !members.length)) return null;
   return (
     <section className="working-panel" aria-label={statusKnown ? "Live agent work" : "Agent status unknown"}>
-      {!statusKnown && <p className="working-help" role="status" style={{ marginTop: 10 }}>{!connected ? "Reconnecting — agent status unknown." : data?.error ? "Conversation status unavailable. Retry loading the conversation." : "Syncing — agent status unknown."} {active.length ? "Showing the last reported progress." : "Waiting for current status from the hub."}</p>}
+      {!statusKnown && <p className="working-help" role="status" style={{ marginTop: 10 }}>{!connected ? "Reconnecting — agent status unknown." : data?.error ? "Chat status unavailable. Retry loading the chat." : "Syncing — agent status unknown."} {active.length ? "Showing the last reported progress." : "Waiting for current status from the machine."}</p>}
       {statusKnown && <div className="work-order" aria-label="Agent work order">
         <div className="work-order-title">{room.mode === "review" ? "Build & review" : "Work order"}{order.round ? ` · Round ${order.round}` : ""}{order.together ? " · Working together" : ""}</div>
         <ol className="work-order-steps">
@@ -320,7 +321,7 @@ function GroupWorkingPanel({ room, members }: { room: Room; members: Member[] })
       </>}
       {viewing && (
         <Dialog title={selected ? `${statusKnown ? "Live" : "Last reported"} steps · @${selected.member.handle}` : "Agent steps"} onClose={() => setViewing(null)} footer={<button className="btn" onClick={() => setViewing(null)}>Done</button>}>
-          {selected?.activities.length ? <ActivityBlock activities={selected.activities} live={statusKnown} statusUnknown={!statusKnown} thinking={selected.member.status === "thinking"} /> : <p role="status">{statusKnown ? "This agent is no longer reporting live work. Its steps remain in the conversation." : "Agent status is unknown until the hub reconnects and syncs."}</p>}
+          {selected?.activities.length ? <ActivityBlock activities={selected.activities} live={statusKnown} statusUnknown={!statusKnown} thinking={selected.member.status === "thinking"} /> : <p role="status">{statusKnown ? "This agent is no longer reporting live work. Its steps remain in the chat." : "Agent status is unknown until the machine reconnects and syncs."}</p>}
         </Dialog>
       )}
     </section>
@@ -428,7 +429,7 @@ function TraceItem({ a, live }: { a: Activity; live: boolean }) {
   );
 }
 
-const KIND: Record<string, string> = { local_agent: "Helper agent", remote_agent: "Cloud agent", local_workflow: "Workflow", workflow: "Workflow", local_bash: "Command", dream: "Memory" };
+const KIND: Record<string, string> = { crosstalk_helper: "Helper", local_agent: "Helper agent", remote_agent: "Cloud agent", local_workflow: "Workflow", workflow: "Workflow", local_bash: "Command", dream: "Memory" };
 const RECENT_MS = 15 * 60_000;
 
 function compact(n: number): string {
@@ -456,14 +457,37 @@ function HelpersPanel({ member }: { member: Member }) {
   const commands = recent.filter((t) => t.kind === "local_bash" && t.background);
   const running = helpers.filter((t) => t.status === "running");
   const runningCommands = commands.filter((t) => t.status === "running");
-  const open = chosen ?? running.length > 0;
+  // On a small phone (its screen under 700 px tall) the list would leave the messages a few lines: it starts folded
+  // there, its heading still saying how many are at work. By the screen's own height, so the keyboard changes nothing.
+  const small = useMedia("(max-device-height: 700px)");
+  const open = chosen ?? (running.length > 0 && !small);
   const live = recent.some(helperAtWork);
+  // Once the reply has ended only this can stop them (while it runs, the reply's Stop is the way). Two taps, so a thumb
+  // that lands on it stops nothing: the first asks, and lets go after a few seconds.
+  const replying = useStore((s) => Object.values(s.roomData[member.roomId]?.turns ?? {}).some((t) => t.memberId === member.id && t.status === "running"));
+  const toast = useStore((s) => s.toast);
+  const [stop, setStop] = useState<"" | "ask" | "stopping">("");
+  useEffect(() => {
+    if (stop !== "ask") return;
+    const t = setTimeout(() => setStop(""), 5000);
+    return () => clearTimeout(t);
+  }, [stop]);
+  const stoppable = running.length + runningCommands.length;
+  const stopHelpers = () => {
+    if (stop === "") return setStop("ask");
+    if (stop !== "ask") return;
+    setStop("stopping");
+    api("POST", `/api/rooms/${member.roomId}/helpers/stop`, { memberId: member.id })
+      .catch((e) => toast("error", `Couldn't stop them: ${e instanceof Error ? e.message : String(e)}`))
+      .finally(() => setStop(""));
+  };
   // Every second while something runs; otherwise now and then, so finished helpers still go after 15 minutes.
   useInterval(() => (helpers.length > 0 || commands.length > 0) && tick((n) => n + 1), live ? 1000 : 30_000);
   if (!helpers.length && !runningCommands.length) return null;
   const done = helpers.length - running.length;
   const parts = [
-    running.length ? `${running.length} helper${running.length === 1 ? "" : "s"} working` : helpers.length ? `${done} helper${done === 1 ? "" : "s"} finished` : null,
+    // "stopped" when none of them finished its work (you stopped them, or their agent's process went).
+    running.length ? `${running.length} helper${running.length === 1 ? "" : "s"} working` : helpers.length ? `${done} helper${done === 1 ? "" : "s"} ${helpers.every((t) => t.status === "stopped" || t.status === "killed") ? "stopped" : "finished"}` : null,
     running.length && done ? `${done} done` : null,
     runningCommands.length ? `${runningCommands.length} background command${runningCommands.length === 1 ? "" : "s"}` : null,
   ].filter(Boolean);
@@ -474,11 +498,18 @@ function HelpersPanel({ member }: { member: Member }) {
     <Arrive>
       {(entering) => (
         <section className={`helpers${entering ? " m-drop" : ""}`} aria-label="Helpers">
-          <button className="helpers-head" onClick={() => setOpen(!open)} aria-expanded={open}>
-            <Bot size={15} aria-hidden="true" />
-            <span className="helpers-title">{parts.join(" · ")}</span>
-            <ChevronDown size={15} className={`chat-status-chevron ${open ? "expanded" : ""}`} aria-hidden="true" />
-          </button>
+          <div className="helpers-top">
+            <button className="helpers-head" onClick={() => setOpen(!open)} aria-expanded={open}>
+              <Bot size={15} aria-hidden="true" />
+              <span className="helpers-title">{parts.join(" · ")}</span>
+              <ChevronDown size={15} className={`chat-status-chevron ${open ? "expanded" : ""}`} aria-hidden="true" />
+            </button>
+            {stoppable > 0 && !replying && (
+              <button className={`helpers-stop${stop === "ask" ? " ask" : ""}`} onClick={stopHelpers} disabled={stop === "stopping"}>
+                {stop === "stopping" ? "Stopping…" : stop === "ask" ? `Stop ${stoppable === 1 ? "it" : `all ${stoppable}`}?` : "Stop"}
+              </button>
+            )}
+          </div>
           {open && (
             <Arrive>
               {(opening) => (
@@ -506,11 +537,15 @@ function HelperRow({ task: t, expanded, onToggle }: { task: BackgroundTask; expa
   const fresh = useEntrance() ? " m-fresh" : "";
   const live = t.status === "running";
   const Icon = live ? Loader2 : t.status === "completed" ? CheckCircle2 : CircleX;
-  const role = t.workflow ?? (t.agentType && t.agentType !== "general-purpose" ? t.agentType : KIND[t.kind] ?? t.kind.replace(/_/g, " "));
+  // A helper on another account (hub/src/helpers.ts) is named by that account: it's what tells it from the agent's own.
+  const role = t.account ? `On ${t.account}` : t.workflow ?? (t.agentType && t.agentType !== "general-purpose" ? t.agentType : KIND[t.kind] ?? t.kind.replace(/_/g, " "));
+  const price = typeof t.costUsd === "number" ? (t.costUsd > 0 && t.costUsd < 0.01 ? t.costUsd.toFixed(3) : t.costUsd.toFixed(2)) : null;
+  const cost = t.costBasis === "free" ? "free" : price === null ? null : [t.costBasis === "plan" ? "worth" : t.costBasis === "estimated" ? "about" : null, "$" + price].filter(Boolean).join(" ");
   const meta = [
     elapsed((t.endedAt ?? Date.now()) - t.startedAt),
     t.toolUses ? `${t.toolUses} step${t.toolUses === 1 ? "" : "s"}` : null,
     live ? null : t.status === "completed" ? "done" : t.status,
+    live ? null : cost,
   ].filter(Boolean).join(" · ");
   const pct = t.contextTokens && t.contextWindow ? Math.min(100, (t.contextTokens / t.contextWindow) * 100) : null;
   const now = live ? [t.lastTool ? `Using ${t.lastTool}` : null, t.summary].filter(Boolean).join(": ") : t.error ?? t.summary;

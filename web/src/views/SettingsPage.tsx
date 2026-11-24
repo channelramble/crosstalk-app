@@ -155,6 +155,10 @@ export function SettingsPage() {
   );
 }
 
+/**
+ * "Carry on when the limit resets", in Settings → Usage & costs. "Pause near usage limits" was beside it: that one is
+ * a fixed default now (its stored value is left alone, off unless it was turned on before).
+ */
 export function UsagePauseSetting() {
   const [settings, setSettings] = useState<HubSettings | null>(null);
   const [busy, setBusy] = useState(false);
@@ -192,16 +196,8 @@ export function UsagePauseSetting() {
   };
   return (
     <section className="card" aria-label="Usage preferences" style={{ marginBottom: 24 }}>
-      <h2 className="section-title" style={{ marginTop: 0 }}>Usage</h2>
       {settings ? (
         <fieldset className="settings-fields" disabled={busy}>
-          <div className="row" style={{ gap: 12 }}>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontWeight: 600 }}>Pause near usage limits</div>
-              <p className="help">Pause automatic reviews and hand-offs when an agent reaches 90% of a reported usage limit. Off by default; the provider's own limits still apply.</p>
-            </div>
-            <Switch checked={settings.pauseNearLimit} onChange={(pauseNearLimit) => save({ pauseNearLimit })} label="Pause near usage limits" />
-          </div>
           <div className="row" style={{ gap: 12 }}>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontWeight: 600 }}>Carry on when the limit resets</div>
@@ -209,7 +205,7 @@ export function UsagePauseSetting() {
             </div>
             <Switch checked={settings.carryOnAfterLimit !== false} onChange={(carryOnAfterLimit) => save({ carryOnAfterLimit })} label="Carry on when the limit resets" />
           </div>
-          <p className="help" role="status" style={{ marginBottom: 0 }}>{busy ? "Saving…" : "Saves immediately for all rooms."}</p>
+          <p className="help" role="status" style={{ marginBottom: 0 }}>{busy ? "Saving…" : "Saves as you change it, for every chat."}</p>
         </fieldset>
       ) : !error && <p className="muted" role="status">Loading usage preferences…</p>}
       {error && <div role="alert"><p>{error}</p>{!settings && <button className="btn" onClick={load}>Retry usage preferences</button>}</div>}

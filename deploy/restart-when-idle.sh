@@ -12,6 +12,12 @@ DB="${CROSSTALK_HOME:-$HOME/.crosstalk}/crosstalk.db"
 BUSY="${CROSSTALK_HOME:-$HOME/.crosstalk}/run/busy.json"
 LABEL="${CROSSTALK_LABEL:-com.crosstalk.hub}"
 UNIT="${CROSSTALK_UNIT:-crosstalk-hub}"
+# The database is read with the sqlite3 command, which a Mac always has and a Linux server often doesn't: without it
+# nothing here could tell whether a chat is working, and this would wait six hours for nothing.
+if ! command -v sqlite3 >/dev/null 2>&1; then
+  echo "$(date) the sqlite3 command isn't installed, and this needs it to see whether a chat is working. Install it (on Ubuntu or Debian: sudo apt install -y sqlite3), then run this again. Crosstalk wasn't restarted." >&2
+  exit 2
+fi
 end=$(( $(date +%s) + 21600 ))
 idle_since=0
 # "running or queued|newest time (ms) anything moved" for a table with status, created_at, started_at and ended_at.

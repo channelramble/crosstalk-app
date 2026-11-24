@@ -1,24 +1,23 @@
 // Settings → Local models, getting models: what this machine has for them (the "fits this machine?" verdict's inputs),
 // the folder downloads go to (one the person sees and can change, an external drive too), the GGUF models in it,
-// Hugging Face search and downloads (the model pool's resumable, pinned downloads, into that folder) and Ollama's own
-// pulls into an Ollama server on this machine. Every download keeps the hub's disk reserve free, can be stopped, and
-// picks up where it stopped when started again. The Hugging Face token is the model pool's (this hub's secrets): it
-// only ever goes to Hugging Face and is never sent back, logged or kept with a download.
+// Hugging Face search and downloads (local/models.ts: resumable, pinned to one version, into that folder) and Ollama's
+// own pulls into an Ollama server on this machine. Every download keeps the hub's disk reserve free, can be stopped,
+// and picks up where it stopped when started again. The Hugging Face token is kept in this hub's secrets: it only ever
+// goes to Hugging Face and is never sent back, logged or kept with a download.
 
 import { spawn } from "node:child_process";
 import { accessSync, closeSync, constants, existsSync, openSync, readFileSync, readSync, realpathSync, rmSync, statSync } from "node:fs";
 import { access, open, readFile, stat, statfs } from "node:fs/promises";
 import { homedir, totalmem } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
-import type { LocalDownload, LocalDownloadStart, LocalFolder, LocalLibrary as LibraryView, LocalMachine, LocalModelFile, LocalOllamaInfo, LocalRepoFiles, LocalSearchHit, PoolDevice, PoolModel, PoolModelFile } from "@crosstalk/shared";
+import type { LocalDownload, LocalDownloadStart, LocalFolder, LocalLibrary as LibraryView, LocalMachine, LocalModelFile, LocalOllamaInfo, LocalRepoFiles, LocalSearchHit, HfModel } from "@crosstalk/shared";
 import type { App } from "./app";
-import { readSecrets } from "./config";
+import { readSecrets, writeSecret } from "./config";
 import { HttpError } from "./engine/engine";
 import { ggufMetadata, kvShape, type KvShape } from "./gguf";
+import { errText, gb, gpuName, listDevices, type GpuDevice } from "./local/llama";
+import { checkModel, choices, download, existingParent, fileHead, groupModels, haveModel, HF_SECRET, hfBase, hfFetch, modelFiles, modelFilesIn, modelFilesOnDisk, modelsDir, mountPoint, quantOf, repoError, spaceFor, splitModelFile, toTrash, type ModelFileOnDisk, type TrashOptions } from "./local/models";
 import { localRunnersOf } from "./localRunners";
-import { errText, gb, listDevices } from "./pool/llama";
-import { checkModel, choices, download, downloadingBy, DOWNLOADERS, existingParent, fileHead, groupModels, haveModel, hfBase, hfFetch, modelFiles, modelFilesIn, modelFilesOnDisk, modelsDir, mountPoint, quantOf, repoError, spaceFor, splitModelFile, toTrash, type TrashOptions } from "./pool/models";
-import { gpuName, HF_SECRET } from "./pool/pool";
 import { diskSpace } from "./storage";
 import { diskReserve } from "./uploads";
 import { logger } from "./util/log";
@@ -27,7 +26,7 @@ const log = logger("local-models");
 
 const MiB = 1024 ** 2;
 const GiB = 1024 ** 3;
-/** kv: the folder downloads go to (absent: Crosstalk's models folder, the pool's). */
+/** kv: the folder downloads go to (absent: Crosstalk's models folder). */
 const FOLDER_KEY = "localModels.folder";
 /** kv: downloads that aren't finished, so a stopped one can be picked up again after a restart. */
 const DOWNLOADS_KEY = "localModels.downloads";
@@ -35,7 +34,7 @@ const DOWNLOADS_KEY = "localModels.downloads";
 const HEAD_BYTES = 1024 * 1024;
 /** Downloads running at once. */
 const MAX_RUNNING = 3;
-/** A GPU list from a llama-server found here (not the pool's) is asked again after this long. */
+/** The GPU list from the llama-server found here is asked again after this long. */
 const DEVICES_TTL = 10 * 60_000;
 /**
  * The page looks at the library every second while a download runs: the machine's facts (which may run llama.cpp to
@@ -47,6 +46,8 @@ const PORTS_TTL = 10_000;
 const FILES_TTL = 5_000;
 /** A look at the folder is used this long: the page asks every second while something runs, and requests at once share one. */
 const LOOK_TTL = 900;
+/** A Hugging Face token as people paste it: printable, no spaces. */
+const HF_TOKEN = /^[\x21-\x7e]{8,400}$/;
 /** Ollama's model names: "qwen3:8b", "user/model:tag", "hf.co/owner/repo:Q4_K_M". */
 const OLLAMA_NAME = /^(?!.*\.\.)[A-Za-z0-9][\w.\-/:]{0,199}$/;
 /** Where drives are mounted: /Volumes on a Mac; /media, /run/media and /mnt on Linux. */
@@ -74,7 +75,7 @@ const dev = (path: string): number | null => {
  * to 36 GB and three quarters above (what macOS gives by default). Elsewhere, the GPUs' free memory as llama.cpp lists
  * it, or none (models then run on the processor, in the memory).
  */
-export function machineFrom(ramBytes: number, unified: boolean, devices: PoolDevice[]): LocalMachine {
+export function machineFrom(ramBytes: number, unified: boolean, devices: GpuDevice[]): LocalMachine {
   const gpus = devices.map((d) => ({ name: gpuName(d.description), totalBytes: d.totalMiB * MiB, freeBytes: d.freeMiB * MiB }));
   if (unified) {
     const metal = devices.find((d) => /^MTL\d/.test(d.name) && d.totalMiB > 0);
@@ -303,7 +304,7 @@ interface Job {
   id: string;
   source: LocalDownload["source"];
   name: string;
-  model: PoolModel | null;
+  model: HfModel | null;
   ollama: { model: string; serverId: string } | null;
   /** The folder it downloads into (a later change of folder doesn't move it). */
   root: string;
@@ -323,7 +324,7 @@ interface Job {
   done: Promise<void> | null;
 }
 
-const hfId = (m: PoolModel) => `hf:${m.repo}/${m.files[0]}`;
+const hfId = (m: HfModel) => `hf:${m.repo}/${m.files[0]}`;
 /** A remove that deletes instead of moving to the Trash (`{ forGood: true }`). */
 const forGood = (body: unknown) => !!body && typeof body === "object" && (body as { forGood?: unknown }).forGood === true;
 const ollamaId = (serverId: string, model: string) => `ollama:${serverId}:${model}`;
@@ -353,8 +354,8 @@ export class LocalLibrary {
   ramBytes: () => number = () => totalmem();
   /** Apple silicon: the GPU shares the memory. */
   unified = process.platform === "darwin" && process.arch === "arm64";
-  /** The GPUs llama.cpp lists here: the model pool's install, else a llama-server Crosstalk found (tests give their own). */
-  devices: () => Promise<PoolDevice[]> = () => this.listGpus();
+  /** The GPUs llama.cpp lists here, asked of the llama-server Crosstalk found (tests give their own). */
+  devices: () => Promise<GpuDevice[]> = () => this.listGpus();
   /** Where removed model files go (tests use a temporary home's Trash). */
   trashOptions: TrashOptions = {};
   /** How often a running download looks at the disk. */
@@ -363,7 +364,7 @@ export class LocalLibrary {
   ollamaPlaces: () => string[] = () => [...new Set([ollamaModels(), ...(process.platform === "linux" ? [OLLAMA_SERVICE_MODELS] : [])])];
   private jobs = new Map<string, Job>();
   private loaded = false;
-  private found: { at: number; bin: string; list: PoolDevice[] } | null = null;
+  private found: { at: number; bin: string; list: GpuDevice[] } | null = null;
   private machineSeen: { at: number; value: LocalMachine } | null = null;
   private machineJob: Promise<LocalMachine> | null = null;
   private portsSeen: { at: number; value: LibraryView["ports"] } | null = null;
@@ -462,7 +463,7 @@ export class LocalLibrary {
   }
 
   private async readMachine(): Promise<LocalMachine> {
-    let devices: PoolDevice[] = [];
+    let devices: GpuDevice[] = [];
     try {
       devices = await this.devices();
     } catch (e) {
@@ -471,16 +472,14 @@ export class LocalLibrary {
     return machineFrom(this.ramBytes(), this.unified, devices);
   }
 
-  /** The GPUs: the model pool's llama.cpp lists them when it's installed; else a llama-server found on this machine, now and then. */
-  private async listGpus(): Promise<PoolDevice[]> {
-    const pooled = await this.app.poolNode.gpus();
-    if (pooled.length) return pooled;
+  /** The GPUs, as the llama-server found on this machine lists them: asked now and then, and none without one. */
+  private async listGpus(): Promise<GpuDevice[]> {
     const bin = localRunnersOf(this.app).programs().find((p) => p.kind === "llamacpp")?.path;
     if (!bin) return [];
     if (this.found?.bin === bin && Date.now() - this.found.at < DEVICES_TTL) return this.found.list;
     // Kept even when it fails, so a broken program isn't run on every look.
     this.found = { at: Date.now(), bin, list: [] };
-    this.found.list = await listDevices(bin, [], 20_000).catch(() => []);
+    this.found.list = await listDevices(bin, 20_000).catch(() => []);
     return this.found.list;
   }
 
@@ -556,7 +555,7 @@ export class LocalLibrary {
   }
 
   /** The finished models among a folder's files (a split model once all its parts are), with where each one's first file is. */
-  private groupsIn(root: string, onDisk: PoolModelFile[]): { repo: string; model: PoolModel; first: string }[] {
+  private groupsIn(root: string, onDisk: ModelFileOnDisk[]): { repo: string; model: HfModel; first: string }[] {
     const byRepo = new Map<string, { path: string; size: number }[]>();
     for (const f of onDisk) {
       if (f.partial) continue;
@@ -568,7 +567,7 @@ export class LocalLibrary {
       }
       byRepo.set(entry.repo, [...(byRepo.get(entry.repo) ?? []), { path: entry.file, size: f.bytes }]);
     }
-    const out: { repo: string; model: PoolModel; first: string }[] = [];
+    const out: { repo: string; model: HfModel; first: string }[] = [];
     for (const [repo, list] of byRepo) {
       for (const model of groupModels(repo, list, false)) {
         // One still downloading (its first part finished, say) isn't a model yet.
@@ -578,7 +577,7 @@ export class LocalLibrary {
     return out;
   }
 
-  private static fileOf({ repo, model: m }: { repo: string; model: PoolModel }, shape: KvShape | null): LocalModelFile {
+  private static fileOf({ repo, model: m }: { repo: string; model: HfModel }, shape: KvShape | null): LocalModelFile {
     return { id: `${repo}/${m.files[0]}`, repo, files: m.files, quant: m.quant, bytes: m.sizeBytes, kvBytesPerToken: shape?.bytesPerToken ?? null, contextLength: shape?.contextLength ?? null };
   }
 
@@ -629,6 +628,19 @@ export class LocalLibrary {
     return readSecrets()[HF_SECRET] || null;
   }
 
+  /** PUT /api/local-models/hf-token `{ token }`: saved in this hub's secrets (never shown again); null or "" removes it. */
+  setHfToken(body: unknown): { hasHfToken: boolean } {
+    if (!body || typeof body !== "object" || Array.isArray(body) || !("token" in body)) throw new HttpError(400, "Send the token as { token: \"hf_…\" }, or { token: null } to remove it.");
+    const input = (body as { token: unknown }).token;
+    if (input === null || input === "") writeSecret(HF_SECRET, null);
+    else {
+      const token = typeof input === "string" ? input.trim() : "";
+      if (!HF_TOKEN.test(token)) throw new HttpError(400, "That doesn't look like a Hugging Face token: copy it again from huggingface.co/settings/tokens.");
+      writeSecret(HF_SECRET, token);
+    }
+    return { hasHfToken: !!this.token() };
+  }
+
   /** GET /api/local-models/search?q=: GGUF models on Hugging Face whose names match, most downloaded first. */
   async search(q: unknown): Promise<LocalSearchHit[]> {
     const query = typeof q === "string" ? q.trim() : "";
@@ -663,7 +675,7 @@ export class LocalLibrary {
   /** POST /api/local-models/downloads: starts a download, or picks a stopped one up where it stopped. */
   async startDownload(body: unknown): Promise<LibraryView> {
     this.load();
-    if (this.closed) throw new HttpError(503, "The hub is shutting down: try again once it's back.");
+    if (this.closed) throw new HttpError(503, "Crosstalk is shutting down: try again once it's back.");
     const b = (body && typeof body === "object" ? body : {}) as Partial<Record<string, unknown>>;
     if (b.source === "huggingface") this.startHf(checkModel(b.model));
     else if (b.source === "ollama") await this.startOllama(b.serverId, b.model);
@@ -688,7 +700,7 @@ export class LocalLibrary {
       .map((j) => ({ name: j.name, left: Math.max(0, j.totalBytes - j.doneBytes) }));
   }
 
-  private startHf(m: PoolModel) {
+  private startHf(m: HfModel) {
     const id = hfId(m);
     const cur = this.jobs.get(id);
     if (cur?.state === "downloading") return;
@@ -702,9 +714,6 @@ export class LocalLibrary {
       return;
     }
     this.refuseBusy();
-    // The model pool downloads into Crosstalk's folder too.
-    const by = downloadingBy(modelFiles(m, root));
-    if (by) throw new HttpError(409, DOWNLOADERS[by], "busy");
     const name = `${repoName(m.repo)}${m.quant ? ` ${m.quant}` : ""}`;
     const { remaining, free } = spaceFor(m, root);
     const reserve = diskReserve();
@@ -727,7 +736,7 @@ export class LocalLibrary {
       job.totalBytes = p.totalBytes;
       job.bytesPerSec = p.bytesPerSec;
       job.updatedAt = Date.now();
-    }, ctrl.signal, root, "local").then(
+    }, ctrl.signal, root).then(
       () => {
         this.jobs.delete(id);
         log.info(`downloaded ${m.repo} ${m.files[0]} to ${shown(root)}`);
@@ -902,7 +911,7 @@ export class LocalLibrary {
   /**
    * POST /api/local-models/downloads/remove `{ id, forGood? }`: a stopped download goes. What a Hugging Face one had
    * downloaded goes to the Trash (`forGood`: deleted, when its drive's Trash can't be used and the person said so
-   * again); Ollama clears what it had of its own pull by itself. One the model pool finished meanwhile is only
+   * again); Ollama clears what it had of its own pull by itself. One whose files are all there after all is only
    * forgotten: the model is there, and may be in use.
    */
   async removeDownload(body: unknown): Promise<LibraryView> {
@@ -911,8 +920,6 @@ export class LocalLibrary {
     if (job.state === "downloading") throw new HttpError(409, "It's still downloading: stop it first.", "busy");
     const model = job.model;
     if (model && !haveModel(model, job.root)) {
-      const by = downloadingBy(modelFiles(model, job.root));
-      if (by) throw new HttpError(409, DOWNLOADERS[by], "busy");
       const paths = modelFiles(model, job.root).flatMap((p) => [p, `${p}.part`]).filter((p) => existsSync(p));
       await this.discard(job.id, paths, forGood(body));
       rmSync(`${modelFiles(model, job.root)[0]}.rev`, { force: true });
@@ -928,10 +935,9 @@ export class LocalLibrary {
     const id = body && typeof body === "object" ? (body as { id?: unknown }).id : undefined;
     const { file } = this.fileById(id);
     const root = this.folder();
-    const model: PoolModel = { repo: file.repo, files: file.files, quant: file.quant, sizeBytes: file.bytes, gated: false };
+    const model: HfModel = { repo: file.repo, files: file.files, quant: file.quant, sizeBytes: file.bytes, gated: false };
     const paths = modelFiles(model, root);
     if (localRunnersOf(this.app).serving(paths[0])) throw new HttpError(409, "A llama.cpp server Crosstalk started is using this model: stop it first.", "in_use");
-    if (this.app.poolNode.serving(paths[0])) throw new HttpError(409, "The model pool is using this model: stop the pool first.", "in_use");
     await this.discard(`file:${file.id}`, paths, forGood(body));
     this.changed();
     log.info(`${forGood(body) ? "deleted" : "moved to the Trash"} ${file.id}`);
@@ -971,7 +977,7 @@ export class LocalLibrary {
       const list = JSON.parse(this.app.store.kvGet(DOWNLOADS_KEY) ?? "[]") as Partial<Job>[];
       for (const j of Array.isArray(list) ? list : []) {
         if (typeof j?.id !== "string" || (j.source !== "huggingface" && j.source !== "ollama") || typeof j.root !== "string") continue;
-        let model: PoolModel | null = null;
+        let model: HfModel | null = null;
         if (j.source === "huggingface") {
           try {
             model = checkModel(j.model);

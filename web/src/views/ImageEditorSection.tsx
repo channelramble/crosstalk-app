@@ -77,7 +77,7 @@ export function ImageEditorSection() {
       <div className="card image-editor">
         <div className="image-editor-row">
           <div className="image-editor-text">
-            <div className="pool-setting-title">AI image editor</div>
+            <div className="setting-title">AI image editor</div>
             <div className={`help image-editor-state${status.state === "error" ? " image-editor-stopped" : ""}`} aria-live="polite">
               {working && <Loader2 size={13} className="spin" aria-hidden />}
               {imageEditorLine(status, machine)}

@@ -1,0 +1,163 @@
+/*
+ * How the screens fit phones, foldables, tablets and computers: sizes and places only. Colours stay where they are
+ * (styles.css and the themes), and everything that moves is in motion.css.
+ */
+
+/* ------------------------------------------------------------ a message's actions */
+
+/*
+ * Opened by a tap (or a click): a reply longer than the screen has its actions under its last line, which may be a few
+ * screens down. They float in view near the foot of the messages while any of the reply is on screen (just above
+ * where Jump to latest sits, so neither covers the other), and sit in their own place once its end is reached.
+ * Nothing scrolls and nothing above them moves. A bar of their own, so they read over the reply behind them.
+ */
+.your-msg.in-reach > .msg-actions {
+  position: sticky;
+  bottom: 60px;
+  z-index: 4;
+  width: fit-content;
+  max-width: 100%;
+  margin-left: auto;
+  padding: 2px 4px;
+  border-radius: 12px;
+  background: var(--surface-2);
+  box-shadow:
+    0 0 0 0.5px var(--sep-strong),
+    var(--shadow-pop);
+}
+.your-msg.in-reach > .msg-actions.agent-actions {
+  margin-left: 40px;
+  margin-right: auto;
+  max-width: calc(100% - 40px);
+}
+/* Jump to latest takes a finger. */
+@media (max-width: 760px), (pointer: coarse) {
+  .jump-latest-btn {
+    width: 44px;
+    height: 44px;
+  }
+}
+
+/* ------------------------------------------------------------ the docked chats, on a computer */
+
+/*
+ * As wide as it was dragged (ChatSidebar.tsx SidebarResizer; 272 px unless it was), and never so wide that the screen
+ * beside it gets less than a phone's width. Half-folded like a book it's its half of the screen (styles.css foldables).
+ */
+:root:not(.fold-book) .app.single.docked .chat-sidebar {
+  width: var(--csb-w, 272px);
+  min-width: 220px;
+  max-width: max(220px, calc(100% - 420px));
+}
+/* Its right edge: no width of its own, a strip over the border to grab (wider for a finger), a line while it's used. */
+.csb-resizer {
+  flex: none;
+  width: 1px;
+  margin-right: -1px;
+  position: relative;
+  z-index: 6;
+  touch-action: none;
+  outline: none;
+}
+.csb-resizer::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -5px;
+  width: 10px;
+  cursor: col-resize;
+}
+.csb-resizer::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -1.5px;
+  width: 2px;
+  background: var(--accent);
+  opacity: 0;
+  pointer-events: none;
+}
+@media (hover: hover) {
+  .csb-resizer:hover::after {
+    opacity: 0.6;
+  }
+}
+.csb-resizer:focus-visible::after,
+:root.resizing .csb-resizer::after {
+  opacity: 1;
+}
+@media (pointer: coarse) {
+  .csb-resizer::before {
+    left: -8px;
+    width: 16px;
+  }
+}
+/* While it's dragged: the same cursor everywhere, and no text picked up on the way. */
+:root.resizing,
+:root.resizing * {
+  cursor: col-resize !important;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* How to reach the search from anywhere, said in the field while it's empty (shortcuts.ts). */
+.csb-key {
+  flex: none;
+  margin-right: 5px;
+  padding: 1px 6px;
+  border: 0.5px solid var(--sep);
+  border-radius: 6px;
+  font: inherit;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--text-3);
+  white-space: nowrap;
+  pointer-events: none;
+}
+/* A chat reached with the arrow keys shows where the keyboard is, inside its row. */
+.csb-chat:focus-visible {
+  outline-offset: -2px;
+}
+
+/* ------------------------------------------------------------ the message box on a phone */
+
+/* The words in an empty box stay on one line (cut short on a small phone), so the box is one line tall until typed in. */
+.composer textarea::placeholder {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* A group chat's row under the box on a small phone: the agent the settings are for is its avatar alone. */
+.chat-controls.tight .ctl-member .ellipsis {
+  display: none;
+}
+.chat-controls.narrow .ctl-member {
+  max-width: none;
+}
+/* ------------------------------------------------------------ words that must wrap */
+
+/* A long path or address in a help line wraps inside its sheet instead of running out of it. */
+.help {
+  overflow-wrap: anywhere;
+}
+
+/* ------------------------------------------------------------ sheets on a computer */
+
+/*
+ * A wide screen with a mouse: a sheet opens as a dialog in the middle of the window, with all its corners, instead of
+ * along the bottom edge as on a phone. (A half-folded screen keeps its own places for them, styles.css foldables.)
+ */
+@media (min-width: 761px) and (hover: hover) and (pointer: fine) {
+  :root:not(.fold-book):not(.fold-tabletop) .app.mobile .overlay {
+    place-items: center;
+    padding: 24px;
+  }
+  :root:not(.fold-book):not(.fold-tabletop) .app.mobile .overlay > .dialog {
+    border-radius: 20px;
+    max-height: min(calc(var(--app-height, 100vh) - 48px), 900px);
+    padding-bottom: 0;
+    box-shadow: var(--shadow-pop);
+  }
+}

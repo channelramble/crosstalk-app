@@ -8,12 +8,11 @@ import { App } from "../src/app";
 import { localLibraryOf } from "../src/localLibrary";
 import { localModelsOf, type Runner } from "../src/localModels";
 import { findPrograms, gpuLayers, LocalRunners, localRunnersOf, loopbackFree } from "../src/localRunners";
-import { POOL_PORT } from "../src/pool/pool";
 import { startServer } from "../src/server";
 import { fakeOllamaLive } from "./fixtures/fake-local-models";
 import { fakeLmStudio } from "./fixtures/fake-services";
 import { ggufBytes, qwenLike } from "./fixtures/gguf";
-import { freePort, installScript } from "./fixtures/pool-fakes";
+import { freePort, installScript } from "./fixtures/local-fakes";
 import { endStarted } from "./standins";
 
 // Settings → Local models, starting and stopping servers (localRunners.ts): a fake `ollama` and a fake `llama-server`, started
@@ -61,7 +60,6 @@ function setup(o: { ollama?: Record<string, unknown>; llama?: Record<string, str
   const app = new App({ dbPath: ":memory:", config: { port: 0, host: "127.0.0.1", publicUrl: null, workspaceRoot: dir, maxHopsDefault: 6 } });
   app.services.timeoutMs = 1500;
   app.services.scanOptions = { ports: {}, timeoutMs: 800 };
-  app.poolNode.gpus = async () => [];
   const lib = localLibraryOf(app);
   // A pretend Mac with 16 GB (llama.cpp isn't asked for its GPUs).
   lib.ramBytes = () => 16 * 1024 ** 3;
@@ -214,7 +212,6 @@ test("servers Crosstalk didn't start are left alone, and say how to stop them wh
   expect(by(port)).toMatchObject({ startedId: null, stopWhy: "Crosstalk didn't start this server, so it leaves it alone: quit it where it was started." });
   expect(by(studio.port)).toMatchObject({ startedId: null, stopWhy: "LM Studio is managed in LM Studio: start and stop it there." });
   expect(by(ollama.port).stopWhy).toStartWith("Crosstalk didn't start this Ollama, so it leaves it alone:");
-  expect(runners.stopWhy({ kind: "llamacpp", baseUrl: `http://127.0.0.1:${POOL_PORT}` }, POOL_PORT)).toBe("This is the model pool's server: stop it in Model pool.");
   // Asked to stop it anyway: refused, and it runs on.
   await expect(runners.stop({ id: `llamacpp-${port}` })).rejects.toMatchObject({ status: 404, message: "Crosstalk didn't start that server, so it leaves it alone. Press Rescan to see what runs." });
   expect(alive(own.pid!)).toBe(true);
@@ -274,7 +271,7 @@ test("what a start needs: the program, a free port that isn't the hub's, a model
   await expect(runners.start({ kind: "ollama", port: 80 })).rejects.toMatchObject({ status: 400, message: "Pick a port from 1024 to 65535." });
   await expect(runners.start({ kind: "ollama", port: 1.5 })).rejects.toMatchObject({ status: 400 });
   app.config.port = port;
-  await expect(runners.start({ kind: "ollama", port })).rejects.toMatchObject({ status: 409, message: `Port ${port} is the hub's own: pick another.` });
+  await expect(runners.start({ kind: "ollama", port })).rejects.toMatchObject({ status: 409, message: `Port ${port} is Crosstalk's own: pick another.` });
   app.config.port = 0;
   await expect(runners.start({ kind: "llamacpp", port })).rejects.toMatchObject({ status: 400, message: "Pick the model llama.cpp should serve." });
   await expect(runners.start({ kind: "llamacpp", port, model: "a/b/c.gguf" })).rejects.toMatchObject({ status: 404 });
@@ -297,7 +294,7 @@ test("what a start needs: the program, a free port that isn't the hub's, a model
   await expect(runners.start({ kind: "ollama", port })).rejects.toMatchObject({ status: 409, code: "no_program", message: "Ollama isn't installed on this machine: get it at ollama.com/download, then press Rescan." });
 });
 
-test("free ports: each program's own when it's free, else the next free one (never the hub's or the pool's)", async () => {
+test("free ports: each program's own when it's free, else the next free one (never the hub's)", async () => {
   const { app, runners } = setup();
   const taken = new Set([11434, 11435, 8080]);
   runners.portFree = (p) => !taken.has(p);

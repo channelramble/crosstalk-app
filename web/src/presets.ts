@@ -19,7 +19,7 @@ export interface EndpointPreset {
   keyFrom: { label: string; url: string };
 }
 
-/** Kimi K3.1 Pro through Moonshot's API: too big to run at home (docs/MODEL-POOL.md, "Not possible here"). */
+/** Kimi K3.1 Pro through Moonshot's API: too big to run at home. */
 export const KIMI_PRESET: EndpointPreset = {
   id: "kimi",
   title: "Kimi K3.1 Pro (Moonshot API)",
@@ -211,15 +211,15 @@ export const SERVICE_PRESETS: ServicePreset[] = [
     chatPath: "/v1beta/openai/chat/completions", keyPage: { label: "aistudio.google.com", url: "https://aistudio.google.com/apikey" }, docs: { label: "ai.google.dev", url: "https://ai.google.dev/gemini-api/docs/openai" },
   },
   {
-    id: "local", title: "A server on this machine", help: "Ollama, LM Studio, llama.cpp or another one running here. Free; nothing leaves this machine.", label: "", baseUrl: "http://127.0.0.1:8080", kind: "local", agent: "codex",
+    id: "local", title: "A model on this machine", help: "In Ollama, LM Studio, llama.cpp or another program running here. Free; nothing leaves this machine.", label: "", baseUrl: "http://127.0.0.1:8080", kind: "local", agent: "codex",
     // Through Crosstalk's own translator, even where the server's Responses address answers: these servers' Responses
     // support is newer than their Chat Completions one, and a model's chat template can refuse what an agent sends
     // there (llama.cpp with a Qwen template answers "System message must be at the beginning"), while the translator
     // lays the messages out itself. Honoured only when the check found that address (protocolFor).
     protocol: "chat",
-    note: "Crosstalk talks to it in the Chat Completions style, which these servers handle best.",
+    note: "Crosstalk talks to it in the Chat Completions style, which these programs handle best.",
   },
-  { id: "other", title: "Another server", help: "Any server that speaks the Responses, Messages or Chat Completions style.", label: "", baseUrl: "", kind: "other", agent: "codex" },
+  { id: "other", title: "Something else", help: "Any service or model that speaks the Responses, Messages or Chat Completions style.", label: "", baseUrl: "", kind: "other", agent: "codex" },
 ];
 
 export const servicePreset = (id: string | null | undefined): ServicePreset | null => SERVICE_PRESETS.find((p) => p.id === id) ?? null;
@@ -237,6 +237,6 @@ export function presetNoteHolds(preset: Pick<ServicePreset, "noteAgent">, agent:
 
 export function presetSteps(p: ServicePreset): [string, string, string] {
   if (p.kind === "hosted") return [`Get a key at ${p.keyPage?.label ?? "the service's website"}.`, "Paste it here.", "Press Test."];
-  if (p.kind === "local") return ["Start your model server on this machine.", "Check its address.", "Press Test."];
-  return ["Find the server's address, and its key if it has one, in its docs.", "Paste them here.", "Press Test."];
+  if (p.kind === "local") return ["Start your model on this machine.", "Check its address.", "Press Test."];
+  return ["Find its address, and its key if it has one, in its docs.", "Paste them here.", "Press Test."];
 }

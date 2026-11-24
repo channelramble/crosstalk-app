@@ -1,6 +1,6 @@
 {
   "name": "@crosstalk/web",
-  "version": "0.6.11",
+  "version": "0.9.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@crosstalk/shared": "workspace:*",
+    "@novnc/novnc": "1.7.0",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-notification": "^2",
     "@tauri-apps/plugin-opener": "^2",

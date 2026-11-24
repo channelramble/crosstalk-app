@@ -114,7 +114,7 @@
   margin: 6px 0 0;
 }
 
-/* The image editor and the model pool: a line each that jumps to its section. */
+/* The image editor: a line that jumps to its section. */
 .local-also {
   margin-top: 22px;
 }
@@ -307,7 +307,7 @@
 .local-get {
   margin-top: 4px;
 }
-.local-get .pool-link-form {
+.local-get .get-form {
   margin-bottom: 12px;
 }
 .local-hits {

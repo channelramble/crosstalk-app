@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import { CircleAlert, CircleCheck, HelpCircle, Info, SquareTerminal, TriangleAlert } from "lucide-react";
 import { MAC_LOGIN_WAIT_MS, type MacCrash, type MacDialog, type MacStatus, type PtyInfo } from "@crosstalk/shared";
 import { api, ApiError } from "../api";
-import { namesText } from "../pool";
 import { useStore } from "../store";
 import { ConfirmButton, Dialog, timeAgo } from "../ui";
 import { useReconnected } from "../useReconnected";
@@ -14,6 +13,8 @@ type Pane = "fullDisk" | "login" | "energy" | "updates" | "privacy";
 type Fix = "autologin" | "power";
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
+/** "A", "A and B", "A, B and C". */
+const listed = (names: readonly string[]) => (names.length < 2 ? (names[0] ?? "") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`);
 
 /** One thing that keeps the Mac from running on its own: ok, a problem, a choice with a trade-off, or not known. */
 interface Row {
@@ -125,7 +126,7 @@ export function crashText(c: MacCrash, machine: string, s: { autoLogin: string |
   const atLogin = c.waitedMs > MAC_LOGIN_WAIT_MS;
   const lines = [
     c.kind === "crash" ? `At ${clockWords(c.at, now)}: ${c.cause ?? "a kernel panic"}.` : `Around ${clockWords(c.at, now)}: it may have lost power or frozen.`,
-    usb && c.devices.length ? `Plugged into that port when it restarted: ${namesText(c.devices)}.` : null,
+    usb && c.devices.length ? `Plugged into that port when it restarted: ${listed(c.devices)}.` : null,
     usb ? `Plug the drive straight into ${machine} or into a different port, and leave out cheap hubs and adapters: a fault like this restarts the whole machine.` : null,
     `Crosstalk was off for ${waited(c.backAt - c.at)}, until ${clockWords(c.backAt, now)}${atLogin ? `: ${machine} waited at the login screen for someone to log in.` : "."}`,
     !atLogin ? null : s.autoLogin ? "Automatic login is on now, so next time it starts by itself." : s.fileVault ? "With FileVault on it can't log in by itself (see below)." : "Turn on automatic login below and next time it starts by itself.",
@@ -211,7 +212,7 @@ export function MacSection() {
       {status?.lastCrash && <CrashNotice crash={status.lastCrash} status={status} machine={machine} onDismiss={() => void dismissCrash().then(setStatus, (e) => toast("error", message(e)))} />}
       {dialogs.length > 0 && (
         <div className="card mac-waiting" role="region" aria-label={`Waiting for an answer on ${machine}`}>
-          <div className="pool-setting-title" role="status">
+          <div className="setting-title" role="status">
             Waiting for an answer on {machine}
           </div>
           {dialogs.map((d) => (
@@ -232,14 +233,14 @@ export function MacSection() {
               </div>
             </div>
           ))}
-          <p className="help mac-note">macOS lets no software answer these, from here or anywhere. Stop the program asking (it gets no access, and nothing waits on it), or Dismiss one that was answered while the hub wasn't watching.</p>
+          <p className="help mac-note">macOS lets no software answer these, from here or anywhere. Stop the program asking (it gets no access, and nothing waits on it), or Dismiss one that was answered while Crosstalk wasn't watching.</p>
         </div>
       )}
       <div className="card mac-server">
-        <div className="pool-setting-title">As a server</div>
-        <p className="help mac-note">What keeps {machine} running on its own, like a Linux server, with nobody at it.</p>
+        <div className="setting-title">With nobody at it</div>
+        <p className="help mac-note">What keeps {machine} running on its own, like a Linux machine.</p>
         {error && (
-          <p className="small pool-error">
+          <p className="small setting-error">
             {error}{" "}
             <button className="link-btn" onClick={() => void load()}>
               Try again

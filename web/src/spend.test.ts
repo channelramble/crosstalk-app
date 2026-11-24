@@ -95,8 +95,8 @@ test("the screen explains ≈ only when one is drawn", () => {
 
 test("an account's line says how it is billed, and leaves the agent to its name", () => {
   expect(accountSub(account())).toBe("API key");
-  expect(accountSub(account({ label: "Main", kind: "signin" }))).toBe("Plan sign-in");
-  expect(accountSub(account({ provider: "codex", label: "Kimi on Together", kind: "endpoint" }))).toBe("AI service");
+  expect(accountSub(account({ label: "Main", kind: "signin" }))).toBe("On your plan");
+  expect(accountSub(account({ provider: "codex", label: "Kimi on Together", kind: "endpoint" }))).toBe("Service or own model");
 });
 
 test("an account's name has its agent, once, so two sign-ins called Main can be told apart", () => {

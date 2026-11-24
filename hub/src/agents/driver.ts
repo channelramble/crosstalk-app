@@ -65,7 +65,7 @@ export interface TurnSink {
    */
   approval(req: ApprovalRequest, opts?: { signal?: AbortSignal }): Promise<ApprovalDecision>;
   /**
-   * The agent has just read a message the human sent mid-reply ("Send now"): what it writes from here goes in a new
+   * The agent has just read a message the human sent mid-reply (it went into the reply: steer): what it writes from here goes in a new
    * reply below that message, so it never looks like it answered before being asked.
    */
   newReply?(): void;
@@ -158,8 +158,12 @@ export interface DriverContext {
   chat?: {
     /** Standing instructions for the chat's agent (e.g. other computers it can reach), or null. */
     notes?: string | null;
-    /** Teamwork is on: the agent may ask this other agent one focused question through the `ask` tool. */
-    helper: { provider: Provider; note: string } | null;
+    /**
+     * Quick questions are on: the agent may ask another agent one focused question, through the tool `ask_<provider>`:
+     * the other agent by name (ask_codex, ask_claude), or "agent" when the person chose who can be asked (ask_agent,
+     * which takes `who`; the note lists them).
+     */
+    helper: { provider: Provider | "agent"; note: string } | null;
     /** Continue from a copy of the session instead of the session itself (it's open in another app). */
     fork?: boolean;
     /** A one-off question (teamwork helper): keep no session afterwards. */
@@ -169,6 +173,12 @@ export interface DriverContext {
      * chats, and keeps a chat's ways back (rewind, Try again, forks for Duplicate).
      */
     group?: boolean;
+    /**
+     * The person chose another account for this chat's helper work (helpers.ts): the agent gets the start_helper and
+     * helper_result tools and `note` in its standing instructions. `only`: its own helpers aren't to be used at all
+     * (switched off where the agent's CLI has a setting for that). Null or absent: its own helpers, as ever.
+     */
+    helpers?: { label: string; note: string; only: boolean } | null;
   } | null;
   /** The model server of your own the agent runs on (a custom-model account), if any. */
   endpoint?: AgentEndpoint | null;
@@ -182,6 +192,9 @@ export interface DriverContext {
 
 /** The tools for the user's other chats, as Claude Code names them. */
 export const CHAT_TOOL_NAMES = ["list_chats", "read_chat", "send_to_chat", "wait_for_reply", "start_chat"];
+
+/** The tools for helpers on another account (helpers.ts). */
+export const HELPER_TOOL_NAMES = ["start_helper", "helper_result"];
 
 /** A group chat's own tools (reading it, who's in it, a progress note): they only reach the chat the agent is in. */
 export const ROOM_TOOL_NAMES = ["room_members", "room_read", "room_post"];
@@ -213,15 +226,15 @@ export interface AgentDriver {
   /** Stop the in-flight turn as gracefully as the agent allows. */
   interrupt(): Promise<void>;
   /**
-   * Hand the human's new message to the turn in progress ("Send now") instead of waiting for it to end: the agent reads
-   * it at its next step. Resolves false when there's no turn to add it to.
+   * Hand the human's new message to the turn in progress instead of waiting for it to end (the engine does, as the
+   * message comes in: flowIn): the agent reads it at its next step. Resolves false when there's no turn to add it to.
    */
   steer?(text: string, messageIds?: string[]): Promise<boolean>;
   /**
    * What steer handed the reply that just ended and it will never read, by message id, handed back and forgotten by the
    * driver: Crosstalk's own agent's when the reply failed, was stopped or ran out of steps first; Codex's when its turn was
    * stopped or failed (such a turn drops input it hadn't read); Claude Code's when a Stop took them back out of its queue or
-   * they went with its process. The engine makes them unread again, so Try again, Answer now or the next message brings
+   * they went with its process. The engine makes them unread again, so Try again or the next message brings
    * them along. One Claude Code still holds isn't here: it answers that next by itself (owedTurn).
    */
   takeUnread?(): string[];
@@ -238,6 +251,13 @@ export interface AgentDriver {
    * prompt it scheduled for later), or while its session is open in another app. Drivers without it are left running.
    */
   canEndWhenIdle?(): boolean;
+  /**
+   * The processes the hub started for this agent that are running now (its CLI, a command Crosstalk's own agent runs),
+   * so the memory guard can count what they and everything they started hold under the agent's chat (memory.ts).
+   * Never a process the hub didn't start: a Codex chat on the Codex app's own server has none. Drivers without it
+   * aren't counted.
+   */
+  pids?(): number[];
   /**
    * A turn the agent owes by itself: input only this process holds, that it starts on once it's free and hasn't yet.
    * "report": a background helper or job reported back (Claude Code answers its <task-notification>, which carries the

@@ -1,20 +1,23 @@
 import { useState } from "react";
 import { ExternalLink, RefreshCw } from "lucide-react";
 import { PROVIDER_INFO, type AgentAccount, type Provider, type ProviderStatus, type UsageSnapshot } from "@crosstalk/shared";
-import { SidebarButton } from "./ChatSidebar";
 import { api } from "../api";
 import { accountKey } from "../accounts";
 import { useStore } from "../store";
 import { ProviderAvatar, timeAgo, useInterval } from "../ui";
 import { usageCards, usageResetLine, usageShareText } from "../usageWords";
 
-export function UsagePage() {
+/**
+ * The plan meters, drawn right in Settings → Usage & costs (once a screen of its own behind a button): how much of
+ * each plan's limits your agents have used, per account, with Refresh. `#/usage` lands on that page.
+ */
+export function UsageMeters() {
   const usage = useStore((s) => s.usage);
   const providers = useStore((s) => s.providers);
   const accounts = useStore((s) => s.accounts);
   const toast = useStore((s) => s.toast);
   const [busy, setBusy] = useState(false);
-  // The countdowns move on while the page is open, and a reset that goes by says so (the hub's next look is up to 15 minutes later).
+  // The countdowns move on while the page is open, and a reset that goes by says so (the machine's next look is up to 15 minutes later).
   const [now, setNow] = useState(() => Date.now());
   useInterval(() => setNow(Date.now()), 30_000);
   const refresh = async () => {
@@ -30,39 +33,26 @@ export function UsagePage() {
   };
   const shown = usageCards(usage, accounts, providers);
   return (
-    <>
-      <header className="topbar" data-tauri-drag-region>
-        <SidebarButton />
-        <div className="titles">
-          <h1>Usage</h1>
-          <div className="sub">How much of each plan's limits your agents have used</div>
+    <section aria-label="Plan limits" className="usage-meters">
+      {shown.length ? (
+        <div className="grid-2">
+          {shown.map(({ key, provider }) => (
+            <UsageCard key={key} provider={provider} label={accounts[key]?.label ?? (key === provider ? "Main" : "Account")} service={accounts[key]?.kind === "endpoint"} u={usage[key]} now={now} />
+          ))}
         </div>
+      ) : (
+        <div className="card usage-none">
+          <div style={{ fontWeight: 600 }}>No usage yet</div>
+          <p className="help" style={{ marginBottom: 0 }}>Plan limits show up once an agent is signed in. They update after each reply and every few minutes.</p>
+        </div>
+      )}
+      <div className="row wrap usage-foot">
+        <p className="help">Each account has its own limits. A chat uses the plan of the account picked for it.</p>
         <button className="btn small" onClick={refresh} disabled={busy}>
-          <RefreshCw size={14} className={busy ? "spin" : ""} /> Refresh
+          <RefreshCw size={14} className={busy ? "spin" : ""} aria-hidden /> {busy ? "Refreshing…" : "Refresh"}
         </button>
-      </header>
-      <div className="page">
-        <div className="page-inner">
-          {shown.length ? (
-            <div className="grid-2">
-              {shown.map(({ key, provider }) => (
-                <UsageCard key={key} provider={provider} label={accounts[key]?.label ?? (key === provider ? "Default account" : "Account")} service={accounts[key]?.kind === "endpoint"} u={usage[key]} now={now} />
-              ))}
-            </div>
-          ) : (
-            <div className="empty" style={{ minHeight: 300 }}>
-              <div>
-                <div className="big">No usage yet</div>
-                <p className="muted small">Usage shows up once an agent is signed in. Limits update after each turn and every few minutes.</p>
-              </div>
-            </div>
-          )}
-          <p className="help" style={{ marginTop: 16 }}>
-            Usage is tracked separately for each account. Each build or review uses the plan of the account selected for that agent.
-          </p>
-        </div>
       </div>
-    </>
+    </section>
   );
 }
 
@@ -101,7 +91,7 @@ export function UsageCard({ provider, label, service = false, u, now }: { provid
           );
         })
       ) : (
-        <p className="muted small">{u?.note ?? (service ? "This service doesn't report limits to Crosstalk. What it costs is under Costs." : "Limits appear after the agent's first turn.")}</p>
+        <p className="muted small">{u?.note ?? (service ? "This account doesn't report limits to Crosstalk. What it costs is under Costs." : "Limits appear after the agent's first reply.")}</p>
       )}
       {u?.credits && <div className="small">Credits: {u.credits}</div>}
       {u?.note && u.windows.length > 0 && <div className="tiny muted" style={{ marginTop: 6, whiteSpace: "pre-wrap" }}>{u.note}</div>}

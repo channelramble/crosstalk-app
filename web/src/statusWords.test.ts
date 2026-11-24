@@ -19,7 +19,7 @@ test("retrying: what's wrong and how far it got, in the attention style", () => 
 test("starting, compacting, reading and finishing helpers say so instead of Thinking or Working", () => {
   expect(statusWords(member("thinking", "Starting Claude Code"), [], NOW).text).toBe("Starting Claude Code");
   expect(statusWords(member("thinking", "Starting Codex", "codex"), [], NOW).text).toBe("Starting Codex");
-  expect(statusWords(member("working", "Compacting the conversation", "codex"), [], NOW).text).toBe("Compacting the conversation");
+  expect(statusWords(member("working", "Compacting the conversation", "codex"), [], NOW).text).toBe("Summarizing the earlier messages");
   expect(statusWords(member("thinking", "Reading your message"), [], NOW).text).toBe("Reading your message");
   expect(statusWords(member("working", "Finishing helpers before your new settings apply"), [], NOW).text).toBe("Finishing helpers before your new settings apply");
   // An older hub's wording.
@@ -29,6 +29,8 @@ test("starting, compacting, reading and finishing helpers say so instead of Thin
   // Plain states.
   expect(statusWords(member("thinking", "Thinking"), [], NOW).text).toBe("Thinking");
   expect(statusWords(member("queued"), [], NOW).text).toBe("Starting…");
+  // Held back by the hub's memory guard: it says what it waits for, not that it is starting.
+  expect(statusWords(member("queued", "Waiting for memory"), [], NOW)).toEqual({ text: "Waiting for memory", note: null, attention: false });
   expect(statusWords(member("approval", "npm test"), [], NOW)).toEqual({ text: "Waiting for your approval", note: null, attention: true });
   expect(statusWords(member("approval", "Asks: Which database?"), [], NOW).text).toBe("Has a question for you");
 });

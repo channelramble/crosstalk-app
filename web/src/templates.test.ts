@@ -125,7 +125,7 @@ test("New chat says what of a picked template it doesn't use, and why", () => {
   expect(templateNote(template({ agent: "codex", model: "gpt-linux" }), { ...here, ownMachine: false }, "Linux box")).toBe("Its model is for Linux box, so yours is used here.");
   expect(templateNote(template({ folder: "/home/me/site" }), { ...here, ownMachine: false }, "Linux box")).toBe("Its folder is for Linux box, so yours is used here.");
   // Its model needs the main sign-in, which isn't signed in; with its own account, it doesn't.
-  expect(templateNote(deploy, { ...here, mainReady: false }, "Mac mini")).toBe("Its model is for Codex's main sign-in, which isn't signed in here, so yours is used.");
+  expect(templateNote(deploy, { ...here, mainReady: false }, "Mac mini")).toBe("Its model is for Codex's main account, which isn't signed in here, so yours is used.");
   expect(templateNote(template({ agent: "codex", account: "work", model: "m" }), { ...here, mainReady: false }, "Mac mini")).toBeNull();
 });
 
@@ -143,7 +143,7 @@ test("an edit saves only what it changed; the agent goes with its account, model
 test("a change that didn't happen says why: an older Crosstalk, a machine out of reach, or the hub's own words", () => {
   expect(templateProblem(new ApiError(404, "not found"), "Linux box")).toEqual({ why: "older", text: "Update Crosstalk on Linux box to keep templates there." });
   expect(olderHub("Mac mini")).toBe("Update Crosstalk on Mac mini to keep templates there.");
-  expect(templateProblem(new ApiError(0, "Can't reach the hub."), "Linux box")).toEqual({ why: "down", text: "Can't reach Linux box. Try again when it's back." });
+  expect(templateProblem(new ApiError(0, "Can't reach the machine."), "Linux box")).toEqual({ why: "down", text: "Can't reach Linux box. Try again when it's back." });
   const gone = "That template is gone. It may have been deleted on another device.";
   expect(templateProblem(new ApiError(404, gone, "no_template"), "Mac mini")).toEqual({ why: "other", text: gone });
   expect(templateProblem(new ApiError(401, "unauthorized"), "Linux box").text).toBe("This device was signed out of Linux box. Add it again in Settings → Machines.");

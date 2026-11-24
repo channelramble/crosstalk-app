@@ -174,7 +174,9 @@ it("a tool call written out as text is taken out of the reply and asked for agai
   const home = folder();
   const dsml = "<｜DSML｜tool_calls>\n<｜DSML｜invoke name=\"read\">\n<｜DSML｜parameter name=\"path\" string=\"true\">a.txt</｜DSML｜parameter>\n</｜DSML｜invoke>\n</｜DSML｜tool_calls>";
   const same = { calls: [{ name: "shell", args: { command: "true", description: "again" } }] };
-  const fake = service([{ text: `Let me read it.\n${dsml}` }, same, same, same, same, same, same, { text: "Going another way." }]);
+  // What the model says once it's told is scripted twice: where the command ends sooner (Linux), OpenCode has asked the
+  // model again by the time the stop reaches it, and that request's answer is dropped with it.
+  const fake = service([{ text: `Let me read it.\n${dsml}` }, same, same, same, same, same, same, { text: "Going another way." }, { text: "Going another way." }]);
   const d = driver(ctxFor(fake, cwd, home), home);
   const { sink, out } = sinkFor();
   expect(await d.runTurn(turn("Read a.txt"), sink)).toEqual({ ok: true });
@@ -483,7 +485,7 @@ it("the service's errors in plain words: the key, Cloudflare's check, money, an 
     await d.dispose();
     return { r, out: s.out };
   };
-  expect((await run([], { key: "abl_wrong" })).r).toEqual({ ok: false, error: "Refuseless refused the key — check it in Settings → AI services, then tap Try again." });
+  expect((await run([], { key: "abl_wrong" })).r).toEqual({ ok: false, error: "Refuseless refused the key — check it in Settings → Accounts, then tap Try again." });
   expect((await run([], { challenge: true })).r.error).toContain("Cloudflare check answered instead of its API");
   expect((await run([{ status: 402, code: "insufficient_credits", error: "Out of credits." }])).r.error).toContain("isn't enough money in the account");
   expect((await run([{ status: 404, code: "model_not_found", error: "Unknown model 'x'." }])).r.error).toContain("doesn't have the model");
@@ -516,8 +518,8 @@ it("/compact summarises the conversation through OpenCode's own command", async 
   expect(await d.runTurn(turn("One"), sinkFor().sink)).toEqual({ ok: true });
   const { sink, out } = sinkFor();
   expect(await d.runTurn(turn("/compact"), sink)).toEqual({ ok: true });
-  expect(out.text).toBe("Done: the conversation so far is summarised, and the chat goes on from the summary.");
-  expect(out.activities).toEqual([{ kind: "notice", title: "Summarising the conversation so far", detail: "", status: "done" }]);
+  expect(out.text).toBe("Done: the chat so far is summarised, and it goes on from the summary.");
+  expect(out.activities).toEqual([{ kind: "notice", title: "Summarising the chat so far", detail: "", status: "done" }]);
   expect(await d.runTurn(turn("Two"), sinkFor().sink)).toEqual({ ok: true });
   expect(JSON.stringify(fake.state.chats.at(-1)!.messages)).toContain("SUMMARY of the work");
 }, TIMEOUT);
@@ -901,9 +903,12 @@ it("through the hub: a hub going down during a chat's first reply leaves nothing
   second.engine.postHumanMessage(room.id, "Carry on", "Phone");
   await second.engine.whenIdle();
   const rows = second.store.db.query("SELECT input_tokens AS input, output_tokens AS output FROM spend_ledger").all() as { input: number; output: number }[];
-  expect(rows.reduce((n, r) => n + r.input, 0)).toBe(40500);
-  expect(rows.reduce((n, r) => n + r.output, 0)).toBe(4050);
-  expect(second.store.getMemberSession(member.id).opencodeTokens).toMatchObject({ input: 40500, output: 4050 });
+  const input = rows.reduce((n, r) => n + r.input, 0);
+  const output = rows.reduce((n, r) => n + r.output, 0);
+  // The step the restart cut off (1000 in, 100 out) counts when OpenCode wrote it down before it went, as it does on
+  // Linux, and not when it didn't: either way nothing is left out and nothing is counted twice.
+  expect([[40500, 4050], [41500, 4150]]).toContainEqual([input, output]);
+  expect(second.store.getMemberSession(member.id).opencodeTokens).toMatchObject({ input, output });
 }, TIMEOUT);
 
 it("through the hub: a message OpenCode has read can't be taken back, and the words say what to do instead of what it can't", async () => {

@@ -450,7 +450,7 @@ export function askProblem(e: unknown): { text: string; fix: "limit" | "signin" 
   const err = (e ?? {}) as { status?: number; code?: string; message?: string };
   const message = typeof err.message === "string" ? err.message.trim() : String(e);
   const generic = !message || /^request failed \(\d+\)$/i.test(message);
-  if (err.status === 404 && (generic || /^not found\.?$/i.test(message))) return { text: "This hub can't do that yet. Update the hub on your computer, then try again.", fix: null };
+  if (err.status === 404 && (generic || /^not found\.?$/i.test(message))) return { text: "This machine can't do that yet. Update Crosstalk on it, then try again.", fix: null };
   switch (err.code) {
     case "budget":
       return { text: generic ? "That one reached its spending limit, so it can't answer. Raise the limit, or pick someone else." : message, fix: "limit" };
@@ -539,10 +539,8 @@ export function askPickerFor(c: Pick<AskChoice, "label" | "machine">): string {
   return c.machine ? `${agent} on ${theMachine(c.machine.name)}` : agent;
 }
 
-/** Why a row's model can't be picked here, in plain words with where to change it; null when it can (or nothing says). */
+/** Why a row's model can't be picked here, in plain words with what to do; null when it can (or nothing says). */
 export function fixedModelLine(c: Pick<AskChoice, "fixedModel" | "machine">): string | null {
-  const there = c.machine ? ` on ${theMachine(c.machine.name)}` : "";
-  if (c.fixedModel === "pool") return `The model pool runs one model at a time. To ask another, change it in Settings → Model pool${there}.`;
   if (c.fixedModel === "update") {
     const machine = theMachine(c.machine?.name ?? "that machine");
     return `To pick its model from here, update Crosstalk on ${machine}. Until then it answers with the model ${machine} uses.`;

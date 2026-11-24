@@ -1,4 +1,4 @@
-import { test, expect, noHorizontalOverflow } from "./fixtures";
+import { test, expect, noHorizontalOverflow, chatSettingsAll } from "./fixtures";
 import type { Page, APIRequestContext, WebSocketRoute } from "@playwright/test";
 import { join } from "node:path";
 const hub = "http://127.0.0.1:8451";
@@ -148,7 +148,7 @@ test("Delete chat asks twice, and Cancel at the second step keeps the chat", asy
   const alerts = systemAlerts(page);
   try {
     await s.open();
-    await page.getByRole("button", { name: "Chat settings", exact: true }).click();
+    await chatSettingsAll(page);
     const settings = page.getByRole("dialog", { name: "Chat settings", exact: true });
     await settings.getByRole("button", { name: "Delete chat", exact: true }).click();
     const first = page.getByRole("dialog", { name: "Delete this chat?", exact: true });
@@ -181,7 +181,7 @@ test("Delete chat says it stops the agent while it works", async ({ page, reques
   s.history.turns.push(s.turn("run", { status: "running" }));
   try {
     await s.open();
-    await page.getByRole("button", { name: "Chat settings", exact: true }).click();
+    await chatSettingsAll(page);
     await page.getByRole("dialog", { name: "Chat settings", exact: true }).getByRole("button", { name: "Delete chat", exact: true }).click();
     const first = page.getByRole("dialog", { name: "Delete this chat?", exact: true });
     await expect(first).toContainText("Deleting stops Claude Code.");
@@ -198,17 +198,17 @@ test("Start fresh asks in the app, not in a system alert", async ({ page, reques
   const alerts = systemAlerts(page);
   try {
     await s.open();
-    await page.getByRole("button", { name: "Chat settings", exact: true }).click();
+    await chatSettingsAll(page);
     await page.getByRole("dialog", { name: "Chat settings", exact: true }).getByRole("button", { name: "Start fresh", exact: true }).click();
-    const ask = page.getByRole("dialog", { name: "Start a fresh session?", exact: true });
-    await expect(ask).toContainText("Claude Code forgets this conversation and starts over. The messages here stay.");
+    const ask = page.getByRole("dialog", { name: "Start Claude Code fresh?", exact: true });
+    await expect(ask).toContainText("Claude Code forgets what was said so far and starts over. The messages here stay.");
     await page.screenshot({ ...shot("start-fresh.png"), animations: "disabled" });
     // Cancel keeps the session.
     await ask.getByRole("button", { name: "Cancel", exact: true }).click();
     await expect(ask).toHaveCount(0);
     expect(resets).toEqual([]);
     await page.getByRole("dialog", { name: "Chat settings", exact: true }).getByRole("button", { name: "Start fresh", exact: true }).click();
-    await page.getByRole("dialog", { name: "Start a fresh session?", exact: true }).getByRole("button", { name: "Start fresh", exact: true }).click();
+    await page.getByRole("dialog", { name: "Start Claude Code fresh?", exact: true }).getByRole("button", { name: "Start fresh", exact: true }).click();
     await expect.poll(() => resets.length).toBe(1);
     await expect(page.getByRole("dialog")).toHaveCount(0);
     expect(alerts).toEqual([]);
@@ -311,7 +311,7 @@ test("with a second machine saved on this device, the chat header names the mach
     expect(m!.x + m!.width).toBeLessThanOrEqual(line!.x + line!.width + 1);
     await expect(page.locator(".empty")).toContainText(`on ${name}.`);
     await page.screenshot({ ...shot("chat-header-machine.png"), animations: "disabled" });
-    await page.getByRole("button", { name: "Chat settings", exact: true }).click();
+    await chatSettingsAll(page);
     const folder = page.getByRole("dialog", { name: "Chat settings", exact: true }).locator(".folder-machine");
     await expect(folder).toHaveText(` on ${name}`);
     await folder.scrollIntoViewIfNeeded();
@@ -369,10 +369,10 @@ test("the newest failed reply offers Try again, and older failures keep Take bac
   } finally { await s.cleanup(); }
 });
 
-test("a message the agent never read shows Not answered with Answer now", async ({ page, request, token }) => {
+test("a message the agent never read shows Not answered with Try again", async ({ page, request, token }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   const s = await scenario(page, request, token);
-  // Stop everything ended the reply, and the message you'd sent during it was left as it was.
+  // Stop ended the reply, and the message you'd sent during it was left as it was.
   const build = s.message("human", "Build the release");
   const stopped = s.message("agent", "Building the release…", "run", "stopped");
   const waiting = s.message("human", "Wait, use the staging database");
@@ -385,10 +385,19 @@ test("a message the agent never read shows Not answered with Answer now", async 
     const mine = page.locator(".your-msg").filter({ hasText: "staging database" });
     const note = mine.locator(".not-answered");
     await expect(note).toContainText("Not answered");
-    // Only on the message nothing answered.
+    // Only on the message nothing answered, and one way on: no Answer now, no Send now.
     await expect(page.locator(".not-answered")).toHaveCount(1);
-    await page.screenshot({ ...shot("not-answered.png"), animations: "disabled" });
-    await note.getByRole("button", { name: "Answer now", exact: true }).click();
+    await expect(page.getByRole("button", { name: /^(Answer now|Send now)$/ })).toHaveCount(0);
+    const again = note.getByRole("button", { name: "Try again", exact: true });
+    // A finger's tap, at a phone's width and at the narrowest.
+    for (const width of [390, 320]) {
+      await page.setViewportSize({ width, height: 844 });
+      await expect(again).toBeVisible();
+      expect((await again.boundingBox())!.height).toBeGreaterThanOrEqual(32);
+      await noHorizontalOverflow(page);
+      await page.screenshot({ ...shot(`not-answered-${width}.png`), animations: "disabled" });
+    }
+    await again.click();
     await expect.poll(() => retries.length).toBe(1);
     // Once the agent has read it, the note goes.
     s.send({ t: "member", member: { ...s.member, status: "thinking", readSeq: waiting.seq } });
@@ -410,7 +419,7 @@ test("Stop shows Stopping… until the reply ends", async ({ page, request, toke
   const stops: unknown[] = [];
   await page.route(`**/api/rooms/${s.room.id}/stop`, async (r) => {
     stops.push(r.request().postDataJSON());
-    if (fail) return r.fulfill({ status: 503, json: { error: "The hub is restarting." } });
+    if (fail) return r.fulfill({ status: 503, json: { error: "Crosstalk is restarting." } });
     await held;
     await r.fulfill({ json: { ok: true } });
   });
@@ -439,7 +448,9 @@ test("Stop shows Stopping… until the reply ends", async ({ page, request, toke
   } finally { release(); await s.cleanup(); }
 });
 
-test("with a message waiting, Stop asks which", async ({ page, request, token }) => {
+// (What a hub from before the one rule gets, Stop asking which among it, and the lines under a message with Interrupt:
+// web/e2e/sendNow.spec.ts.)
+test("with a message waiting behind the reply, or handed to it and not read yet, Stop stops everything at once: it doesn't ask which", async ({ page, request, token }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   const s = await scenario(page, request, token);
   Object.assign(s.member, { status: "working", statusDetail: null });
@@ -447,80 +458,33 @@ test("with a message waiting, Stop asks which", async ({ page, request, token })
   const reply = s.message("agent", "Migrating", "run", "streaming");
   const wait = s.message("human", "Wait, use the staging database");
   s.history.messages.push(ask, reply, wait);
+  // Waiting behind a reply that can't take it.
   s.history.turns.push(s.turn("run", { status: "running", triggerMessageId: ask.id, replyMessageId: reply.id }), s.turn("next", { status: "queued", triggerMessageId: wait.id }));
   s.member.readSeq = reply.seq;
   const stops = await s.answer("POST", `/api/rooms/${s.room.id}/stop`);
   try {
     await s.open();
+    await expect(page.locator(".msg-quiet")).toContainText("Goes when this reply ends.");
     await page.getByRole("button", { name: "Stop", exact: true }).click();
-    const which = page.getByRole("dialog", { name: "Stop Claude Code?", exact: true });
-    await expect(which).toContainText("Your message is waiting for this reply to finish.");
-    await page.screenshot({ ...shot("stop-asks-which.png"), animations: "disabled" });
-    await which.getByRole("button", { name: /^Stop and answer my message/ }).click();
     await expect.poll(() => stops.length).toBe(1);
-    expect(stops[0]).toEqual({ keepWaiting: true });
-    await expect(which).toHaveCount(0);
-    // Or everything (it's still working here: nothing told the page otherwise).
-    await page.getByRole("button", { name: "Stop", exact: true }).click();
-    await page.getByRole("dialog", { name: "Stop Claude Code?", exact: true }).getByRole("button", { name: /^Stop everything/ }).click();
-    await expect.poll(() => stops.length).toBe(2);
-    expect(stops[1]).toEqual({});
-  } finally { await s.cleanup(); }
-});
+    // Everything: nothing is kept to be answered next. (Interrupt, under the message, is the way to be answered sooner.)
+    expect(stops[0]).toEqual({});
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await page.screenshot({ ...shot("stop-stops-at-once.png"), animations: "disabled" });
 
-test("Stop asks about a message the reply has been handed and hasn't read too: it may have gone in by itself", async ({ page, request, token }) => {
-  await page.setViewportSize({ width: 390, height: 844 });
-  const s = await scenario(page, request, token);
-  Object.assign(s.member, { status: "working", statusDetail: null });
-  const ask = s.message("human", "Migrate the database");
-  const reply = s.message("agent", "Migrating", "run", "streaming");
-  const also = s.message("human", "Also use the staging database");
-  s.history.messages.push(ask, reply, also);
-  s.history.turns.push(s.turn("run", { status: "running", triggerMessageId: ask.id, replyMessageId: reply.id, unread: [also.id] }));
-  s.member.readSeq = also.seq;
-  const stops = await s.answer("POST", `/api/rooms/${s.room.id}/stop`);
-  try {
-    await s.open();
-    await page.getByRole("button", { name: "Stop", exact: true }).click();
-    const which = page.getByRole("dialog", { name: "Stop Claude Code?", exact: true });
-    await expect(which).toContainText("Claude Code hasn't read your message yet.");
-    await which.getByRole("button", { name: /^Stop and answer my message/ }).click();
-    await expect.poll(() => stops.length).toBe(1);
-    expect(stops[0]).toEqual({ keepWaiting: true });
-    await page.getByRole("button", { name: "Stop", exact: true }).click();
-    await page.getByRole("dialog", { name: "Stop Claude Code?", exact: true }).getByRole("button", { name: /^Stop everything/ }).click();
-    await expect.poll(() => stops.length).toBe(2);
-    expect(stops[1]).toEqual({});
-  } finally { await s.cleanup(); }
-});
-
-test("while helpers work, a one-agent chat's labels name its agent or its reply, with nothing to tap", async ({ page, request, token }) => {
-  await page.setViewportSize({ width: 390, height: 844 });
-  const s = await scenario(page, request, token);
-  Object.assign(s.member, { status: "working", statusDetail: null });
-  const ask = s.message("human", "Migrate the database");
-  const reply = s.message("agent", "Migrating", "run", "streaming");
-  const also = s.message("human", "Also use the staging database");
-  s.history.messages.push(ask, reply, also);
-  s.history.tasks[s.member.id] = [{ id: "helper1", kind: "local_agent", description: "Review the plan", status: "running", background: true, startedAt: Date.now(), tokens: 1000, toolUses: 2 }];
-  // Handed to the reply: it reads it at its next step.
-  s.history.turns.push(s.turn("run", { status: "running", triggerMessageId: ask.id, replyMessageId: reply.id, unread: [also.id] }));
-  s.member.readSeq = also.seq;
-  try {
-    await s.open();
-    await expect(page.locator(".msg-quiet")).toHaveText(/^Claude Code reads this (after the current step|at its next step)\.$/);
-    await expect(page.getByRole("button", { name: "Read it now", exact: true })).toHaveCount(0);
-    // Waiting behind a reply that can't take it: it goes when that ends.
-    s.history.turns.splice(0, 1, s.turn("run", { status: "running", triggerMessageId: ask.id, replyMessageId: reply.id }), s.turn("next", { status: "queued", triggerMessageId: also.id }));
-    s.member.readSeq = reply.seq;
+    // Handed to the reply, which hasn't read it: the same.
+    s.history.turns.splice(0, 2, s.turn("run", { status: "running", triggerMessageId: ask.id, replyMessageId: reply.id, unread: [wait.id] }));
+    s.member.readSeq = wait.seq;
     await page.reload();
-    await expect(page.locator(".msg-quiet")).toHaveText("Goes when this reply ends.");
-    await expect(page.locator(".send-now")).toHaveCount(0);
-    await noHorizontalOverflow(page);
+    await expect(page.locator(".msg-quiet")).toContainText("Claude Code reads this at its next step.");
+    await page.getByRole("button", { name: "Stop", exact: true }).click();
+    await expect.poll(() => stops.length).toBe(2);
+    expect(stops[1]).toEqual({});
+    await expect(page.getByRole("dialog")).toHaveCount(0);
   } finally { await s.cleanup(); }
 });
 
-test("while only its helpers keep the agent working so a change can apply, a failed reply keeps Try again and a message nothing answered keeps Answer now", async ({ page, request, token }) => {
+test("while only its helpers keep the agent working so a change can apply, a failed reply and a message nothing answered both keep Try again", async ({ page, request, token }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   const s = await scenario(page, request, token);
   Object.assign(s.member, { status: "working", statusDetail: "Finishing helpers before your new settings apply", held: { change: "settings", helpers: true } });
@@ -541,8 +505,10 @@ test("while only its helpers keep the agent working so a change can apply, a fai
     s.history.turns.splice(0);
     s.member.readSeq = failed.seq;
     await page.reload();
-    await page.getByRole("button", { name: "Answer now", exact: true }).click();
+    await expect(page.locator(".chat-status")).toContainText("Finishing helpers before your new settings apply");
+    await page.locator(".your-msg").filter({ hasText: "staging database" }).locator(".not-answered").getByRole("button", { name: "Try again", exact: true }).click();
     await expect.poll(() => retries.length).toBe(2);
+    await expect(page.getByRole("button", { name: "Answer now", exact: true })).toHaveCount(0);
   } finally { await s.cleanup(); }
 });
 
@@ -584,7 +550,7 @@ test("Rewind while the agent works offers Stop in the dialog", async ({ page, re
 test("a reply refused because the chat is open in the Claude app offers Try again, and Take back just removes the message", async ({ page, request, token }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   const s = await scenario(page, request, token);
-  const refused = "This conversation is open in the Claude app right now. Close it there, then tap Try again. Or duplicate this chat to go on in a copy.";
+  const refused = "This chat is open in the Claude app right now. Close it there, then tap Try again. Or duplicate this chat to go on in a copy.";
   const ask = s.message("human", "Fix the login page");
   const failed = s.message("agent", `⚠️ ${refused}`, "refused", "error");
   s.history.messages.push(ask, failed);
@@ -623,7 +589,7 @@ test("Unsend asks twice when a failed reply goes with it, and offers Stop while 
   // A reply that failed before Claude Code got the message: the hub gave it back (past what the agent has read).
   const ask = s.message("human", "Fix the login page");
   const failed = s.message("agent", "⚠️ Couldn't start claude: spawn ENOENT", "refused", "error");
-  // Then, in a later reply that's running, a message Send now handed to it: read, with nothing after it yet.
+  // Then, in a later reply that's running, a message that went into it: read, with nothing after it yet.
   const build = s.message("human", "Build it");
   const building = s.message("agent", "Building", "run", "streaming");
   const more = s.message("human", "and run the tests");
@@ -654,7 +620,7 @@ test("Unsend asks twice when a failed reply goes with it, and offers Stop while 
     await expect.poll(() => unsent).toEqual([{ ifUnread: true }]);
     await expect(sure).toHaveCount(0);
 
-    // The message Send now handed over is read, and Claude Code is working on it: unsending it is a rewind, and the
+    // The message that went into the reply is read, and Claude Code is working on it: unsending it is a rewind, and the
     // dialog offers Stop first (no alert, then a refusal).
     s.send({ t: "member", member: { ...s.member, readSeq: more.seq } });
     const handed = page.locator(".your-msg").filter({ hasText: "and run the tests" });
@@ -673,7 +639,7 @@ test("Unsend asks twice when a failed reply goes with it, and offers Stop while 
   } finally { await s.cleanup(); }
 });
 
-test("Start fresh says it stops the agent, and that a message it hasn't read waits for Answer now", async ({ page, request, token }) => {
+test("Start fresh says it stops the agent, and that a message it hasn't read waits for Try again", async ({ page, request, token }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   const s = await scenario(page, request, token);
   Object.assign(s.member, { status: "working", statusDetail: null });
@@ -686,10 +652,10 @@ test("Start fresh says it stops the agent, and that a message it hasn't read wai
   const resets = await s.answer("POST", `/api/members/${s.member.id}/reset`);
   try {
     await s.open();
-    await page.getByRole("button", { name: "Chat settings", exact: true }).click();
+    await chatSettingsAll(page);
     await page.getByRole("dialog", { name: "Chat settings", exact: true }).getByRole("button", { name: "Start fresh", exact: true }).click();
-    const ask2 = page.getByRole("dialog", { name: "Start a fresh session?", exact: true });
-    await expect(ask2).toContainText("Claude Code forgets this conversation and starts over. The messages here stay. Starting fresh stops Claude Code now. A message it hasn't read yet isn't answered until you tap Answer now under it.");
+    const ask2 = page.getByRole("dialog", { name: "Start Claude Code fresh?", exact: true });
+    await expect(ask2).toContainText("Claude Code forgets what was said so far and starts over. The messages here stay. Starting fresh stops Claude Code now. A message it hasn't read yet isn't answered until you tap Try again.");
     await page.screenshot({ ...shot("start-fresh-working.png"), animations: "disabled" });
     await ask2.getByRole("button", { name: "Start fresh", exact: true }).click();
     await expect.poll(() => resets.length).toBe(1);

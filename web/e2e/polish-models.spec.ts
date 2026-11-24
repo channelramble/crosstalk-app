@@ -1,6 +1,6 @@
 import type { Locator, Page, Route } from "@playwright/test";
 import type { CatalogModel, CatalogSearch, LocalServer, ServiceTestResult } from "@crosstalk/shared";
-import { test, expect, noHorizontalOverflow } from "./fixtures";
+import { test, expect, noHorizontalOverflow, addAnotherService } from "./fixtures";
 
 // Models and AI services, the awkward paths: a server added while its row is still on screen, the picking that is
 // thrown away without being asked about, a model name the sheet drops without a word, a catalogue search that says
@@ -120,12 +120,12 @@ async function hub(page: Page) {
 
 const settings = async (page: Page, { small = true } = {}) => {
   if (small) await phone(page);
-  await page.goto("/#/settings");
-  await expect(page.getByRole("heading", { name: "AI services", exact: true })).toBeVisible();
+  await page.goto("/#/settings/accounts");
+  await expect(page.getByRole("region", { name: "Accounts", exact: true })).toBeVisible();
 };
-const sheet = (page: Page) => page.getByRole("dialog", { name: "Add an AI service", exact: true });
+const sheet = (page: Page) => page.getByRole("dialog", { name: /^Add (another service|a model on this machine)$/ });
 const openSheet = async (page: Page, service: string) => {
-  await page.getByRole("button", { name: "Add an AI service", exact: true }).click();
+  await addAnotherService(page);
   const dialog = sheet(page);
   await dialog.getByRole("button", { name: new RegExp(`^${service}`) }).click();
   return dialog;
@@ -169,7 +169,7 @@ test("closing the Add sheet with models picked asks first, like closing it with 
   const h = await hub(page);
   h.test = () => LOCAL;
   await settings(page);
-  const dialog = await openSheet(page, "A server on this machine");
+  const dialog = await openSheet(page, "A model on this machine");
   await dialog.getByRole("button", { name: "Test", exact: true }).click();
   await expect(dialog.getByText("3 models found", { exact: true })).toBeVisible();
   await dialog.getByRole("checkbox", { name: /gemma3:4b/ }).uncheck();
@@ -191,8 +191,8 @@ test("a typed model name with a space in it says what's wrong instead of vanishi
   const h = await hub(page);
   h.test = () => answer({ protocols: { responses: "yes", messages: "no", chat: "no" }, works: [{ provider: "codex", via: "responses" }] });
   await settings(page);
-  const dialog = await openSheet(page, "Another server");
-  await dialog.getByLabel("Server address", { exact: true }).fill("https://llm.example.com");
+  const dialog = await openSheet(page, "Something else");
+  await dialog.getByLabel("Address", { exact: true }).fill("https://llm.example.com");
   await dialog.getByRole("button", { name: "Test", exact: true }).click();
   await expect(dialog.getByText("No models listed", { exact: true })).toBeVisible();
 
@@ -233,7 +233,7 @@ test("what a check found is read out: its live region is on the screen before th
   const h = await hub(page);
   h.test = () => LOCAL;
   await settings(page);
-  const dialog = await openSheet(page, "A server on this machine");
+  const dialog = await openSheet(page, "A model on this machine");
   await expect(dialog.locator("[aria-live]")).toHaveCount(1);
 
   await dialog.getByRole("button", { name: "Test", exact: true }).click();

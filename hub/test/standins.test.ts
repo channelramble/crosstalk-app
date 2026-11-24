@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { freePort, installScript } from "./fixtures/pool-fakes";
+import { freePort, installScript } from "./fixtures/local-fakes";
 import { currentTest, endStarted, noted, running, testOf, testsOf } from "./standins";
 
 // The check that no hub test leaves a process running (standins.ts, which preload.ts installs around every test), and
@@ -46,6 +46,14 @@ const folder = () => {
   return dir;
 };
 const IDLE = "setInterval(() => {}, 60_000)";
+/**
+ * For a run of `bun test` inside a test: what a person's terminal gets. On GitHub, `bun test` says every failure a
+ * second time as an annotation (`::error …`), which the counts of what was said below would take for another failure.
+ */
+const plainEnv = () => {
+  const { GITHUB_ACTIONS: _github, ...env } = process.env;
+  return env as Record<string, string>;
+};
 
 test("every process a test starts is noted, node:child_process's too, with what it runs and the line that started it", async () => {
   const grouped = spawn(process.execPath, ["-e", IDLE], { detached: true, stdio: "ignore" });
@@ -94,7 +102,7 @@ test("leaves a plain child", () => {
   );
   try {
     // A run of its own (the folder has no bunfig.toml), with the hub tests' preload: the real hooks, around real tests.
-    const run = Bun.spawn([process.execPath, "test", "--preload", join(import.meta.dir, "preload.ts"), "./leaky.test.ts"], { cwd: dir, stdout: "pipe", stderr: "pipe" });
+    const run = Bun.spawn([process.execPath, "test", "--preload", join(import.meta.dir, "preload.ts"), "./leaky.test.ts"], { cwd: dir, env: plainEnv(), stdout: "pipe", stderr: "pipe" });
     const [out, err] = await Promise.all([new Response(run.stdout).text(), new Response(run.stderr).text()]);
     const said = out + err;
     expect(await run.exited).toBe(1);
@@ -137,7 +145,7 @@ test("one that leaves its own", () => {
 `,
   );
   try {
-    const run = Bun.spawn([process.execPath, "test", "--preload", join(import.meta.dir, "preload.ts"), "./late.test.ts"], { cwd: dir, stdout: "pipe", stderr: "pipe" });
+    const run = Bun.spawn([process.execPath, "test", "--preload", join(import.meta.dir, "preload.ts"), "./late.test.ts"], { cwd: dir, env: plainEnv(), stdout: "pipe", stderr: "pipe" });
     const [out, err] = await Promise.all([new Response(run.stdout).text(), new Response(run.stderr).text()]);
     const said = out + err;
     expect(await run.exited).toBe(1);
@@ -218,7 +226,6 @@ setInterval(() => {}, 60_000);
   const servers = [
     { argv: [join(FIXTURES, "fake-comfy"), "--port", String(freePort())], env: {}, log: "fake-comfy.log" },
     { argv: [join(FIXTURES, "fake-llama-server"), "-m", join(dir, "model.gguf"), "--port", String(freePort())], env: { FAKE_LLAMA_LOG: join(dir, "llama.log") }, log: "llama.log" },
-    { argv: [join(FIXTURES, "fake-ggml-rpc-server"), "-p", String(freePort())], env: { FAKE_RPC_LOG: join(dir, "rpc.log") }, log: "rpc.log" },
     { argv: [ollama, "serve"], env: { OLLAMA_HOST: `127.0.0.1:${freePort()}` }, log: "ollama.log" },
   ];
   const runs = servers.map((s) => Bun.spawn([process.execPath, join(dir, "run.ts"), JSON.stringify(s)], { stdout: "ignore", stderr: "ignore" }));
@@ -227,7 +234,7 @@ setInterval(() => {}, 60_000);
   expect(await until(() => servers.every((s) => noteOf(s.log)), 10_000)).toBe(true);
   const pids = servers.map((s) => noteOf(s.log)!).flatMap((n) => [n.started ?? n.pid!, ...(n.runner ? [n.runner] : [])]);
   elsewhere.push(...pids);
-  expect(pids).toHaveLength(5);
+  expect(pids).toHaveLength(4);
   // While whoever started them runs, they run.
   await Bun.sleep(700);
   expect(pids.filter((p) => !alive(p))).toEqual([]);

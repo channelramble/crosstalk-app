@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { Check, Copy, Server, X } from "lucide-react";
-import { CHAT_PROVIDERS, PROVIDER_INFO, type ChatProvider, type HubSettings, type MachineInfo, type MachineInvite, type MachineInviteStatus } from "@crosstalk/shared";
+import { CHAT_PROVIDERS, PROVIDER_INFO, settingsPath, type ChatProvider, type HubSettings, type MachineInfo, type MachineInvite, type MachineInviteStatus } from "@crosstalk/shared";
 import { api, normalizeBaseUrl, pairDevice } from "../api";
 import { noteLinked } from "../linkedMachines";
 import { machineKey } from "../machines";
 import { canNavigate, showInSettings } from "../navigation";
 import { agentReady, hubStore, useMachines, useStore, type Machine } from "../store";
 import { AskTwiceDialog, copyText, thisDevice } from "../ui";
+import { ConfirmDialog, NameDialog } from "./SmallDialogs";
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 /** While a link's agents are connecting, the list is asked for again this often. */
@@ -19,11 +20,14 @@ const host = (url: string) => {
   }
 };
 
+/** The machine whose Open was just tapped: Settings opens anew for it, and its own things come into view (once). */
+let opened: string | null = null;
+
 /**
  * Settings → Machines: the machines whose chats this device shows. The hub this app was opened from keeps links to
  * the others, so a machine added on one device can be added on the others with one tap.
  */
-export function MachinesSection({ linuxSetup = 0 }: { linuxSetup?: number }) {
+export function MachinesSection() {
   const machines = useMachines((m) => m.list);
   const active = useStore((s) => s.active);
   const activate = useStore((s) => s.activate);
@@ -41,13 +45,17 @@ export function MachinesSection({ linuxSetup = 0 }: { linuxSetup?: number }) {
   // A machine just added: what's next there.
   const [added, setAdded] = useState<{ key: string; name: string } | null>(null);
   const [removingHome, setRemovingHome] = useState<Machine | null>(null);
+  // Asked in the app's own sheets: a machine to rename, to take off this device, or to unlink.
+  const [renaming, setRenaming] = useState<Machine | null>(null);
+  const [removing, setRemoving] = useState<Machine | null>(null);
+  const [unlinking, setUnlinking] = useState<MachineInfo | null>(null);
   const setup = useRef<HTMLDivElement>(null);
-  // Opened from elsewhere (the model pool's "Add a Linux machine"): show the Linux setup and bring it into view.
+  // Just opened from another machine's row: its own things, under its name, come into view.
   useEffect(() => {
-    if (!linuxSetup) return;
-    setMode("linux");
-    requestAnimationFrame(() => setup.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
-  }, [linuxSetup]);
+    if (opened !== active) return;
+    opened = null;
+    requestAnimationFrame(() => document.getElementById("machine-things")?.scrollIntoView({ block: "start" }));
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadLinked = () => {
     if (!home) return;
@@ -116,7 +124,7 @@ export function MachinesSection({ linuxSetup = 0 }: { linuxSetup?: number }) {
       case "signed-out":
         return (
           <span className="tiny" style={{ color: "var(--orange)" }}>
-            It no longer accepts {home.name}'s sign-in ·{" "}
+            It no longer accepts {home.name} ·{" "}
             <button className="link-btn" onClick={() => void relink(info)} disabled={!!busy}>
               {busy === info.id ? "Linking…" : "Link again"}
             </button>
@@ -184,7 +192,6 @@ export function MachinesSection({ linuxSetup = 0 }: { linuxSetup?: number }) {
     }
   };
   const unlink = async (info: MachineInfo) => {
-    if (!confirm(`Unlink ${info.name}? It keeps running and keeps its chats, but stops showing up here and on your other devices until you link it again. Agents there stop reaching chats here, and the other way round.`)) return;
     setBusy(info.id);
     try {
       await api("DELETE", `/api/machines/${encodeURIComponent(info.id)}`, undefined, home.conn);
@@ -192,6 +199,7 @@ export function MachinesSection({ linuxSetup = 0 }: { linuxSetup?: number }) {
       if (m) removeMachine(m.key);
       loadLinked();
     } catch (e) {
+      // The list on screen may be out of date (another device unlinked it): say why, and look again.
       failed(e);
     } finally {
       setBusy(null);
@@ -200,19 +208,18 @@ export function MachinesSection({ linuxSetup = 0 }: { linuxSetup?: number }) {
   const remove = (m: Machine) => {
     // The machine this app opens from is asked twice: getting it back takes a new pairing code.
     if (m.key === "") return setRemovingHome(m);
-    if (!confirm(`Remove ${m.name} from this device? Its chats stay on it; you can add it again here any time.`)) return;
-    removeMachine(m.key);
+    setRemoving(m);
   };
-  const rename = async (m: Machine) => {
-    const name = prompt("What should this machine be called?", m.name);
-    if (name === null) return;
-    try {
-      await api<HubSettings>("PUT", "/api/settings/hub", { machineName: name.trim() }, m.conn);
-      await hubStore(m.key)?.getState().refresh();
-      loadLinked();
-    } catch (e) {
-      toast("error", message(e));
-    }
+  const rename = async (m: Machine, name: string) => {
+    await api<HubSettings>("PUT", "/api/settings/hub", { machineName: name }, m.conn);
+    await hubStore(m.key)?.getState().refresh();
+    loadLinked();
+  };
+  /** Shows another machine's own things under the list: Settings opens anew for it, on this page, at them. */
+  const open = (m: Machine) => {
+    if (!canNavigate()) return;
+    opened = m.key;
+    activate(m.key);
   };
 
   return (
@@ -223,7 +230,7 @@ export function MachinesSection({ linuxSetup = 0 }: { linuxSetup?: number }) {
             <Server size={20} />
             <div className="row-text">
               <div className="title">
-                {m.name} {m.key === active && machines.length > 1 && <span className="pill blue">Showing</span>}
+                {m.name} {m.key === active && machines.length > 1 && <span className="pill blue">Open below</span>}
               </div>
               <div className="subtitle">
                 <span className={`machine-dot ${m.status === "open" ? "on" : m.status === "connecting" ? "wait" : ""}`} />
@@ -233,11 +240,11 @@ export function MachinesSection({ linuxSetup = 0 }: { linuxSetup?: number }) {
             </div>
             <div className="row-actions">
               {m.key !== active && (
-                <button className="btn small ghost" onClick={() => activate(m.key)}>
-                  Show
+                <button className="btn small" aria-label={`Open ${m.name}`} onClick={() => open(m)}>
+                  Open
                 </button>
               )}
-              <button className="btn small ghost" onClick={() => void rename(m)} disabled={m.status !== "open"}>
+              <button className="btn small ghost" onClick={() => setRenaming(m)} disabled={m.status !== "open"}>
                 Rename
               </button>
               {machines.length > 1 && (
@@ -260,7 +267,7 @@ export function MachinesSection({ linuxSetup = 0 }: { linuxSetup?: number }) {
               <button className="btn small primary" onClick={() => void addHere(info)} disabled={!!busy}>
                 {busy === info.id ? "Adding…" : "Add"}
               </button>
-              <button className="btn small ghost danger" onClick={() => void unlink(info)} disabled={!!busy}>
+              <button className="btn small ghost danger" onClick={() => setUnlinking(info)} disabled={!!busy}>
                 Unlink
               </button>
             </div>
@@ -277,7 +284,7 @@ export function MachinesSection({ linuxSetup = 0 }: { linuxSetup?: number }) {
       )}
       {added && <NextSteps machine={added.key} name={added.name} onClose={() => setAdded(null)} />}
       <p className="help" style={{ margin: "6px 0 10px" }}>
-        Each machine runs its own agents in its own folders. Chats from all of them show in the sidebar; screens like this one show the machine picked at the top.
+        Each machine runs its own agents in its own folders. Chats from all of them show in the chat list{machines.length > 1 ? "; a machine's own settings are under its name below" : ""}.
       </p>
       <div ref={setup} className="row wrap" style={{ gap: 8, scrollMarginTop: 12 }}>
         <button className={`btn small ${mode === "linux" ? "primary" : ""}`} onClick={() => setMode(mode === "linux" ? null : "linux")}>
@@ -302,10 +309,21 @@ export function MachinesSection({ linuxSetup = 0 }: { linuxSetup?: number }) {
           }}
         />
       )}
+      {renaming && <NameDialog title="Rename machine" label="What should this machine be called?" value={renaming.name} maxLength={40} onSave={(name) => rename(renaming, name)} onClose={() => setRenaming(null)} />}
+      {removing && (
+        <ConfirmDialog title={`Remove ${removing.name} from ${thisDevice()}?`} confirmLabel="Remove" onConfirm={() => removeMachine(removing.key)} onClose={() => setRemoving(null)}>
+          Its chats stay on it; you can add it again here any time.
+        </ConfirmDialog>
+      )}
+      {unlinking && (
+        <ConfirmDialog title={`Unlink ${unlinking.name}?`} confirmLabel="Unlink" workingLabel="Unlinking…" onConfirm={() => unlink(unlinking)} onClose={() => setUnlinking(null)}>
+          It keeps running and keeps its chats, but stops showing up here and on your other devices until you link it again. Agents there stop reaching chats here, and the other way round.
+        </ConfirmDialog>
+      )}
       {removingHome && (
         <AskTwiceDialog
           title={`Remove ${removingHome.name} from ${thisDevice()}?`}
-          sure={`To get ${removingHome.name} back, you'll need a pairing code from it: on a device that still has it, Settings → Pair a new device. Then here, Settings → Machines → Add a machine that runs Crosstalk, with its address: ${host(location.origin)}.`}
+          sure={`To get ${removingHome.name} back, you'll need a pairing code from it: on a device that still has it, ${settingsPath("devices", "Pair a new device")}. Then here, ${settingsPath("machines", "Add a machine that runs Crosstalk")}, with its address: ${host(location.origin)}.`}
           confirmLabel="Yes, remove"
           workingLabel="Removing…"
           onConfirm={() => removeMachine(removingHome.key)}
@@ -495,7 +513,7 @@ function LinkForm({ home, url: start = "", onDone }: { home: Machine; url?: stri
         <span>Pairing code</span>
         <input className="input mono" placeholder="ABCD-EFGH" value={code} onChange={(e) => setCode(e.target.value)} autoCapitalize="characters" autoCorrect="off" spellCheck={false} />
         <span className="help">
-          From that machine: Settings → Pair a new device, or run <span className="mono">crosstalk-hub pair</span> in its terminal.
+          From that machine: {settingsPath("devices", "Pair a new device")}, or run <span className="mono">crosstalk-hub pair</span> in its terminal.
         </span>
       </label>
       {error && <p className="small" style={{ color: "var(--red)" }}>{error}</p>}

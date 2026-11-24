@@ -59,13 +59,18 @@ function apply() {
 export function initZoom() {
   apply();
   // Turning the phone or resizing the window changes what fits.
-  window.addEventListener("resize", () => {
+  const resized = () => {
     // A fold or a turn moves everything anyway, so there's nothing left under the finger to keep in place: the layout
     // follows the size again (holdLayout).
     const turned = held !== null && screenWidth() !== held.width;
     if (turned) held = null;
     if (turned || Math.min(chosen, largestFitting(screenWidth())) !== applied) apply();
-  });
+  };
+  window.addEventListener("resize", resized);
+  // The width is read from the visible part (screenWidth), which says so itself when it changes: a foldable changing
+  // screens doesn't always have it ready when the window's own resize comes.
+  window.visualViewport?.addEventListener("resize", resized);
+  window.addEventListener("pageshow", resized);
   // Another tab of the app changed it.
   window.addEventListener("storage", (e) => {
     if (e.key !== KEY && e.key !== null) return;

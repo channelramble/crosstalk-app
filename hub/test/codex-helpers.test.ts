@@ -30,7 +30,7 @@ afterEach(async () => {
 afterAll(() => {
   // Back to what providers/all.ts registers.
   registerDriver("codex", (ctx) => {
-    if (!ctx.bin) throw new Error("Codex isn't installed on the hub. Install it under Agents & sign-ins.");
+    if (!ctx.bin) throw new Error("Codex isn't installed on the machine. Install it under Agents & sign-ins.");
     return new CodexDriver(ctx, ctx.bin);
   });
 });
@@ -54,9 +54,9 @@ function knobs(dir: string) {
 }
 
 /** The driver alone, with the hub's side played by the test. */
-function driver() {
+function driver(more: Record<string, string> = {}) {
   const dir = temp("ct-codex-helpers-");
-  const env = knobs(dir);
+  const env = { ...knobs(dir), ...more };
   const reports: BackgroundTask[][] = [];
   const sink = () => ({ text() {}, setText() {}, activity: () => "a", updateActivity() {}, approval: async () => "deny" as const, usage() {}, rateLimit() {}, status() {}, saveSession() {}, signal: new AbortController().signal }) as unknown as TurnSink;
   const ctx = {
@@ -110,6 +110,20 @@ test("an app-server that went before the next turn: that turn is told the helper
   expect(h.d.carryNote()).toBeNull();
 });
 
+test("a helper that finished before Codex had answered the reply's turn/start: the late answer to that doesn't take what the helper left", async () => {
+  // The fake answers turn/start 150 ms late: the reply is over and the helper has finished by then. (Seen on Linux
+  // without any delay: the answer and the helper's end were read in one go, and the helper's answer was dropped.)
+  const h = driver({ FAKE_CODEX_TURN_DELAY: "150" });
+  expect(await h.turn("Run the tests with a helper. HELPER_OUTLIVES")).toEqual({ ok: true });
+  h.finish();
+  await until(() => h.helper()?.status === "completed", "the helper to finish");
+  expect(h.d.carryNote()).toContain(ANSWER);
+  await until(() => lines<{ id?: number; method?: string }>(h.env.FAKE_CODEX_RPC_LOG).some((m) => m.method === "turn/start"), "the turn to be asked for");
+  await Bun.sleep(300);
+  // Still waiting for the chat's next turn: no turn has started since it was left.
+  expect(h.d.carryNote()).toContain(ANSWER);
+});
+
 test("a helper whose end went unheard is found finished by reading its thread, so it never holds the chat for good", async () => {
   const was = CodexDriver.helperPollMs;
   CodexDriver.helperPollMs = 100;
@@ -144,12 +158,12 @@ test("in a chat: new settings wait for the helper, and once it's done the new ap
     await app.engine.whenIdle();
     await Bun.sleep(20);
   };
-  app.engine.postHumanMessage(chat.id, "Run the tests with a helper and tell me later. HELPER_OUTLIVES", "iPhone 18 Pro Max");
+  app.engine.postHumanMessage(chat.id, "Run the tests with a helper and tell me later. HELPER_OUTLIVES", "iPhone");
   await idle();
   await until(() => app.engine.tasksIn(chat.id)[member.id]?.some((t) => t.status === "running") ?? false, "the helper to be reported");
   expect(app.engine.busyWork()).toEqual([{ roomId: chat.id, memberId: member.id, why: "background" }]);
   // A new effort while the helper works: it waits for the helper (ending this app-server would end the helper).
-  app.updateMember(member.id, { config: { ...now().config, effort: "high" } }, "iPhone 18 Pro Max");
+  app.updateMember(member.id, { config: { ...now().config, effort: "high" } }, "iPhone");
   expect(now()).toMatchObject({ status: "working", statusDetail: "Finishing helpers before your new settings apply", held: { change: "settings", helpers: true } });
   writeFileSync(env.FAKE_CODEX_HELPER_DONE, "");
   await until(() => !now().held, "the change to apply");
@@ -158,7 +172,7 @@ test("in a chat: new settings wait for the helper, and once it's done the new ap
   expect(made).toHaveLength(1);
   expect(app.store.kvGet("carryNotes")).toContain(ANSWER);
   expect(app.engine.busyWork()).toEqual([]);
-  app.engine.postHumanMessage(chat.id, "What did the tests say?", "iPhone 18 Pro Max");
+  app.engine.postHumanMessage(chat.id, "What did the tests say?", "iPhone");
   await idle();
   expect(made).toHaveLength(2);
   const text = turnTexts(env.FAKE_CODEX_RPC_LOG).at(-1)!;
@@ -191,12 +205,12 @@ test("in a chat: a message while the helper works goes on its app-server at once
     await app.engine.whenIdle();
     await Bun.sleep(20);
   };
-  app.engine.postHumanMessage(chat.id, "Run the tests with a helper and tell me later. HELPER_OUTLIVES", "iPhone 18 Pro Max");
+  app.engine.postHumanMessage(chat.id, "Run the tests with a helper and tell me later. HELPER_OUTLIVES", "iPhone");
   await idle();
   await until(() => app.engine.tasksIn(chat.id)[member.id]?.some((t) => t.status === "running") ?? false, "the helper to be reported");
-  app.updateMember(member.id, { config: { ...now().config, effort: "high" } }, "iPhone 18 Pro Max");
+  app.updateMember(member.id, { config: { ...now().config, effort: "high" } }, "iPhone");
   expect(now().held).toEqual({ change: "settings", helpers: true });
-  app.engine.postHumanMessage(chat.id, "While that runs, look at the docs", "iPhone 18 Pro Max");
+  app.engine.postHumanMessage(chat.id, "While that runs, look at the docs", "iPhone");
   await idle();
   expect(replies()).toHaveLength(2);
   expect(made).toHaveLength(1);
@@ -206,7 +220,7 @@ test("in a chat: a message while the helper works goes on its app-server at once
   // The helper finishes: the app-server goes, what it held goes to the next turn, on a new one.
   writeFileSync(env.FAKE_CODEX_HELPER_DONE, "");
   await until(() => !now().held, "the change to apply");
-  app.engine.postHumanMessage(chat.id, "What did the tests say?", "iPhone 18 Pro Max");
+  app.engine.postHumanMessage(chat.id, "What did the tests say?", "iPhone");
   await idle();
   expect(made).toHaveLength(2);
   expect(turnTexts(env.FAKE_CODEX_RPC_LOG).at(-1)).toContain(ANSWER);
@@ -235,10 +249,10 @@ describe("a message that goes into Codex's reply by itself while its helper work
     };
     const rpc = (method: string) => lines<Rpc>(env.FAKE_CODEX_RPC_LOG).filter((m) => m.method === method);
     const helperStatus = () => app.engine.tasksIn(chat.id)[member.id]?.[0]?.status;
-    app.engine.postHumanMessage(chat.id, "Run the tests with a helper and tell me later. HELPER_OUTLIVES", "iPhone 18 Pro Max");
+    app.engine.postHumanMessage(chat.id, "Run the tests with a helper and tell me later. HELPER_OUTLIVES", "iPhone");
     await idle();
     await until(() => helperStatus() === "running", "the helper to be reported");
-    app.engine.postHumanMessage(chat.id, "LONG_STEP: run the long check", "iPhone 18 Pro Max");
+    app.engine.postHumanMessage(chat.id, "LONG_STEP: run the long check", "iPhone");
     await until(() => app.store.listActivities(chat.id, app.engine.runningTurns(chat.id).map((t) => t.id)).some((a) => a.kind === "command" && a.status === "running"), "the long step");
     return {
       app,
@@ -251,10 +265,10 @@ describe("a message that goes into Codex's reply by itself while its helper work
       helperStatus,
       now: (): Member => app.store.getMember(member.id)!,
       notes: () => app.store.listMessages(chat.id).filter((m) => m.authorKind === "system").map((m) => m.text),
-      say: (text: string) => app.engine.postHumanMessage(chat.id, text, "iPhone 18 Pro Max"),
+      say: (text: string) => app.engine.postHumanMessage(chat.id, text, "iPhone"),
       /** The message goes in with no tap: Codex has it by turn/steer, and the turn that waited for it is dropped. */
       goesIn: async () => {
-        const yours = app.engine.postHumanMessage(chat.id, MESSAGE, "iPhone 18 Pro Max");
+        const yours = app.engine.postHumanMessage(chat.id, MESSAGE, "iPhone");
         await until(() => rpc("turn/steer").length === 1 && app.engine.queuedTurns(chat.id).length === 0, "the message to go in");
         return yours;
       },
@@ -274,12 +288,12 @@ describe("a message that goes into Codex's reply by itself while its helper work
     await h.idle();
   });
 
-  test("Stop after it went in: the turn drops it, so it's unread again, nothing starts, and Answer now delivers it once", async () => {
+  test("Stop after it went in: the turn drops it, so it's unread again, nothing starts, and Try again delivers it once", async () => {
     const h = await atWork();
     const yours = await h.goesIn();
     await h.app.engine.stop(h.chat.id);
     await h.idle();
-    // (Before: read as far as anyone could tell, with no Not answered, no Answer now, and Try again refused.)
+    // (Before: read as far as anyone could tell, with no "Not answered" under it, and Try again refused.)
     expect(h.now().readSeq).toBeLessThan(yours.seq);
     expect(h.turnStarts()).toEqual([]);
     expect(h.app.store.listTurns(h.chat.id).at(-1)?.status).toBe("stopped");
@@ -338,58 +352,6 @@ describe("a message that goes into Codex's reply by itself while its helper work
     expect(h.helperStatus()).toBe("running");
     expect(h.notes()).toEqual([]);
   });
-
-  describe("with the switch off", () => {
-    /** Nothing goes in by itself: it waits behind the reply, and Send now puts it in. */
-    async function waiting(more: Record<string, string> = {}) {
-      const h = await atWork(more);
-      h.app.setHubSettings({ messagesFlow: false });
-      const yours = h.say(MESSAGE);
-      await Bun.sleep(100);
-      expect(h.rpc("turn/steer")).toEqual([]);
-      expect(h.app.engine.queuedTurns(h.chat.id)).toHaveLength(1);
-      return { h, yours };
-    }
-
-    test("Send now puts it in, and it's read in that turn, starting no turn of its own", async () => {
-      const { h, yours } = await waiting();
-      expect(await h.app.engine.sendNowWhy(h.chat.id)).toEqual({ sent: true });
-      expect(h.rpc("turn/steer")).toHaveLength(1);
-      const reply = h.app.engine.runningTurns(h.chat.id)[0];
-      expect(h.app.engine.liveTurn(h.app.store.getTurn(reply.id)!).unread).toEqual([yours.id]);
-      expect(h.turnStarts()).toEqual([]);
-      await h.app.engine.stop(h.chat.id);
-      await h.idle();
-    });
-
-    test("Stop after a Send now: the turn drops it, so it's unread again, nothing starts, and Answer now delivers it once", async () => {
-      const { h, yours } = await waiting();
-      expect(await h.app.engine.sendNowWhy(h.chat.id)).toEqual({ sent: true });
-      await h.app.engine.stop(h.chat.id);
-      await h.idle();
-      expect(h.now().readSeq).toBeLessThan(yours.seq);
-      expect(h.turnStarts()).toEqual([]);
-      h.app.engine.retry(h.chat.id, null, { currentSettings: true });
-      await h.idle();
-      expect(h.turnStarts()).toHaveLength(1);
-      expect(h.made).toHaveLength(1);
-      expect(h.rpc("thread/resume")).toEqual([]);
-      expect(h.helperStatus()).toBe("running");
-    });
-
-    test("flipped on: it goes in by itself, once", async () => {
-      const { h } = await waiting();
-      h.app.setHubSettings({ messagesFlow: true });
-      await until(() => h.rpc("turn/steer").length === 1 && h.app.engine.queuedTurns(h.chat.id).length === 0, "the message to go in");
-      h.app.setHubSettings({ messagesFlow: false });
-      h.app.setHubSettings({ messagesFlow: true });
-      await Bun.sleep(100);
-      expect(h.rpc("turn/steer")).toHaveLength(1);
-      expect(h.turnStarts()).toEqual([]);
-      await h.app.engine.stop(h.chat.id);
-      await h.idle();
-    });
-  });
 });
 
 test("a stopped turn whose app-server never ends it: that goes after the grace time, the helper is listed as stopped, the chat says it's lost, once, and a fresh app-server answers", async () => {
@@ -401,13 +363,13 @@ test("a stopped turn whose app-server never ends it: that goes after the grace t
   const chat = app.chats.create({ provider: "codex", name: "Release", cwd: join(dir, "project"), model: "gpt-test", permissionMode: "full" } as never);
   const member = app.store.listMembers(chat.id)[0];
   const helperStatus = () => app.engine.tasksIn(chat.id)[member.id]?.[0]?.status;
-  app.engine.postHumanMessage(chat.id, "Run the tests with a helper and tell me later. HELPER_OUTLIVES", "iPhone 18 Pro Max");
+  app.engine.postHumanMessage(chat.id, "Run the tests with a helper and tell me later. HELPER_OUTLIVES", "iPhone");
   await app.engine.whenIdle();
   await until(() => helperStatus() === "running", "the helper to be reported");
-  app.engine.postHumanMessage(chat.id, "LONG_STEP: run the long check", "iPhone 18 Pro Max");
+  app.engine.postHumanMessage(chat.id, "LONG_STEP: run the long check", "iPhone");
   await until(() => app.store.listActivities(chat.id, app.engine.runningTurns(chat.id).map((t) => t.id)).some((a) => a.kind === "command" && a.status === "running"), "the long step");
   const stopping = app.engine.stop(chat.id);
-  app.engine.postHumanMessage(chat.id, "Do this instead", "iPhone 18 Pro Max");
+  app.engine.postHumanMessage(chat.id, "Do this instead", "iPhone");
   await stopping;
   await until(() => helperStatus() === "stopped", "the helper to be listed as stopped", 8000);
   await until(() => turnTexts(env.FAKE_CODEX_RPC_LOG).some((t) => t.includes("Do this instead")), "a fresh app-server to answer", 8000);
@@ -431,10 +393,10 @@ test("an app-server that goes with a helper at work: it's listed as stopped, the
   const chat = app.chats.create({ provider: "codex", name: "Release", cwd: join(dir, "project"), model: "gpt-test", permissionMode: "full" } as never);
   const member = app.store.listMembers(chat.id)[0];
   const now = (): Member => app.store.getMember(member.id)!;
-  app.engine.postHumanMessage(chat.id, "Run the tests with a helper and tell me later. HELPER_OUTLIVES", "iPhone 18 Pro Max");
+  app.engine.postHumanMessage(chat.id, "Run the tests with a helper and tell me later. HELPER_OUTLIVES", "iPhone");
   await app.engine.whenIdle();
   await until(() => app.engine.tasksIn(chat.id)[member.id]?.some((t) => t.status === "running") ?? false, "the helper to be reported");
-  app.updateMember(member.id, { config: { ...now().config, effort: "high" } }, "iPhone 18 Pro Max");
+  app.updateMember(member.id, { config: { ...now().config, effort: "high" } }, "iPhone");
   expect(now().held).toEqual({ change: "settings", helpers: true });
   await (made[0] as unknown as { rpc: { kill(): Promise<void> } }).rpc.kill();
   await until(() => !now().held, "the change to apply");
@@ -453,7 +415,7 @@ test("a hub stopping takes what an app-server held for the chat's next turn, for
   cleanups.push(() => (closed ? undefined : app.shutdown()));
   const chat = app.chats.create({ provider: "codex", name: "Release", cwd: join(dir, "project"), model: "gpt-test", permissionMode: "full" } as never);
   const member = app.store.listMembers(chat.id)[0];
-  app.engine.postHumanMessage(chat.id, "Run the tests with a helper and tell me later. HELPER_OUTLIVES", "iPhone 18 Pro Max");
+  app.engine.postHumanMessage(chat.id, "Run the tests with a helper and tell me later. HELPER_OUTLIVES", "iPhone");
   await app.engine.whenIdle();
   writeFileSync(env.FAKE_CODEX_HELPER_DONE, "");
   await until(() => app.engine.tasksIn(chat.id)[member.id]?.some((t) => t.status === "completed") ?? false, "the helper to finish");

@@ -19,7 +19,10 @@ export default defineConfig({
       "/api": { target: hub, ws: true, changeOrigin: false },
     },
   },
+  // noVNC (the Screen page's viewer) awaits at the top of a module: browsers have had that since 2021.
+  optimizeDeps: { esbuildOptions: { target: "es2022" } },
   build: {
+    target: "es2022",
     outDir: "dist",
     emptyOutDir: true,
     sourcemap: false,

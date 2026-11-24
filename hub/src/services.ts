@@ -1,7 +1,7 @@
 // AI services (docs/SPEC-0.4.md, track T5): checking a service before use (free probes, no model request), live model
 // lists, and finding model servers running on this machine. The probing itself is in serviceProbes.ts.
 
-import { DEFAULT_ACCOUNT, PROVIDER_INFO, SERVICE_AGENTS, SERVICE_MAX_MODELS, isServiceAgent, memberAccount, serviceAgentFor, serviceModelPick, serviceModelsKept, type AgentAccount, type CatalogSearch, type ChatProvider, type LocalServer, type Member, type Protocol, type Provider, type ServiceAgent, type ServicePlan, type ServiceTestRequest, type ServiceTestResult } from "@crosstalk/shared";
+import { settingsPath, DEFAULT_ACCOUNT, PROVIDER_INFO, SERVICE_AGENTS, SERVICE_MAX_MODELS, isServiceAgent, memberAccount, serviceAgentFor, serviceModelPick, serviceModelsKept, type AgentAccount, type CatalogSearch, type ChatProvider, type LocalServer, type Member, type Protocol, type Provider, type ServiceAgent, type ServicePlan, type ServiceTestRequest, type ServiceTestResult } from "@crosstalk/shared";
 import type { App } from "./app";
 import { HttpError } from "./engine/engine";
 import { Featherless, KeyRefused, PLAN_TTL_MS, chatNotice, keyRef } from "./featherless";
@@ -237,7 +237,7 @@ export class Services {
     const id = typeof input.account === "string" ? input.account.trim() : "";
     if (id) {
       for (const p of asked ? [asked] : (["codex", "claude", "builtin", "opencode"] as const)) if (this.app.providers.endpointOf(p, id)) return { account: this.app.providers.account(p, id), added: false };
-      throw new HttpError(404, "That AI service isn't on this machine any more. Add it again in Settings → AI services.");
+      throw new HttpError(404, `That account isn't on this machine any more. Add it again in ${settingsPath("ai-services")}.`);
     }
     const baseUrl = endpointAddress(String(input.baseUrl ?? "").trim());
     // An account already pointing at this server is used as it stands: adding a second one for the same address would
@@ -263,7 +263,7 @@ export class Services {
     if (wanted && !models.includes(wanted) && kept.some((m) => m.id === wanted) && models.length < SERVICE_MAX_MODELS) models.push(wanted);
     // A catalogue service has thousands of models and no sensible default among them: it is added in Settings, where
     // you search for the one you want.
-    if (!models.length) throw new HttpError(400, this.catalog.serves(baseUrl) || this.nanogpt.serves(baseUrl) ? `Add ${this.nanogpt.serves(baseUrl) ? "NanoGPT" : "Featherless"} in Settings → AI services, where you can search its models, then start a chat on it.` : `${new URL(baseUrl).host} lists no models yet. Load or pull one on the server, then try again.`);
+    if (!models.length) throw new HttpError(400, this.catalog.serves(baseUrl) || this.nanogpt.serves(baseUrl) ? `Add ${this.nanogpt.serves(baseUrl) ? "NanoGPT" : "Featherless"} in ${settingsPath("ai-services")}, where you can search its models, then start a chat on it.` : `${new URL(baseUrl).host} lists no models yet. Load or pull one on the server, then try again.`);
     const contexts: Record<string, number> = {};
     for (const m of result.models) if (models.includes(m.id) && m.contextWindow) contexts[m.id] = m.contextWindow;
     const via = result.works.find((w) => w.provider === agent)?.via;
@@ -298,7 +298,7 @@ export class Services {
       const ep = this.app.providers.endpointOf(p, String(id));
       if (ep) return ep;
     }
-    throw new HttpError(404, "No such custom model");
+    throw new HttpError(404, "That account isn't here any more");
   }
 
   /**
@@ -571,7 +571,7 @@ export function serviceRoutes(app: App): Route[] {
      * five minutes. 404 for any other account.
      */
     route("GET", "/api/accounts/:p/:id/funds", async ({ params, url }) => {
-      if (!isServiceAgent(params.p)) throw new HttpError(400, "Only Codex, Claude Code, OpenCode and Crosstalk's agent have AI service accounts.");
+      if (!isServiceAgent(params.p)) throw new HttpError(400, "Only Codex, Claude Code, OpenCode and Crosstalk's agent can use accounts for other services.");
       let funds;
       try {
         funds = await app.services.funds(params.p, params.id, url.searchParams.get("fresh") === "1");
@@ -603,9 +603,9 @@ export function serviceRoutes(app: App): Route[] {
       return { plan };
     }),
     route("POST", "/api/accounts/:p/:id/refresh-models", async ({ params }) => {
-      if (!isServiceAgent(params.p)) throw new HttpError(400, "Only Codex, Claude Code, OpenCode and Crosstalk's agent can use a model server of their own.");
+      if (!isServiceAgent(params.p)) throw new HttpError(400, "Only Codex, Claude Code, OpenCode and Crosstalk's agent can use your own models.");
       const account = await app.services.refreshModels(params.p, params.id);
-      if (!account) throw new HttpError(404, "No such custom model");
+      if (!account) throw new HttpError(404, "That account isn't here any more");
       return account;
     }),
   ];

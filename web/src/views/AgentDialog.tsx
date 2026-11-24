@@ -13,7 +13,7 @@ import { AlwaysAllowedList } from "./AlwaysAllowed";
 
 const CUSTOM_MODEL = "__custom__";
 
-const ROLE_PRESETS: { label: string; text: string }[] = [
+export const ROLE_PRESETS: { label: string; text: string }[] = [
   { label: "Builder", text: "You implement features and fixes. Keep changes small and focused, run the tests, and hand your diff to a reviewer when you're done." },
   { label: "Reviewer", text: "You review other agents' changes. Read the diff carefully, run the tests, and point out bugs, risks and missing tests. Approve clearly when it's good." },
   { label: "Tester", text: "You write and run tests. Find edge cases, reproduce bugs, and report exact failing commands and output." },
@@ -23,9 +23,9 @@ const ROLE_PRESETS: { label: string; text: string }[] = [
 
 /** One agent of a group chat (or of a room on an older machine): add it, or change how it runs, its name and its role. */
 export function AgentDialog({ room, member, onClose }: { room: Room; member: Member | null; onClose: () => void }) {
-  // A group chat says "chat" and "lead" where a room said "room" and "default agent".
+  // A group chat says "lead" where an older machine's room said "default agent". Both are called a chat.
   const group = !!room.chat?.group;
-  const where = group ? "chat" : "room";
+  const where = "chat";
   const providers = useStore((s) => s.providers);
   const accounts = useStore((s) => s.accounts);
   const toast = useStore((s) => s.toast);
@@ -159,7 +159,7 @@ export function AgentDialog({ room, member, onClose }: { room: Room; member: Mem
       const isLead = room.leadMemberId === id;
       if (lead !== isLead) await api("PATCH", `/api/rooms/${room.id}`, { leadMemberId: lead ? id : null });
       // The hub's own @name, not the words typed in: it slugs them ("Build Bot" becomes @build-bot).
-      if (member) toast("info", `Saved. @${saved?.handle || handleNow} is now "${permissionInfo(provider, perm).short}" from its next turn.`);
+      if (member) toast("info", `Saved. @${saved?.handle || handleNow} is now "${permissionInfo(provider, perm).short}" from its next reply.`);
       onClose();
     } catch (e) {
       toast("error", e instanceof Error ? e.message : String(e));
@@ -179,10 +179,10 @@ export function AgentDialog({ room, member, onClose }: { room: Room; member: Mem
   };
 
   const reset = async () => {
-    if (!member || !confirm(`Start a fresh session for @${member.handle}? It forgets its own context but keeps the ${where} history.`)) return;
+    if (!member || !confirm(`Start @${member.handle} fresh? It forgets its own context but keeps the ${where} history.`)) return;
     try {
       await api("POST", `/api/members/${member.id}/reset`);
-      toast("info", `@${member.handle} will start fresh on its next turn.`);
+      toast("info", `@${member.handle} starts fresh with its next reply.`);
     } catch (e) {
       toast("error", e instanceof Error ? e.message : String(e));
     }
@@ -205,7 +205,7 @@ export function AgentDialog({ room, member, onClose }: { room: Room; member: Mem
             Cancel
           </button>
           <button className="btn primary" onClick={save} disabled={busy || !ready}>
-            {member ? "Save" : group ? "Add to chat" : "Add to room"}
+            {member ? "Save" : "Add to chat"}
           </button>
         </>
       )}
@@ -246,7 +246,7 @@ export function AgentDialog({ room, member, onClose }: { room: Room; member: Mem
           </div>
           {notReady && (
             <p className="help" style={{ marginTop: 8 }}>
-              {PROVIDER_INFO[provider].name} isn't {st?.installed ? "signed in" : "installed"} on the hub yet.{" "}
+              {PROVIDER_INFO[provider].name} isn't {st?.installed ? "signed in" : "installed"} on the machine yet.{" "}
               <a
                 href="#/setup"
                 onClick={(e) => {
@@ -276,7 +276,7 @@ export function AgentDialog({ room, member, onClose }: { room: Room; member: Mem
           setCustomModel(false);
         }}
       />
-      {member && account !== memberAccount(member) && <p className="help">Changing accounts starts a fresh agent session. {group ? "Chat" : "Room"} history stays. Its model and effort go back to this account's own.</p>}
+      {member && account !== memberAccount(member) && <p className="help">Changing accounts starts the agent fresh. Chat history stays. Its model and effort go back to this account's own.</p>}
       <div className="field" role="radiogroup" aria-label="What this agent can do">
         <span>What can this agent do?</span>
         <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 6 }}>
@@ -312,7 +312,7 @@ export function AgentDialog({ room, member, onClose }: { room: Room; member: Mem
           })}
         </div>
         <span className="help">
-          Applies from the agent's next turn. This is access inside Crosstalk, separate from macOS privacy settings.
+          Applies from the agent's next reply. This is access inside Crosstalk, separate from macOS privacy settings.
         </span>
       </div>
       <div className="row" style={{ marginBottom: 12 }}>
@@ -351,7 +351,7 @@ export function AgentDialog({ room, member, onClose }: { room: Room; member: Mem
             <option value={CUSTOM_MODEL}>Other…</option>
           </select>
           {customModel && (
-            <input className="input" placeholder="Model name, as the agent's CLI takes it" value={model} onChange={(e) => setModel(e.target.value)} autoCapitalize="off" autoCorrect="off" spellCheck={false} />
+            <input className="input" placeholder="Model name, as the agent takes it" value={model} onChange={(e) => setModel(e.target.value)} autoCapitalize="off" autoCorrect="off" spellCheck={false} />
           )}
           <span className="help">
             {modelHelp(chosen) ?? (catalog && !catalog.live ? `${PROVIDER_INFO[provider].name} couldn't be asked for its models${catalog.error ? ` (${catalog.error})` : ""}; pick a suggestion or type one.` : catalog ? "" : "Asking the agent for its models…")}
@@ -399,7 +399,7 @@ export function AgentDialog({ room, member, onClose }: { room: Room; member: Mem
       {member && <AlwaysAllowedList member={member} agentName={PROVIDER_INFO[provider].name} />}
       {member && (
         <button className="btn small ghost" onClick={reset}>
-          Start a fresh session
+          Start fresh
         </button>
       )}
         </>

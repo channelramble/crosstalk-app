@@ -185,7 +185,7 @@ test("in the chat, that note stands with the reply instead of folding away with 
 });
 
 test("a failed reply that a signed-out account explains: the way to sign in stands in place of the error", () => {
-  const WORDS = "Claude Code is signed out on Mac mini, so it couldn't answer. Sign in to it again (Settings → Agents → Claude Code → Sign in), then tap Try again.";
+  const WORDS = "Claude Code is signed out on Mac mini, so it couldn't answer. Sign in to it again (Settings → Accounts → Claude Code → Sign in), then tap Try again.";
   const member = { id: "mb1", roomId: "r1", handle: "claude", provider: "claude", model: null, role: "", permissionMode: "ask", status: "error", statusDetail: WORDS, config: {}, createdAt: 0, position: 0 } as Member;
   const need = { provider: "claude" as const, account: "default", accountLabel: null, machine: { id: "h_mini", name: "Mac mini" }, since: NOW, rooms: ["r1"], words: WORDS };
   const turn = { id: "t1", roomId: "r1", memberId: "mb1", triggerMessageId: "m1", replyMessageId: "m2", hop: 0, chainId: "c1", status: "error" as const, error: WORDS, usage: null, createdAt: NOW, startedAt: NOW, endedAt: NOW };
@@ -193,19 +193,19 @@ test("a failed reply that a signed-out account explains: the way to sign in stan
   const draw = (over: Record<string, unknown>) => renderToStaticMarkup(createElement(MessageRow, { message: reply, member, handles: ["claude"], turn, statusKnown: true, ...over }));
   // Signed out: the card, with its button, and not the words that only point to Settings.
   const html = draw({ signIn: need, announce: true });
-  expect(words(html)).not.toContain("Settings → Agents → Claude Code → Sign in");
+  expect(words(html)).not.toContain("Settings → Accounts → Claude Code → Sign in");
   expect(words(html)).toContain("Sign in to Claude Code on Mac mini Claude Code is signed out on Mac mini, so it couldn't answer. Sign it in again from this device, then tap Try again. Sign in");
   expect(html.match(/<button[^>]*aria-label="Sign in to Claude Code on Mac mini"/g)).toHaveLength(1);
   // A failure that happened while the chat was open is still said at once.
   expect(tag(html, /<div class="signin-prompt-text"[^>]*>/)).toContain('role="alert"');
   expect(tag(draw({ signIn: need, announce: false }), /<div class="signin-prompt-text"[^>]*>/)).not.toContain("role=");
   // Signed in again since: the reply's error, as it was.
-  expect(words(draw({}))).toContain("Sign in to it again (Settings → Agents → Claude Code → Sign in), then tap Try again.");
+  expect(words(draw({}))).toContain("Sign in to it again (Settings → Accounts → Claude Code → Sign in), then tap Try again.");
   // What the agent wrote before it failed stays, with the card after it.
   const partial = renderToStaticMarkup(createElement(MessageRow, { message: { ...reply, text: "Looking at the files." }, member, handles: ["claude"], turn, statusKnown: true, signIn: need }));
   expect(words(partial)).toContain("Looking at the files.");
   expect(partial.indexOf("Looking at the files.")).toBeLessThan(partial.indexOf("Sign in to Claude Code on Mac mini"));
-  expect(words(partial)).not.toContain("Settings → Agents → Claude Code → Sign in");
+  expect(words(partial)).not.toContain("Settings → Accounts → Claude Code → Sign in");
 });
 
 test("the setup checklist: an agent waiting on its sign-in offers it right there, on a hub that can do it from here", () => {

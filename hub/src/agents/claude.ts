@@ -1,5 +1,6 @@
+import { settingsPath } from "@crosstalk/shared";
 import type { BackgroundTask, PermissionMode, UsageWindow } from "@crosstalk/shared";
-import { autoCompactLimit, CHAT_TOOL_NAMES, endpointOutputLimit, ROOM_TOOL_NAMES, type AgentDriver, type DriverContext, type TurnInput, type TurnResult, type TurnSink } from "./driver";
+import { autoCompactLimit, CHAT_TOOL_NAMES, endpointOutputLimit, HELPER_TOOL_NAMES, ROOM_TOOL_NAMES, type AgentDriver, type DriverContext, type TurnInput, type TurnResult, type TurnSink } from "./driver";
 import { claudeLimitHit } from "./limits";
 import { claudeAuthHit, claudeMarksOrigin } from "./stale-login";
 import { describeToolCall } from "../mcp/describe";
@@ -249,6 +250,8 @@ export class ClaudeDriver implements AgentDriver {
       ...(chat && !chat.group ? { CROSSTALK_TOOLSET: "chat", ...(chat.helper ? { CROSSTALK_ASK: chat.helper.provider } : {}) } : {}),
       ...(crossChat ? { CROSSTALK_CHATS: "1" } : {}),
       ...(chat?.ephemeral ? {} : { CROSSTALK_HELPER_MODEL: "1" }),
+      // The person chose another account for helper work (helpers.ts): the tools that hand work to it.
+      ...(chat?.helpers && !chat.ephemeral ? { CROSSTALK_HELPERS: "1" } : {}),
     };
     const mcpConfig = {
       mcpServers: {
@@ -258,7 +261,10 @@ export class ClaudeDriver implements AgentDriver {
     const helperModel = this.helperModel();
     const helpers = helperNote("claude", helperModel, !chat?.ephemeral);
     const alongside = alongsideNote("claude", room, { ephemeral: chat?.ephemeral });
-    const systemPrompt = (chat?.group ? [GROUP_SYSTEM_PROMPT, chat.notes, helpers, alongside] : chat ? [chat.notes, chat.helper?.note, helpers, alongside] : [ROOM_SYSTEM_PROMPT, helpers, alongside]).filter(Boolean).join("\n\n");
+    // With its own helpers switched off for this chat there is nothing to say about their model.
+    const onOthers = chat?.helpers && !chat.ephemeral ? chat.helpers : null;
+    const own = onOthers?.only ? null : helpers;
+    const systemPrompt = (chat?.group ? [GROUP_SYSTEM_PROMPT, chat.notes, onOthers?.note, own, alongside] : chat ? [chat.notes, chat.helper?.note, onOthers?.note, own, alongside] : [ROOM_SYSTEM_PROMPT, helpers, alongside]).filter(Boolean).join("\n\n");
     // A duplicated chat: its first process forks the original's session (up to where it was duplicated, when that's
     // known); later ones continue the copy.
     const fork = !!(chat?.fork && this.sessionId && !this.forked);
@@ -347,8 +353,12 @@ export class ClaudeDriver implements AgentDriver {
       ...(!chat || chat.group ? ROOM_TOOL_NAMES.map((t) => `mcp__crosstalk__${t}`) : []),
       // It asks the user itself whenever they didn't ask for that model in the chat.
       ...(chat?.ephemeral ? [] : [`mcp__crosstalk__${HELPER_TOOL}`]),
+      // "Helpers run on" another account is the consent: what a helper does beyond the chat's permissions asks itself.
+      ...(onOthers ? HELPER_TOOL_NAMES.map((t) => `mcp__crosstalk__${t}`) : []),
     ];
     if (allowed.length) args.push("--allowedTools", allowed.join(","));
+    // Helper work goes to another account and the person chose not to fall back: Claude Code's own helpers are off.
+    if (onOthers?.only) args.push("--disallowedTools", "Agent,Task,Workflow");
     const proc = Bun.spawn([this.bin, ...args], {
       cwd: room.cwd,
       env: {
@@ -411,7 +421,7 @@ export class ClaudeDriver implements AgentDriver {
           t.sink.activity({
             kind: "notice",
             title: "The original chat changed since this copy was made",
-            detail: "It was rewound or edited after it was duplicated, so this copy starts from its conversation as it is now. Ask about anything you need from the messages above.",
+            detail: "It was rewound or edited after it was duplicated, so this copy starts from that chat as it is now. Ask about anything you need from the messages above.",
             status: "done",
           });
         }
@@ -435,7 +445,7 @@ export class ClaudeDriver implements AgentDriver {
   async runTurn(input: TurnInput, sink: TurnSink): Promise<TurnResult> {
     this.steeredAt = 0;
     if (sink.signal.aborted) return { ok: false, error: "stopped" };
-    if (/^\s*\/model\b/.test(input.prompt)) return { ok: false, error: "Use Crosstalk's model menu to change this chat's model. That keeps the selected model after a restart and applies it to helper agents too." };
+    if (/^\s*\/model\b/.test(input.prompt)) return { ok: false, error: "Change this chat's model in Chat settings → Answers with. That keeps the selected model after a restart and applies it to helper agents too." };
     // A stopped turn still winding down (perhaps frozen) when the next one starts: let its process go now, so this turn
     // starts a fresh one instead of waiting on it. Unless that process holds what nothing else has (a helper or job at
     // work, a message still queued, a report it owes): then it's given the time a Stop gets to wind down (interrupt ends it
@@ -465,7 +475,7 @@ export class ClaudeDriver implements AgentDriver {
       // only continued from a copy.
       const chat = this.ctx.chat;
       if (chat && this.sessionId && !(chat.fork && !this.forked) && ClaudeDriver.sessionsInUse().has(this.sessionId)) {
-        return { ok: false, error: "This conversation is open in the Claude app right now. Close it there, then tap Try again. Or duplicate this chat to go on in a copy." };
+        return { ok: false, error: "This chat is open in the Claude app right now. Close it there, then tap Try again. Or duplicate this chat to go on in a copy." };
       }
       sink.status("Starting Claude Code", "thinking");
       try {
@@ -967,7 +977,7 @@ export class ClaudeDriver implements AgentDriver {
     const now = to ? modelName(to) : "another model";
     log.warn(`${helper ? "a helper agent" : "Claude Code"} switched from ${expected ?? "?"} to ${to ?? "?"}; stopping the turn`);
     t.halted = helper
-      ? `A helper agent started on ${now} instead of ${from}, so Crosstalk stopped this reply. Helpers keep the chat's model unless you pick one for them in the model menu.`
+      ? `A helper agent started on ${now} instead of ${from}, so Crosstalk stopped this reply. Helpers keep the chat's model unless you pick one for them in Chat settings → Helpers.`
       : `Claude Code switched this reply from ${from} to ${now} on its own, so Crosstalk stopped it. The chat stays on ${from}: ${this.ctx.chat ? "tap Try again" : "send your message again"}, or pick another model.`;
     for (const id of t.running) t.sink.updateActivity(id, { status: "done" });
     void this.interrupt();
@@ -1012,7 +1022,7 @@ export class ClaudeDriver implements AgentDriver {
       ok: false,
       error: moved
         ? `Claude Code moved to ${got} instead of ${want}, ${whose}, so Crosstalk stopped it. ${ask ? "Ask again" : "Your next message"} starts it again on ${want}.`
-        : `Claude Code started on ${got} instead of ${want}, ${whose}, so Crosstalk stopped it before it answered. This account can't use ${want} right now. ${ask ? "Pick another model." : "Pick another model in the model menu."}`,
+        : `Claude Code started on ${got} instead of ${want}, ${whose}, so Crosstalk stopped it before it answered. This account can't use ${want} right now. ${ask ? "Pick another model." : "Pick another model in Chat settings → Answers with."}`,
     });
   }
 
@@ -1116,7 +1126,7 @@ export class ClaudeDriver implements AgentDriver {
           const post = typeof m.post_tokens === "number" ? m.post_tokens : 0;
           t.compacted = { pre, post };
           const sizes = pre && post ? ` (${Math.round(pre / 1000)}k → ${Math.round(post / 1000)}k tokens)` : "";
-          t.sink.activity({ kind: "notice", title: `Compacted the conversation${sizes}`, detail: m.trigger === "auto" ? "Done automatically: the conversation reached its compaction size." : "Older messages were summarized to free up the context window.", status: "done" });
+          t.sink.activity({ kind: "notice", title: `Summarized the earlier messages${sizes}`, detail: m.trigger === "auto" ? "Done automatically: the chat got too long for the model to hold." : "Older messages were summarized to free up the context window.", status: "done" });
           if (post) t.sink.usage({ contextTokens: post });
         }
         return;
@@ -1194,7 +1204,7 @@ export class ClaudeDriver implements AgentDriver {
               continue;
             }
             if (block.name === "mcp__crosstalk__approve") continue;
-            const d = describeToolCall(block.name, block.input ?? {});
+            const d = describeToolCall(block.name, block.input ?? {}, this.ctx.chat?.helpers?.label);
             const kind = d.kind === "command" ? "command" : d.kind === "file_change" ? "file_change" : block.name === "TodoWrite" ? "plan" : "tool";
             const title = block.name === "Task" || block.name === "Agent" ? `Subagent: ${block.input?.description ?? "task"}` : block.name === "TodoWrite" ? "Plan" : d.title;
             const detail = block.name === "TodoWrite" ? todoText(block.input?.todos) : d.detail;
@@ -1282,7 +1292,7 @@ export class ClaudeDriver implements AgentDriver {
         for (const id of t.running) t.sink.updateActivity(id, { status: "done" });
         if (ev.subtype === "success" && !ev.is_error) {
           const c = t.compacted;
-          const compactedNote = c ? `Compacted the conversation${c.pre && c.post ? `: ${Math.round(c.pre / 1000)}k → ${Math.round(c.post / 1000)}k tokens` : ""}.` : "";
+          const compactedNote = c ? `Summarized the earlier messages${c.pre && c.post ? `: ${Math.round(c.pre / 1000)}k → ${Math.round(c.post / 1000)}k tokens` : ""}.` : "";
           t.done({ ok: true, text: t.text.trim() ? undefined : ev.result || compactedNote || undefined });
         } else {
           const interrupted = ev.subtype === "error_during_execution" && this.interruptSeq > 0;
@@ -1399,6 +1409,10 @@ export class ClaudeDriver implements AgentDriver {
    * Ended when idle (Engine.endIdle) unless it works on its own or owes a turn of its own (owedTurn), a prompt it
    * scheduled waits to run (it would never run), or its session is open in the Claude app too.
    */
+  pids(): number[] {
+    return this.proc?.pid ? [this.proc.pid] : [];
+  }
+
   canEndWhenIdle(): boolean {
     if ((this.turn && !this.turn.settled) || this.forking) return false;
     if ([...this.tasks.values()].some((x) => x.status === "running")) return false;
@@ -1443,12 +1457,12 @@ export class ClaudeDriver implements AgentDriver {
     if (!target) throw new Error("This message can't be rewound to: it was sent before rewinding existed, or from another app.");
     if (this.turn && !this.turn.settled) throw new Error("Stop the agent first.");
     if (!this.proc) {
-      if (this.sessionId && ClaudeDriver.sessionsInUse().has(this.sessionId)) throw new Error("This conversation is open in the Claude app right now. Close it there first.");
+      if (this.sessionId && ClaudeDriver.sessionsInUse().has(this.sessionId)) throw new Error("This chat is open in the Claude app right now. Close it there first.");
       this.spawn();
     }
     const r = await this.control({ subtype: "rewind_conversation", target_message_uuid: target });
     // Most often its conversation was summarized since (it does that when one gets long): it can't go back past that.
-    if (r?.rewound === false) throw new Error("Claude Code can't go back to before that message, usually because it has summarized the conversation since.");
+    if (r?.rewound === false) throw new Error("Claude Code can't go back to before that message, usually because it has summarized the earlier messages since.");
     return [...this.refs].filter(([, uuid]) => uuid === target).map(([id]) => id);
   }
 
@@ -1466,7 +1480,7 @@ export class ClaudeDriver implements AgentDriver {
    * Stops the turn. A plain interrupt keeps what's queued behind it, so a message steer wrote and Claude Code hasn't read
    * would be answered right after, in a turn of its own: a Stop that didn't stop. So a person's Stop on a Claude Code that
    * says it can (interrupt_cancel_queued_v1) takes those back with `cancel_queued`, and its receipt says which went: they're
-   * the person's again, unread, with Answer now (takeUnread). The receipt decides, not `queued`: a message counted as taken
+   * the person's again, unread, with Try again (takeUnread). The receipt decides, not `queued`: a message counted as taken
    * in may have reached it just after the request that came back (message_start), and be queued still.
    *
    * Not while a report it owes is queued: `cancel_queued` also drops what has no uuid to list, a task's <task-notification>,
@@ -1570,14 +1584,14 @@ function refusalError(model: string | null): string {
 function friendlyError(s: string): string {
   if (/model substitution|NO_MODEL_FALLBACK/i.test(s)) return `${s.replace(/\s*·\s*unset it to allow the swap/i, "")}. Crosstalk keeps the model you picked instead of switching: pick another model for this chat.`;
   // Its sign-in couldn't be saved because the disk is full: signing in again won't help (Claude Code 2.1.316 says so).
-  if (/disk that holds the Claude Code config/i.test(s)) return "Claude Code couldn't renew its sign-in because the hub's disk is full. Free some space (Settings → Storage shows what can go), then tap Try again. Signing in again won't help.";
+  if (/disk that holds the Claude Code config/i.test(s)) return `Claude Code couldn't renew its sign-in because this machine's disk is full. Free some space (${settingsPath("storage")} shows what can go), then tap Try again. Signing in again won't help.`;
   // The sign-in went stale (the engine starts Claude Code again and checks it; these words are for when it can't).
-  if (/OAuth session expired|could not be refreshed|Login expired|OAuth token revoked/i.test(s)) return "Claude Code's sign-in on the hub stopped working. Sign in to it again (Settings → Agents → Claude Code → Sign in), then tap Try again.";
-  if (/another Claude Code process is refreshing it/i.test(s)) return "Claude Code couldn't renew its sign-in: another Claude Code on the hub was renewing it at the same moment. Tap Try again in a minute.";
+  if (/OAuth session expired|could not be refreshed|Login expired|OAuth token revoked/i.test(s)) return `Claude Code's sign-in on this machine stopped working. Sign in to it again (${settingsPath("agent-claude", "Sign in")}), then tap Try again.`;
+  if (/another Claude Code process is refreshing it/i.test(s)) return "Claude Code couldn't renew its sign-in: another Claude Code on the machine was renewing it at the same moment. Tap Try again in a minute.";
   if (/not scoped to a workspace|anthropic-workspace-id/i.test(s))
-    return "This API key covers your whole organization, so Claude needs to know which workspace to bill. Open Settings → Claude Code → Replace key, and add the workspace ID (wrkspc_…) from the Claude Console → Settings → Workspaces.";
+    return `This API key covers your whole organization, so Claude needs to know which workspace to bill. Open ${settingsPath("agent-claude", "Key & workspace")}, and add the workspace ID (wrkspc_…) from the Claude Console → Settings → Workspaces.`;
   if (/invalid api key|x-api-key|api key/i.test(s) && !/not logged in|please run \/login/i.test(s)) return `Claude Code couldn't use the API key: ${s}`;
-  if (/not logged in|please run \/login|invalid api key|authentication/i.test(s)) return "Claude Code isn't signed in on the hub. Open Settings → Claude Code and sign in.";
+  if (/not logged in|please run \/login|invalid api key|authentication/i.test(s)) return `Claude Code isn't signed in on this machine. Open ${settingsPath("agent-claude")} and sign in.`;
   if (/credits_required|usage limit|rate limit/i.test(s)) return `Claude plan limit reached: ${s}`;
   return s;
 }

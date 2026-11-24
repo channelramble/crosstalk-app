@@ -856,19 +856,19 @@ describe("the adapter server", () => {
 
   test("upstream errors reach Codex as a Responses failure in plain words with the way out; none of them ends a connection Codex is waiting on", async () => {
     const cases: [account: string, model: string, code: string, words: string[]][] = [
-      ["gem", "unauthorized", "invalid_prompt", ["Gemini refused this key.", "Settings → AI services"]],
+      ["gem", "unauthorized", "invalid_prompt", ["Gemini refused this key.", "Settings → Accounts"]],
       ["bad", "text", "invalid_prompt", ["Gemini (old key) refused this key."]], // the real thing: the server turns the wrong key away
-      ["gem", "missing", "invalid_prompt", ['no model called "missing"', "Settings → AI services"]],
+      ["gem", "missing", "invalid_prompt", ['no model called "missing"', "Settings → Accounts"]],
       ["gem", "ratelimit", "rate_limit_exceeded", ["Gemini is busy right now. Wait a moment and try again."]],
       ["gem", "quota", "invalid_prompt", ["out of quota or credit"]],
       // not `context_length_exceeded`: Codex 0.160 throws those words away for its own "clear earlier history" (see upstreamProblem)
       ["gem", "toolong", "invalid_prompt", ["more than toolong can hold", "Crosstalk sent about", "descriptions of 3 tools", "bigger context"]],
       ["gem", "errorchunk", "invalid_prompt", ["Gemini stopped with an error: The model is overloaded. Try again."]],
       ["gem", "cut", "invalid_prompt", ["Gemini dropped the connection before it finished. Try again."]],
-      ["down", "text", "invalid_prompt", ["Couldn't reach Down at 127.0.0.1:1.", "Settings → AI services"]],
+      ["down", "text", "invalid_prompt", ["Couldn't reach Down at 127.0.0.1:1.", "Settings → Accounts"]],
       ["gem", "fail500", "invalid_prompt", ["Gemini had a problem (error 500). Try again in a moment."]],
       // The two shapes that started this: a stand-in that ignores `stream: true` and answers in one piece.
-      ["gem", "plain", "invalid_prompt", ["Gemini didn't answer as a stream", "Settings → AI services"]],
+      ["gem", "plain", "invalid_prompt", ["Gemini didn't answer as a stream", "Settings → Accounts"]],
       ["gem", "json", "invalid_prompt", ["Gemini didn't answer as a stream"]],
     ];
     for (const [account, model, code, words] of cases) {
@@ -1187,6 +1187,11 @@ describe("the adapter server", () => {
 
   test("a chat's turns don't each write to the database and wake every phone", async () => {
     addAccount("chatty", "Qwen chatty", fake.url, KEY, { protocol: "chat" }, 16_384);
+    // The new account's first look at its model list is over before the turns begin. One still under way when the first
+    // turn is measured carries that measurement out itself as it lands (seen on a slower Linux machine: "account", then
+    // "models" twice), which is the same single write told another way, not what this test counts.
+    await app.providers.models("codex", id.chatty);
+    await Bun.sleep(0);
     const events: string[] = [];
     // Events that carry a measurement of this account's: those are the ones that re-render the model picker and the row in
     // Settings → AI services. (Adding an account fetches its model list too, which says nothing about what was measured.)

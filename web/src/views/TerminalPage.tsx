@@ -6,10 +6,11 @@ import { api } from "../api";
 import { useStore } from "../store";
 import { Terminal } from "./Terminal";
 import { SidebarButton } from "./ChatSidebar";
-import { MachinePicker } from "./MachinePicker";
+import { MachinePicker, useMachineName } from "./MachinePicker";
 
 export function TerminalPage() {
   const toast = useStore((s) => s.toast);
+  const machine = useMachineName();
   const ptys = useStore(useShallow((s) => Object.values(s.ptys).filter((p) => p.alive).sort((a, b) => a.createdAt - b.createdAt)));
   const [active, setActive] = useState<string | null>(null);
   const [opening, setOpening] = useState(false);
@@ -49,7 +50,7 @@ export function TerminalPage() {
         <SidebarButton />
         <div className="titles">
           <h1>Terminal</h1>
-          <div className="sub">A shell on the hub, as the user the hub runs as</div>
+          <div className="sub">A shell on {machine}, as the user Crosstalk runs as</div>
         </div>
         <MachinePicker />
         <button className="btn small" onClick={open} disabled={opening}>
@@ -75,7 +76,7 @@ export function TerminalPage() {
           <div className="empty">
             <div>
               <div className="big">No shell open</div>
-              <p className="muted small">Open a shell to run commands on the hub from any device.</p>
+              <p className="muted small">Open a shell to run commands on {machine} from any device.</p>
               <button className="btn primary" onClick={open} disabled={opening}>
                 Open a shell
               </button>

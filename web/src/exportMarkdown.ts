@@ -1,7 +1,7 @@
 // Export as Markdown (docs/SPEC-0.4.md section 14, track T8): fetches the chat's file from its hub with this device's
 // sign-in, and hands it to the share sheet when the browser can share files, else saves it as a download.
 
-import { markdownFileName } from "@crosstalk/shared";
+import { settingsPath, markdownFileName } from "@crosstalk/shared";
 import { ApiError, currentConnection, type Connection } from "./api";
 
 /** "shared": the share sheet took it. "saved": the browser downloaded it. "cancelled": the share sheet was closed. */
@@ -12,7 +12,7 @@ export function exportProblem(status: number, hubSaid: string): string {
   // A hub from before Markdown export answers any route it doesn't know with "not found".
   if (status === 404 && /^not found$/i.test(hubSaid.trim())) return "This machine runs an older Crosstalk that can't export yet. Update it, then try again.";
   if (status === 404) return "That chat isn't on its machine any more.";
-  if (status === 401) return "The machine signed this device out. Pair it again in Settings → Machines.";
+  if (status === 401) return `The machine signed this device out. Pair it again in ${settingsPath("machines")}.`;
   return hubSaid.trim() || `The machine answered with an error (${status}).`;
 }
 

@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { PAGE_FOR_VIEW, SETTINGS_INDEX, settingsAddress, settingsPlace, type SettingsPageId } from "./settingsTabs";
 
 const guards = new Set<() => boolean>();
 
@@ -51,3 +52,24 @@ export function watchSettingsTarget(watch: (id: string) => void): () => void {
     watchers.delete(watch);
   };
 }
+
+/**
+ * The page Settings is on (null: its list of pages), kept while Settings is replaced for another machine (App keys it
+ * by machine, so opening another machine on the Machines page comes back to Machines) and let go once Settings is left.
+ */
+let keptSettingsPage: SettingsPageId | null = null;
+export function keepSettingsPage(page: SettingsPageId | null) {
+  keptSettingsPage = page;
+}
+
+/** Where Settings opens: the page of the section asked for, else the address's, else where it was a moment ago, else its list of pages. */
+export function settingsStartPage(view: string): SettingsPageId | null {
+  if (settingsTarget === SETTINGS_INDEX) return null;
+  return settingsPlace(settingsTarget)?.page ?? PAGE_FOR_VIEW[view] ?? keptSettingsPage;
+}
+
+/** Settings' place in the history (back.ts): the page it's on, or is about to open on. Each page is a place, over the list. */
+export const settingsPlaceNow = () => settingsAddress(settingsStartPage("settings"));
+
+/** The place an address inside Settings names: `id` is a page, a section (its page), or nothing (the list). */
+export const settingsPlaceFor = (id: string | undefined) => settingsAddress((id && settingsPlace(id)?.page) || null);

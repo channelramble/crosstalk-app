@@ -1,17 +1,16 @@
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { ArrowLeftRight, Clock, Copy, FastForward, History, Pencil, RotateCcw, SlidersHorizontal, Square, Trash2, Undo2, X } from "lucide-react";
-import { EFFORT_LABELS, PROVIDER_INFO, helperAtWork, isNoReadNowAgent, isNoRewindAgent, isServiceKeyRefusal, isServiceOnlyAgent, turnOrder, type AlwaysAllowed, type Approval, type ChatProvider, type Member, type Message, type Room, type SignInNeed, type Turn } from "@crosstalk/shared";
+import { ArrowLeftRight, Clock, Copy, FastForward, History, MonitorSmartphone, Pencil, RotateCcw, SlidersHorizontal, Square, Undo2, X } from "lucide-react";
+import { EFFORT_LABELS, PROVIDER_INFO, helperAtWork, isNoReadNowAgent, isNoRewindAgent, isServiceKeyRefusal, turnOrder, type Approval, type ChatProvider, type Member, type Message, type Room, type SignInNeed, type Turn } from "@crosstalk/shared";
 import { olderThan } from "../version";
 import { ApiError, api } from "../api";
 import { memberAccount } from "../accounts";
 import { chatIdentity, identityWhere } from "../chatIdentity";
-import { nameEdit } from "../chatName";
-import { deleteRoomHere, machineName, pendingApprovals, selectRoomMembers, useMachines, usesApiKey, useStore } from "../store";
+import { machineName, pendingApprovals, selectRoomMembers, useMachines, usesApiKey, useStore } from "../store";
 import { machineTag } from "../chatList";
 import { countdownTickMs, limitWaitLine } from "../limitWait";
 import { STOP_FAILED, stopChat, useStopping } from "../stop";
-import { ApiBadge, ChatAvatar, Dialog, Markdown, ProviderAvatar, RoomFilesContext, Switch, thisDevice, timeShort, useInterval } from "../ui";
+import { ApiBadge, ChatAvatar, Markdown, ProviderAvatar, RoomFilesContext, thisDevice, timeShort, useInterval } from "../ui";
 import { elapsed } from "./WorkingPanel";
 import { ApprovalCard } from "./ApprovalCard";
 import { Composer } from "./Composer";
@@ -21,18 +20,17 @@ import { OpenAiServices } from "./ServiceKey";
 import { answerText } from "../answers";
 import { JumpToLatest, useLatest } from "./JumpToLatest";
 import { placeOf, restorePlace, sizeKey, type Place } from "../scrollPlace";
-import { AgentOptions, cleanChoice, type AgentChoice } from "./AgentOptions";
-import { isPinned, pinChat, pinFailed } from "../pins";
 import { SidebarButton } from "./ChatSidebar";
 import { DuplicateDialog } from "./DuplicateDialog";
 import { AskCards } from "./AskCards";
 import { AskOthersButton } from "./AskSheet";
-import { ExportMarkdownButton } from "./ExportMarkdownButton";
 import { BookmarkButton } from "./BookmarkButton";
 import { useFindMessage } from "./useFindMessage";
 import { TwoStepDialog } from "./TwoStepDialog";
 import { GroupAvatar, groupState } from "./GroupAvatar";
-import { GroupSettingsDialog } from "./GroupSettings";
+import { ChatSettingsSheet } from "./ChatSettingsSheet";
+import { modelWord, type SheetAt } from "../chatSettings";
+import { useCatalog } from "../useCatalog";
 import { groupNames, notAnswered, notAnsweredLine, retriedTurns, whoAnswers, answersLine } from "../groupChat";
 import { onlyFinishingHelpers, quietWait, quietWaitWords } from "../sendNow";
 import { EntranceScope, SETTLE_MS, useEntrance, useQuietSince } from "../motion";
@@ -90,7 +88,8 @@ export function ChatScreen({ room }: { room: Room }) {
   // Its agents' accounts found signed out on this machine (signIn.ts): each says so here, with Sign in.
   const signIns = useStore(useShallow((s) => chatNeeds(s.signIns, members)));
   const loadHistory = useStore((s) => s.loadHistory);
-  const [settings, setSettings] = useState(false);
+  // The chat's settings sheet, and the section it opens on (a chip under the message box names one).
+  const [settings, setSettings] = useState<SheetAt | null>(null);
   const [duplicating, setDuplicating] = useState(false);
   const api = useStore(usesApiKey(room.id));
   const provider = (room.chat?.provider ?? member?.provider ?? "claude") as ChatProvider;
@@ -98,8 +97,7 @@ export function ChatScreen({ room }: { room: Room }) {
   // What this chat is: an AI service of yours and its model, or the agent itself (chatIdentity.ts). A group chat is its
   // agents, who are named one by one.
   const accounts = useStore((s) => s.accounts);
-  const poolOffer = useStore((s) => s.poolOffer);
-  const identity = chatIdentity(room, group ? undefined : member, accounts, poolOffer);
+  const identity = chatIdentity(room, group ? undefined : member, accounts);
   const machine = useChatMachine();
   const machineShort = useMachineTag(machine);
 
@@ -310,6 +308,7 @@ export function ChatScreen({ room }: { room: Room }) {
     return out;
   }, [allApprovals]);
   const busy = statusKnown && members.some((m) => BUSY.includes(m.status));
+  const screenReady = useStore((s) => !!s.hub?.screen?.ready);
   // Stop shows whenever the agent itself says it's working, even while the history reloads or couldn't load.
   const stoppable = connected && members.some((m) => BUSY.includes(m.status));
   const working = statusKnown ? members.filter((m) => ["thinking", "working", "approval"].includes(m.status)) : [];
@@ -390,21 +389,25 @@ export function ChatScreen({ room }: { room: Room }) {
     const here = s.roomData[room.id];
     if (!s.hub?.messagesFlow || !here) return "";
     for (const m of members) {
-      if (!(s.tasks[m.id] ?? []).some(helperAtWork)) continue;
+      // A machine that always delivers by itself (HubInfo.flowsIn): for any reply. An older one: only while helpers work.
+      if (!s.hub.flowsIn && !(s.tasks[m.id] ?? []).some(helperAtWork)) continue;
       const forThis = group ? (x: { text: string }) => whoAnswers(room, members, x.text).who.some((w) => w.id === m.id) : undefined;
       const id = quietWait(m, Object.values(here.turns), here.messages, forThis, { helpers: true });
-      if (id) return `${id} ${group ? `@${m.handle}` : ""}`;
+      if (id) return `${id} ${group ? `@${m.handle} ${m.id}` : ""}`;
     }
     return "";
   });
-  const [quietId, quietWho] = quiet.split(" ");
+  const [quietId, quietWho, quietMember] = quiet.split(" ");
   const effort = typeof member?.config?.effort === "string" ? member.config.effort : "";
+  // The model by the name the chips under the message box give it ("Opus 5.5"), once the agent's list has it.
+  const { catalog: headCatalog } = useCatalog(member && !group && member.provider !== "mock" ? member.provider : null, member ? memberAccount(member) : null);
+  const modelName = member && (member.resolvedModel ?? member.model) ? modelWord(member, headCatalog?.models ?? []) : null;
   // Which agent it is, the avatar and the message box say: the line has room for the model and the folder. A group
   // chat's line names its agents.
   const sub = group
     ? [groupNames(members) || "No agents yet", folderName(room.cwd)].join(" · ")
     : // A chat on a service names the service first: its model alone wouldn't say what it runs on.
-      [identity.service ? identity.name : null, member?.resolvedModel ?? member?.model, effort ? `${EFFORT_LABELS[effort] ?? effort} effort` : null, folderName(room.cwd)].filter(Boolean).join(" · ");
+      [identity.service ? identity.name : null, modelName, effort ? `${EFFORT_LABELS[effort] ?? effort} effort` : null, folderName(room.cwd)].filter(Boolean).join(" · ");
   // What the messages' notes call the chat's agent; in a group chat, the agent that wrote a reply.
   const agentName = group ? "the agents" : identity.name;
   const nameOf = (memberId: string | null | undefined) => (group ? (memberId && memberById[memberId] ? `@${memberById[memberId].handle}` : "the agent") : identity.name);
@@ -425,7 +428,13 @@ export function ChatScreen({ room }: { room: Room }) {
             {machineShort && <span className="chat-sub-machine"> · {machineShort}</span>}
           </div>
         </div>
-        <button className="icon-btn" onClick={() => setSettings(true)} aria-label="Chat settings" title="Chat settings">
+        {/* While it works and the machine's screen can be seen: one tap to what it's doing there (Screen page). */}
+        {busy && screenReady && (
+          <button className="icon-btn" onClick={() => useStore.getState().setView("screen")} aria-label="Watch the screen" title="Watch the screen">
+            <MonitorSmartphone size={19} />
+          </button>
+        )}
+        <button className="icon-btn" onClick={() => setSettings({})} aria-label="Chat settings" title="Chat settings">
           <SlidersHorizontal size={19} />
         </button>
       </header>
@@ -457,7 +466,7 @@ export function ChatScreen({ room }: { room: Room }) {
                     <ChatAvatar identity={identity} size="lg" />
                     <div className="big">Chat with {identity.name}</div>
                     <p className="muted small" style={{ maxWidth: 420, margin: "6px auto 0", overflowWrap: "anywhere" }}>
-                      {identity.service ? `${identity.model ?? "Its model"}, ${identityWhere(identity, poolOffer, machine)}, driven by ${info.name}. ` : ""}
+                      {identity.service ? `${identity.model ?? "Its model"}, ${identityWhere(identity, machine)}, driven by ${info.name}. ` : ""}
                       It works in <span className="mono">{room.cwd}</span> on {machine ?? "this machine"}.
                     </p>
                   </div>
@@ -466,7 +475,7 @@ export function ChatScreen({ room }: { room: Room }) {
             )}
             {room.chat && room.chat.origin !== "web" && messages.length > 0 && (
               <div className="msg system">
-                <div className="sys">Continues a conversation from {ORIGIN[room.chat.origin] ?? "another app"}. New messages there show up here when you open this chat.</div>
+                <div className="sys">Continues a chat from {ORIGIN[room.chat.origin] ?? "another app"}. New messages there show up here when you open this chat.</div>
               </div>
             )}
             {messages.map((m, i) => (
@@ -490,7 +499,7 @@ export function ChatScreen({ room }: { room: Room }) {
                     unread={readSeq !== undefined && typeof m.seq === "number" && m.seq > readSeq}
                     failed={failedOn.get(m.id) ?? 0}
                     arrive={arrived(m.id) && nothingToTap(m.text)}
-                    note={handed && m.id === lastUnread ? <ReadNowNote room={room} turn={handed} agentName={nameOf(handed.memberId)} /> : m.id === unanswered ? <NotAnswered room={room} sentAt={m.createdAt} label={group ? notAnsweredLine(unansweredBy) : undefined} /> : m.id === quietId ? <QuietWait sentAt={m.createdAt} who={quietWho || undefined} /> : null}
+                    note={handed && m.id === lastUnread ? <ReadNowNote room={room} turn={handed} agentName={nameOf(handed.memberId)} /> : m.id === unanswered ? <NotAnswered room={room} sentAt={m.createdAt} label={group ? notAnsweredLine(unansweredBy) : undefined} /> : m.id === quietId ? <QuietWait room={room} sentAt={m.createdAt} who={quietWho || undefined} memberId={quietMember || undefined} /> : null}
                   />
                 )
               ) : (
@@ -571,10 +580,9 @@ export function ChatScreen({ room }: { room: Room }) {
       </div>
 
       <EntranceScope since={quietSince}>
-        <Composer key={room.id} room={room} members={members} busy={busy} stoppable={stoppable} working={working} queued={queued} onRoomSettings={() => setSettings(true)} onSent={onSent} />
+        <Composer key={room.id} room={room} members={members} busy={busy} stoppable={stoppable} working={working} queued={queued} onRoomSettings={() => setSettings({})} onChatSettings={setSettings} onSent={onSent} />
       </EntranceScope>
-      {settings && group && <GroupSettingsDialog room={room} members={members} machine={machine} onClose={() => setSettings(false)} onDuplicate={() => setDuplicating(true)} />}
-      {settings && !group && member && <ChatSettingsDialog room={room} member={member} machine={machine} onClose={() => setSettings(false)} onDuplicate={() => setDuplicating(true)} />}
+      {settings && <ChatSettingsSheet room={room} members={members} machine={machine} at={settings} onClose={() => setSettings(null)} onDuplicate={() => setDuplicating(true)} />}
       {duplicating && member && <DuplicateDialog room={room} member={member} members={group ? members : undefined} onClose={() => setDuplicating(false)} />}
     </>
   );
@@ -607,10 +615,10 @@ function OpenInApp({ room, retry, onDuplicate, onDismiss }: { room: Room; retry:
     <div className={`card${entering ? " m-drop" : ""}`} role="note" style={{ margin: "6px 0" }}>
       <p className="small" style={{ marginTop: 0 }}>
         {legacy
-          ? "This conversation is open in the Claude app. Close it there, then send your message again. Or go on in a copy (the original stays as it is in the Claude app)."
+          ? "This chat is open in the Claude app. Close it there, then send your message again. Or go on in a copy (the original stays as it is in the Claude app)."
           : retry
             ? "Claude Code never got your message, so nothing is lost. A duplicate goes on in a copy; the original stays as it is in the Claude app."
-            : "This conversation is open in the Claude app. Close it there, then send your message again. Or duplicate it to go on in a copy (the original stays as it is)."}
+            : "This chat is open in the Claude app. Close it there, then send your message again. Or duplicate it to go on in a copy (the original stays as it is)."}
       </p>
       <div className="row wrap" style={{ gap: 8 }}>
         {legacy ? (
@@ -630,277 +638,6 @@ function OpenInApp({ room, retry, onDuplicate, onDismiss }: { room: Room; retry:
   );
 }
 
-/** A label with `code` in it, the code shown as code. */
-function withCode(label: string): ReactNode {
-  return label.split(/`([^`]*)`/).map((part, i) => (i % 2 ? <code key={i}>{part}</code> : part));
-}
-
-/**
- * What's always allowed in this chat ("Always allow" on a request), each with Remove: the agent asks about it again.
- * Nothing shows when there's none (or the machine's Crosstalk can't list them).
- */
-function AlwaysAllowedList({ member, agentName }: { member: Member; agentName: string }) {
-  const toast = useStore((s) => s.toast);
-  const [list, setList] = useState<AlwaysAllowed[] | null>(null);
-  const [removing, setRemoving] = useState<string | null>(null);
-  useEffect(() => {
-    let live = true;
-    api<AlwaysAllowed[]>("GET", `/api/members/${member.id}/always`)
-      .then((l) => live && setList(Array.isArray(l) ? l : []))
-      .catch(() => live && setList([]));
-    return () => {
-      live = false;
-    };
-  }, [member.id]);
-  if (!list?.length) return null;
-  const remove = async (g: AlwaysAllowed) => {
-    setRemoving(g.id);
-    try {
-      setList(await api<AlwaysAllowed[]>("DELETE", `/api/members/${member.id}/always`, { id: g.id }));
-    } catch (e) {
-      toast("error", e instanceof Error ? e.message : String(e));
-    } finally {
-      setRemoving(null);
-    }
-  };
-  return (
-    <div className="field">
-      <span>Always allowed</span>
-      <span className="help">{agentName} doesn't ask before these in this chat. Stricter permissions take them all back.</span>
-      <ul className="always-list">
-        {list.map((g) => (
-          <li key={g.id}>
-            <span className="always-label">{withCode(g.label)}</span>
-            <button className="btn small" disabled={removing !== null} onClick={() => void remove(g)} aria-label={`Remove: ${g.label.replace(/`/g, "")}`}>
-              {removing === g.id ? "Removing…" : "Remove"}
-            </button>
-          </li>
-        ))}
-      </ul>
-    </div>
-  );
-}
-
-function ChatSettingsDialog({ room, member, machine, onClose, onDuplicate }: { room: Room; member: Member; machine: string | null; onClose: () => void; onDuplicate: () => void }) {
-  const toast = useStore((s) => s.toast);
-  const openAgent = useStore((s) => s.openAgent);
-  const setView = useStore((s) => s.setView);
-  const provider = member.provider as ChatProvider;
-  const info = PROVIDER_INFO[provider];
-  // A chat on a service of yours: the settings are where which agent drives it is spelled out, because that's what the
-  // model lock, the helper agents and the permissions follow.
-  const pool = useStore((s) => s.poolOffer);
-  const identity = chatIdentity(room, member, useStore((s) => s.accounts), pool);
-  const [asking, setAsking] = useState<"fresh" | "delete" | null>(null);
-  const working = BUSY.includes(member.status);
-  // A message of yours the agent hasn't read yet (on machines that say what it has read): starting fresh leaves it to be
-  // asked for, with Answer now under it, or Try again on the reply that failed on it.
-  const waitingMessage = useStore((s): "Answer now" | "Try again" | null => {
-    if (member.readSeq === undefined) return null;
-    const list = s.roomData[room.id]?.messages ?? [];
-    const i = list.findLastIndex((m) => m.authorKind === "human" && !m.via);
-    const seq = i >= 0 ? list[i].seq : undefined;
-    if (typeof seq !== "number" || seq <= member.readSeq) return null;
-    return list.slice(i + 1).some(isReply) ? "Try again" : "Answer now";
-  });
-  const initial: AgentChoice = { account: memberAccount(member), model: member.model ?? "", effort: typeof member.config?.effort === "string" ? member.config.effort : "", permissionMode: member.permissionMode, helperModel: typeof member.config?.helperModel === "string" ? member.config.helperModel : "" };
-  // Everything here is measured from how it was when this opened, never from how the chat is right now: another device
-  // can rename the chat, flip these switches or pick another model while this dialog is open, and what it did stays.
-  // Only what was changed here is saved (the Pinned switch has always worked this way; so do the rest now).
-  const [choiceAtOpen] = useState<AgentChoice>(initial);
-  const [choice, setChoice] = useState<AgentChoice>(initial);
-  const [nameAtOpen] = useState(() => room.name);
-  const [name, setName] = useState(nameAtOpen);
-  const [reachableAtOpen] = useState(() => !room.privateFromAgents);
-  const [reachable, setReachable] = useState(reachableAtOpen);
-  // Pinned to the top of the chat list on every device. Kept by the chat's machine, the one showing (`machine` above is
-  // only its name, and null with just one).
-  const [pinnedAtOpen] = useState(() => isPinned(room));
-  const [pinned, setPinned] = useState(pinnedAtOpen);
-  const machines = useMachines((m) => m.list);
-  const active = useStore((s) => s.active);
-  const [busy, setBusy] = useState(false);
-  const nameId = useId();
-  const said = nameEdit(name, nameAtOpen, room.name);
-  const changed = { name: said.changed, choice: JSON.stringify(choice) !== JSON.stringify(choiceAtOpen), reachable: reachable !== reachableAtOpen, pinned: pinned !== pinnedAtOpen };
-  const dirty = changed.name || changed.choice || changed.reachable || changed.pinned;
-
-  const act = async (fn: () => Promise<void>) => {
-    setBusy(true);
-    try {
-      await fn();
-    } catch (e) {
-      toast("error", e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-  const save = () =>
-    act(async () => {
-      const c = cleanChoice(choice);
-      const sendChoice = changed.choice && JSON.stringify(choice) !== JSON.stringify(initial);
-      // Asked before the first write: a Cancel here used to leave the rename saved, the pin not, and nothing said.
-      if (sendChoice && c.account !== initial.account && !confirm(`Switching accounts starts a fresh ${info.name} session (the chat history stays). Continue?`)) return;
-      if (said.send) await api("PATCH", `/api/rooms/${room.id}`, { name: said.send });
-      if (changed.reachable && reachable !== !room.privateFromAgents) await api("PATCH", `/api/rooms/${room.id}`, { privateFromAgents: !reachable });
-      if (sendChoice) {
-        const config: Record<string, unknown> = { ...member.config, account: c.account };
-        if (c.effort) config.effort = c.effort;
-        else delete config.effort;
-        if (c.helperModel && c.helperModel !== c.model) config.helperModel = c.helperModel;
-        else delete config.helperModel;
-        await api("PATCH", `/api/members/${member.id}`, { model: c.model || null, permissionMode: c.permissionMode, config });
-      }
-      // Last: a machine with an older Crosstalk can't pin. It says so, with the rest saved and the dialog left open.
-      // Nothing to send when another device made it so meanwhile (pinning again would move it to the top).
-      if (changed.pinned && pinned !== isPinned(room)) {
-        const here = machines.find((m) => m.key === active);
-        if (!here) throw new Error("This chat's machine isn't connected yet. Try again in a moment.");
-        try {
-          await pinChat(here, room.id, pinned, machines);
-        } catch (e) {
-          pinFailed(e);
-          return;
-        }
-      }
-      onClose();
-    });
-
-  return (
-    <Dialog
-      title="Chat settings"
-      icon={<ChatAvatar identity={identity} />}
-      onClose={onClose}
-      dirty={dirty}
-      footer={
-        <>
-          <button className="btn" onClick={onClose}>
-            Cancel
-          </button>
-          <button className="btn primary" disabled={busy || !dirty || !!said.problem} onClick={save}>
-            Save
-          </button>
-        </>
-      }
-    >
-      {(requestClose) => (
-        <>
-      <label className="field">
-        <span>Name</span>
-        <input className="input" value={name} maxLength={80} onChange={(e) => setName(e.target.value)} aria-invalid={!!said.problem} aria-describedby={said.problem ? nameId : undefined} />
-      </label>
-      {said.problem && (
-        <p className="help" id={nameId} style={{ margin: "-6px 0 12px", color: "var(--orange)" }}>
-          {said.problem}
-        </p>
-      )}
-      {identity.service && (
-        <p className="help" style={{ margin: "-6px 0 12px" }}>
-          Runs on {identity.name}, {identityWhere(identity, pool, machine)} · driven by {info.name}{isServiceOnlyAgent(provider) ? "." : ", which its model lock and helper agents follow."}
-        </p>
-      )}
-      <AgentOptions provider={provider} value={choice} onChange={setChoice} />
-      <AlwaysAllowedList member={member} agentName={info.name} />
-      <div className="row" style={{ gap: 12, margin: "4px 0 12px" }}>
-        <div style={{ flex: 1 }}>
-          <div style={{ fontWeight: 600 }}>Other chats' agents can reach this chat</div>
-          <div className="help">They can find, read and message it, when "Let agents reach your other chats" is on (Settings → Teamwork). Off keeps it private, and its own agent doesn't reach other chats either.</div>
-        </div>
-        <Switch checked={reachable} onChange={setReachable} label="Other chats' agents can reach this chat" />
-      </div>
-      <div className="row" style={{ gap: 12, margin: "4px 0 12px" }}>
-        <div style={{ flex: 1 }}>
-          <div style={{ fontWeight: 600 }}>Pinned</div>
-          <div className="help">Stays at the top of your chat list, on every device.</div>
-        </div>
-        <Switch checked={pinned} onChange={setPinned} label="Pinned" />
-      </div>
-      <div className="field">
-        <span>Folder</span>
-        <span className="mono small" style={{ overflowWrap: "anywhere" }}>
-          {room.cwd}
-          {machine && <span className="folder-machine"> on {machine}</span>}
-        </span>
-        {room.chat && room.chat.origin !== "web" && <span className="help">Continues a conversation from {ORIGIN[room.chat.origin] ?? "another app"}.</span>}
-      </div>
-      <div className="row wrap" style={{ gap: 8, marginTop: 6 }}>
-        {/* Unsaved changes here are asked about first. */}
-        <button className="btn small" disabled={busy} onClick={() => requestClose(onDuplicate)}>
-          <Copy size={13} /> Duplicate chat…
-        </button>
-        <button className="btn small" disabled={busy} onClick={() => setAsking("fresh")}>
-          Start fresh
-        </button>
-        <ExportMarkdownButton room={room} disabled={busy} />
-        <button className="btn small danger" style={{ marginLeft: "auto" }} disabled={busy} onClick={() => setAsking("delete")}>
-          Delete chat
-        </button>
-      </div>
-      {asking === "fresh" && (
-        // Its messages stay: asked once, here in the app.
-        <Dialog
-          title="Start a fresh session?"
-          icon={<RotateCcw size={18} />}
-          onClose={() => !busy && setAsking(null)}
-          footer={
-            <div className="row" style={{ gap: 8, justifyContent: "flex-end", width: "100%" }}>
-              <button className="btn small" disabled={busy} onClick={() => setAsking(null)}>
-                Cancel
-              </button>
-              <button
-                className="btn small primary"
-                disabled={busy}
-                onClick={() =>
-                  act(async () => {
-                    await api("POST", `/api/members/${member.id}/reset`);
-                    setAsking(null);
-                    onClose();
-                  })
-                }
-              >
-                {busy ? "Starting…" : "Start fresh"}
-              </button>
-            </div>
-          }
-        >
-          <p className="small" style={{ margin: 0 }}>
-            {info.name} forgets this conversation and starts over. The messages here stay.
-            {working && ` Starting fresh stops ${info.name} now.`}
-            {waitingMessage === "Answer now" && " A message it hasn't read yet isn't answered until you tap Answer now under it."}
-            {waitingMessage === "Try again" && " A message it hasn't read yet isn't answered until you tap Try again."}
-          </p>
-        </Dialog>
-      )}
-      {asking === "delete" && (
-        // Its messages go: asked twice.
-        <TwoStepDialog
-          title="Delete this chat?"
-          icon={<Trash2 size={18} />}
-          detail={[
-            "Its messages are removed from Crosstalk.",
-            room.chat && room.chat.origin !== "web" ? `The conversation stays in ${ORIGIN[room.chat.origin] ?? "its app"}.` : null,
-            "Files in its folder stay.",
-            working ? `Deleting stops ${info.name}.` : null,
-          ].filter(Boolean).join(" ")}
-          sure="This can't be undone."
-          confirmLabel="Yes, delete"
-          workingLabel="Deleting…"
-          agentName={info.name}
-          onConfirm={async () => {
-            await deleteRoomHere(room.id);
-            onClose();
-            // Crosstalk's own agent and OpenCode have no screen of their own to go back to.
-            if (isServiceOnlyAgent(provider)) setView("rooms");
-            else openAgent(provider);
-          }}
-          onClose={() => setAsking(null)}
-        />
-      )}
-        </>
-      )}
-    </Dialog>
-  );
-}
 
 /**
  * A message another chat's agent sent here (through Crosstalk): on the agents' side, saying where it came from, with
@@ -942,20 +679,23 @@ function RelayMessage({ message: m, handles, arrive = false }: { message: Messag
   );
 }
 
-/**
- * Under a message "Send now" handed to the reply in progress: the agent reads it once the step it's on ends (a long
- * command can take minutes). "Stop it and read now" stops that step (a command is cut off where it is, so that's asked
- * first), and the agent answers right away. When the step can't be stopped, it says so, with Try again.
- */
 /** An agent's reply to what came before: one stopped before it said anything, while the agent was starting, isn't. */
 const isReply = (m: Message) => m.authorKind === "agent" && !(m.status === "stopped" && !m.text.trim());
 
+/**
+ * Under a message the reply in progress was handed and hasn't read: the agent reads it once the step it's on ends (a long
+ * command can take minutes). Interrupt stops that step (a command is cut off where it is, so that's asked first), and the
+ * agent reads it right away, in the same reply. When the step can't be stopped, it says so, with Try again.
+ * (On a machine from before the one rule, where Send now handed it over: a card, with "Read it now".)
+ */
 export function ReadNowNote({ room, turn, agentName }: { room: Room; turn: Turn; agentName: string }) {
   const entering = useEntrance();
   // Crosstalk's agent reads it when the step it's on ends: the note says so, with nothing offered that can't happen.
   const canStop = !isNoReadNowAgent(useStore((s) => s.members[turn.memberId]?.provider));
   // While its helpers work it went in by itself, and there's nothing to tap: only a small label says when it's read.
-  const flowing = useStore((s) => !!s.hub?.messagesFlow && (s.tasks[turn.memberId] ?? []).some(helperAtWork));
+  // (A machine that always delivers it by itself says so: HubInfo.flowsIn. There the one button is Interrupt.)
+  const always = useStore((s) => !!s.hub?.flowsIn);
+  const flowing = useStore((s) => !!s.hub?.messagesFlow && (!!s.hub.flowsIn || (s.tasks[turn.memberId] ?? []).some(helperAtWork)));
   const steps = useStore((s) => s.roomData[room.id]?.activities[turn.id]);
   // A question it asked without waiting doesn't hold it up.
   const approving = useStore((s) => Object.values(s.approvals).some((a) => a.turnId === turn.id && a.status === "pending" && a.delivery !== "async"));
@@ -984,7 +724,36 @@ export function ReadNowNote({ room, turn, agentName }: { room: Room; turn: Turn;
       setAsking(false);
     }
   };
-  if (flowing && !stopping && !failure) return <QuietNote>{approving ? `${agentName} reads this once you answer its request above.` : step ? `${agentName} reads this after the current step.` : `${agentName} reads this at its next step.`}</QuietNote>;
+  // The one rule: always the same quiet line under the message, in the same place, whatever it says (when it's read, that
+  // the step is being stopped, that it couldn't be), so nothing jumps as it changes. An older machine keeps its card below.
+  if (always || (flowing && !stopping && !failure))
+    return (
+      <QuietNote
+        roomy={always && canStop}
+        action={
+          // The one way to be read sooner: the step it's on stops, and it reads this now.
+          always && !stopping && !approving && canStop ? (
+            <button className="link-action interrupt" onClick={readNow}>
+              {failure ? "Try again" : "Interrupt"}
+            </button>
+          ) : null
+        }
+      >
+        {stopping ? (
+          <>
+            Stopping {name ?? "the current step"} so {agentName} reads this now…
+          </>
+        ) : approving ? (
+          `${agentName} reads this once you answer its request above.`
+        ) : failure ? (
+          <span role="alert">{failure}</span>
+        ) : step ? (
+          `${agentName} reads this after its current step.`
+        ) : (
+          `${agentName} reads this at its next step.`
+        )}
+      </QuietNote>
+    );
   return (
     <div className={`read-now${entering ? " m-drop" : ""}`} role="status" onClick={(e) => e.stopPropagation()}>
       <span className="read-now-text">
@@ -1014,12 +783,16 @@ export function ReadNowNote({ room, turn, agentName }: { room: Room; turn: Turn;
   );
 }
 
-/** A small label under a message of yours while helpers work: what becomes of it, with nothing to tap. */
-function QuietNote({ children }: { children: ReactNode }) {
+/**
+ * A small line under a message of yours: what becomes of it, in a few quiet words. `action`: the one button beside them
+ * (Interrupt). `roomy`: the line keeps the button's height while it has none (it's being done), so nothing above it moves.
+ */
+function QuietNote({ children, action, roomy = false }: { children: ReactNode; action?: ReactNode; roomy?: boolean }) {
   const entering = useEntrance();
   return (
-    <div className={`msg-quiet${entering ? " m-drop" : ""}`} role="status" onClick={(e) => e.stopPropagation()}>
-      {children}
+    <div className={`msg-quiet${roomy ? " roomy" : ""}${entering ? " m-drop" : ""}`} role="status" onClick={(e) => e.stopPropagation()}>
+      <span className="msg-quiet-text">{children}</span>
+      {action}
     </div>
   );
 }
@@ -1027,15 +800,44 @@ function QuietNote({ children }: { children: ReactNode }) {
 /**
  * Under a message that goes when the reply ends (quietWait). After a moment: the hub hands a message to a reply that can
  * take it as it arrives, and a label that came and went at once would say something that was never so.
+ * `memberId`: in a group chat, whose reply it waits behind: Interrupt stops that one, and the others go on.
  */
-function QuietWait({ sentAt, who }: { sentAt: number; who?: string }) {
+function QuietWait({ room, sentAt, who, memberId }: { room: Room; sentAt: number; who?: string; memberId?: string }) {
+  const always = useStore((s) => !!s.hub?.flowsIn);
+  const toast = useStore((s) => s.toast);
   const [shown, setShown] = useState(() => Date.now() - sentAt > 2_000);
+  const [stopping, setStopping] = useState(false);
   useEffect(() => {
     if (shown) return;
     const t = setTimeout(() => setShown(true), 2_000);
     return () => clearTimeout(t);
   }, [shown]);
-  return shown ? <QuietNote>{quietWaitWords(who)}</QuietNote> : null;
+  // Interrupt: the reply stops, and this message is answered next (the hub's "stop, and keep what waits").
+  const interrupt = async () => {
+    setStopping(true);
+    const stopped = memberId
+      ? await api("POST", `/api/rooms/${room.id}/stop`, { memberId, keepWaiting: true }).then(
+          () => true,
+          () => false,
+        )
+      : await stopChat(room.id, { keepWaiting: true });
+    if (!stopped) toast("error", STOP_FAILED);
+    setStopping(false);
+  };
+  return shown ? (
+    <QuietNote
+      roomy={always}
+      action={
+        always && !stopping ? (
+          <button className="link-action interrupt" onClick={interrupt}>
+            Interrupt
+          </button>
+        ) : null
+      }
+    >
+      {stopping ? (who ? `Stopping ${who}'s reply to answer this…` : "Stopping the reply to answer this…") : quietWaitWords(who)}
+    </QuietNote>
+  ) : null;
 }
 
 /** What a tap on a message ignores: it's for opening a link, a photo or a button inside it, not the message's actions. */
@@ -1125,7 +927,7 @@ export function YourMessage({ message: m, prev, handles, room, agentName, group 
     );
   }
   return (
-    <div className={`your-msg ${open ? "open" : ""}`} onClick={(e) => !(e.target as HTMLElement).closest(OWN_TAP) && setOpen((o) => !o)}>
+    <div className={`your-msg ${open ? "open in-reach" : ""}`} onClick={(e) => !(e.target as HTMLElement).closest(OWN_TAP) && setOpen((o) => !o)}>
       <MessageRow message={m} prev={prev} handles={handles} statusKnown arrive={arrive} />
       {note}
       {room.chat && <AskCards room={room} messageId={m.id} />}
@@ -1203,6 +1005,8 @@ export function YourMessage({ message: m, prev, handles, room, agentName, group 
  */
 function NotAnswered({ room, sentAt, label = "Not answered" }: { room: Room; sentAt: number; label?: string }) {
   const entering = useEntrance();
+  // One verb for getting an answer on a machine with the one rule (HubInfo.flowsIn); older ones keep theirs.
+  const always = useStore((s) => !!s.hub?.flowsIn);
   const toast = useStore((s) => s.toast);
   const [shown, setShown] = useState(() => Date.now() - sentAt > 10_000);
   useEffect(() => {
@@ -1228,7 +1032,7 @@ function NotAnswered({ room, sentAt, label = "Not answered" }: { room: Room; sen
       <span>{label}</span>
       <span aria-hidden="true">·</span>
       <button className="btn small primary" disabled={asking} onClick={answer}>
-        {asking ? "Asking…" : "Answer now"}
+        {asking ? "Asking…" : always ? "Try again" : "Answer now"}
       </button>
     </div>
   );
@@ -1368,7 +1172,8 @@ export function AgentReply({ room, messages, index, turn, agentName, author, bus
   const quote = (t: string) => `“${t.replace(/\s+/g, " ").trim().slice(0, 80)}${t.length > 80 ? "…" : ""}”`;
   return (
     // Always the same wrapper, so a reply that finishes streaming isn't drawn again from scratch when Copy appears.
-    <div className={`your-msg agent-reply ${open || pinned ? "open" : ""}`} onClick={toggle}>
+    // `in-reach`: opened by a tap, the actions stay in view while the reply does (layout.css).
+    <div className={`your-msg agent-reply ${open || pinned ? "open" : ""}${open ? " in-reach" : ""}`} onClick={toggle}>
       {children}
       {room.chat && <AskCards room={room} messageId={m.id} />}
       {actions && (

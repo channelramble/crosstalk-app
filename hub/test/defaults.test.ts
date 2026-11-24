@@ -45,7 +45,7 @@ test("pausing hand-offs near a usage limit is off by default, and works when tur
   const dir = mkdtempSync(join(tmpdir(), "ct-hubsettings-"));
   const app = new App({ dbPath: ":memory:", config: { port: 0, host: "127.0.0.1", publicUrl: null, workspaceRoot: dir, maxHopsDefault: 6 } });
   try {
-    expect(app.hubSettings()).toEqual({ machineName: "", agentsAcrossChats: false, pauseNearLimit: false, carryOnAfterLimit: true, messagesFlow: true, teamwork: FACTORY_TEAMWORK, storage: FACTORY_STORAGE });
+    expect(app.hubSettings()).toEqual({ machineName: "", agentsAcrossChats: false, pauseNearLimit: false, carryOnAfterLimit: true, messagesFlow: true, memoryAct: true, teamwork: FACTORY_TEAMWORK, storage: FACTORY_STORAGE, screen: { agents: false, username: "" } });
     const room = app.createRoom({ name: "R", mode: "review" });
     // The (test) agents' plan reports 95% of its 5-hour limit.
     app.addMember(room.id, { provider: "mock", handle: "builder", config: { delayMs: 10, reply: "Built {n}.", usedPercent: 95 } });
@@ -54,7 +54,7 @@ test("pausing hand-offs near a usage limit is off by default, and works when tur
     app.engine.postHumanMessage(room.id, "go", "Phone");
     await app.engine.whenIdle();
     expect(agents()).toBe(2); // off: the review still happens at 95%
-    expect(app.setHubSettings({ pauseNearLimit: true })).toEqual({ machineName: "", agentsAcrossChats: false, pauseNearLimit: true, carryOnAfterLimit: true, messagesFlow: true, teamwork: FACTORY_TEAMWORK, storage: FACTORY_STORAGE });
+    expect(app.setHubSettings({ pauseNearLimit: true })).toEqual({ machineName: "", agentsAcrossChats: false, pauseNearLimit: true, carryOnAfterLimit: true, messagesFlow: true, memoryAct: true, teamwork: FACTORY_TEAMWORK, storage: FACTORY_STORAGE, screen: { agents: false, username: "" } });
     app.engine.postHumanMessage(room.id, "again", "Phone");
     await app.engine.whenIdle();
     expect(agents()).toBe(3); // on: the builder works, the hand-off to the reviewer pauses
@@ -73,6 +73,31 @@ test("carrying on when a usage limit resets is on by default, and saves off and 
     // Settings saved by an older hub say nothing about it: that means on, so chats still carry on after an update.
     app.store.kvSet("hubSettings", JSON.stringify({ machineName: "", agentsAcrossChats: false, pauseNearLimit: true }));
     expect(app.hubSettings()).toMatchObject({ pauseNearLimit: true, carryOnAfterLimit: true });
+  } finally { await app.engine.shutdown(); app.store.close(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("Free memory by itself is on by default, saves off and on again, and every device hears the switch", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ct-memoryact-"));
+  const app = new App({ dbPath: ":memory:", config: { port: 0, host: "127.0.0.1", publicUrl: null, workspaceRoot: dir, maxHopsDefault: 6 } });
+  try {
+    const heard: (boolean | undefined)[] = [];
+    app.bus.on((e) => { if (e.t === "memory") heard.push(e.memory.acts); });
+    expect(app.hubSettings().memoryAct).toBe(true);
+    expect(app.memory.status().acts).toBe(true);
+    expect(app.setHubSettings({ memoryAct: false }).memoryAct).toBe(false);
+    expect(app.memory.status().acts).toBe(false);
+    expect(app.snapshot({ id: "d", name: "Phone", kind: "web", createdAt: 0, lastSeenAt: 0 } as never).memory?.acts).toBe(false);
+    expect(app.setHubSettings({ memoryAct: true }).memoryAct).toBe(true);
+    expect(heard).toEqual([false, true]);
+    // Saving something else says nothing about memory.
+    app.setHubSettings({ pauseNearLimit: true });
+    expect(heard.length).toBe(2);
+    // Settings saved by an older hub say nothing about it: that means on.
+    app.store.kvSet("hubSettings", JSON.stringify({ machineName: "", agentsAcrossChats: false, pauseNearLimit: true }));
+    expect(app.hubSettings().memoryAct).toBe(true);
+    expect(app.memory.status().acts).toBe(true);
+    // A test hub watches no machine: no reply ever waits for memory on it.
+    expect(app.memory.holding()).toBe(false);
   } finally { await app.engine.shutdown(); app.store.close(); rmSync(dir, { recursive: true, force: true }); }
 });
 

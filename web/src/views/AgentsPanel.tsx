@@ -109,7 +109,7 @@ export function AgentsPanel({ roomId, compact }: { roomId: string; compact?: boo
       {totals && (totals.inputTokens > 0 || totals.outputTokens > 0) && (
         <div style={{ padding: "18px 16px" }}>
           <h2 className="section-title" style={{ marginBottom: 8 }}>
-            This room
+            This chat
           </h2>
           <div className="small muted">
             {formatTokens(totals.inputTokens)} tokens in · {formatTokens(totals.outputTokens)} out

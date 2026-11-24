@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Crosstalk: one-line install for the always-on Mac or Linux machine your agents work on.
+# Crosstalk: one line to install it, or update it, on the Mac or Linux machine your agents work on.
 #
 #   curl -fsSL https://raw.githubusercontent.com/channelramble/crosstalk-app/main/install.sh | bash
 #
@@ -33,7 +33,7 @@ elif [ "$VERSION" = "latest" ]; then BASE="https://github.com/$REPO/releases/lat
 else BASE="https://github.com/$REPO/releases/download/$VERSION"; fi
 BIN="crosstalk-hub-$OS-$ARCH"
 
-bold "Crosstalk: downloading the hub for $OS-$ARCH"
+bold "Downloading Crosstalk"
 DIR="$(mktemp -d)"
 trap 'rm -rf "$DIR"' EXIT
 for f in "$BIN" "$SETUP" SHA256SUMS; do
@@ -45,10 +45,11 @@ done
   grep -E "  ($BIN|$SETUP)\$" SHA256SUMS > want || die "SHA256SUMS doesn't list $BIN"
   if command -v sha256sum >/dev/null; then sha256sum -c want >/dev/null; else shasum -a 256 -c want >/dev/null; fi
 ) || die "The download doesn't match its checksum. Nothing was installed; try again."
-info "Checksums match ✓"
 
 chmod +x "$DIR/$BIN" "$DIR/$SETUP"
-# The platform installer finds the hub next to itself. On a pipe there's no terminal for its questions (sudo asks for
+# Where this release's other files are (the Mac installer looks there for the menu-bar app).
+export CROSSTALK_RELEASE_BASE="$BASE"
+# The platform installer finds the program next to itself. On a pipe there's no terminal for its questions (sudo asks for
 # your password), so it reads them from the terminal you ran this in.
 # With no terminal at all (an automated run), it goes on without one.
 if [ -t 0 ] || ! (exec < /dev/tty) 2>/dev/null; then "$DIR/$SETUP" "$@"; else "$DIR/$SETUP" "$@" < /dev/tty; fi

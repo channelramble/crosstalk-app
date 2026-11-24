@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import type { Locator, Page } from "@playwright/test";
-import type { LocalDownload, LocalLibrary, LocalModelFile, LocalModelServer, LocalOllamaInfo, LocalRepoFiles, LocalSearchHit, LocalStarted, PoolModel } from "@crosstalk/shared";
+import type { LocalDownload, LocalLibrary, LocalModelFile, LocalModelServer, LocalOllamaInfo, LocalRepoFiles, LocalSearchHit, LocalStarted, HfModel } from "@crosstalk/shared";
 import { test, expect, noHorizontalOverflow } from "./fixtures";
 
 // Settings → Local models: getting a model (Hugging Face or Ollama's library, each file with whether it fits this machine),
@@ -51,7 +51,7 @@ const library = (over: Partial<LocalLibrary> = {}): LocalLibrary => ({
   ports: { ollama: 11434, llamacpp: 8080 },
   ...over,
 });
-const fileOf = (m: PoolModel): LocalModelFile => ({ id: `${m.repo}/${m.files[0]}`, repo: m.repo, files: m.files, quant: m.quant, bytes: m.sizeBytes, kvBytesPerToken: 73728, contextLength: 131072 });
+const fileOf = (m: HfModel): LocalModelFile => ({ id: `${m.repo}/${m.files[0]}`, repo: m.repo, files: m.files, quant: m.quant, bytes: m.sizeBytes, kvBytesPerToken: 73728, contextLength: 131072 });
 const OLLAMA_SERVER = (over: Partial<LocalModelServer> = {}): LocalModelServer => ({
   id: "ollama-11434", kind: "ollama", label: "Ollama (port 11434)", baseUrl: "http://127.0.0.1:11434", protocols, accountIds: [], processBytes: 0.4 * GiB, memoryBytes: 0.4 * GiB,
   models: [], startedId: null, stopWhy: "Crosstalk didn't start this Ollama, so it leaves it alone: quit it from its menu bar icon, or where it was started.", ...over,
@@ -114,7 +114,7 @@ async function hub(page: Page, init: { library?: LocalLibrary | number; servers?
   });
   await page.route(home("/api/local-models/downloads"), (route) =>
     answer("/api/local-models/downloads", () => {
-      const b = body<{ source: "huggingface"; model: PoolModel } | { source: "ollama"; serverId: string; model: string }>(route);
+      const b = body<{ source: "huggingface"; model: HfModel } | { source: "ollama"; serverId: string; model: string }>(route);
       const l = lib();
       const id = b.source === "huggingface" ? `hf:${b.model.repo}/${b.model.files[0]}` : `ollama:${b.serverId}:${b.model}`;
       const had = l.downloads.find((d) => d.id === id);
@@ -173,8 +173,8 @@ async function hub(page: Page, init: { library?: LocalLibrary | number; servers?
       return l.folder;
     })(route),
   );
-  await page.route(home("/api/pool/hf-token"), (route) =>
-    answer("/api/pool/hf-token", () => {
+  await page.route(home("/api/local-models/hf-token"), (route) =>
+    answer("/api/local-models/hf-token", () => {
       lib().hasHfToken = !!body<{ token: string | null }>(route).token;
       return { hasHfToken: lib().hasHfToken };
     })(route),
@@ -198,7 +198,7 @@ const settings = async (page: Page, width = 390) => {
   await expect(page.getByRole("heading", { name: "Local models", exact: true })).toBeVisible();
 };
 const modelsCard = (page: Page) => page.getByRole("region", { name: /^Models on / });
-const startCard = (page: Page) => page.getByRole("region", { name: "Start a server", exact: true });
+const startCard = (page: Page) => page.getByRole("region", { name: "Start Ollama or llama.cpp", exact: true });
 const getDialog = (page: Page) => page.getByRole("dialog", { name: "Get a model", exact: true });
 const fileRow = (dialog: Locator, quant: string) => dialog.getByRole("list", { name: "Files" }).getByRole("listitem").filter({ has: dialog.page().locator(".local-file-title", { hasText: new RegExp(`^${quant}$`) }) });
 const openGet = async (page: Page) => {
@@ -352,7 +352,7 @@ test("a gated model asks for the Hugging Face token: saved on the hub, never sho
   await dialog.getByRole("button", { name: "Save token", exact: true }).click();
   await expect(dialog.locator(".local-token .pill")).toHaveText("Saved");
   await expect(dialog.getByLabel("Hugging Face token", { exact: true })).toHaveCount(0);
-  expect(h.state.sent.find((s) => s.path === "/api/pool/hf-token")?.body).toEqual({ token: TOKEN });
+  expect(h.state.sent.find((s) => s.path === "/api/local-models/hf-token")?.body).toEqual({ token: TOKEN });
   expect(await page.content()).not.toContain(TOKEN);
   await noHorizontalOverflow(page);
   await shot(page, "27-token-saved.png");
@@ -419,7 +419,7 @@ test("without Ollama running, the Ollama tab says how to start it", async ({ pag
   await settings(page);
   const dialog = await openGet(page);
   await dialog.getByRole("radiogroup", { name: "Where from" }).getByRole("radio", { name: "Ollama" }).click();
-  await expect(dialog.getByRole("status")).toContainText(/^Ollama isn't running on .+\. Start it under Start a server \(or open the Ollama app\), then press Rescan\.$/);
+  await expect(dialog.getByRole("status")).toContainText(/^Ollama isn't running on .+\. Start it under Start Ollama or llama\.cpp \(or open the Ollama app\), then press Rescan\.$/);
 });
 
 test("starting llama.cpp with a downloaded model, its port and context; it shows loading, then its card has Stop, which asks first", async ({ page }) => {
@@ -512,7 +512,7 @@ test("servers Crosstalk didn't start say how to stop them, and nothing installed
   await expect(studio.getByRole("button", { name: /^Stop/ })).toHaveCount(0);
   const start = startCard(page);
   await expect(start).toContainText("Not installed here. Get it at ollama.com/download, then press Rescan.");
-  await expect(start).toContainText("Not installed here. Install it with Homebrew (brew install llama.cpp), or start the model pool once to get its build, then press Rescan.");
+  await expect(start).toContainText("Not installed here. Install it with Homebrew (brew install llama.cpp), then press Rescan.");
   await expect(start.getByRole("button", { name: /^Start / })).toHaveCount(0);
   await noHorizontalOverflow(page);
   await shot(page, "35-not-installed.png", start);
@@ -569,7 +569,7 @@ test("a look that fails while a download runs (the hub restarting, say) doesn't 
   await settings(page);
   const bar = modelsCard(page).getByRole("list", { name: "Downloads" }).getByRole("listitem", { name: "Qwen3-8B Q6_K" }).getByRole("progressbar");
   await expect(bar).toHaveAttribute("aria-valuenow", "30");
-  h.state.fail["/api/local-models/library"] = { status: 502, error: "The hub didn't answer." };
+  h.state.fail["/api/local-models/library"] = { status: 502, error: "The machine didn't answer." };
   await expect.poll(() => "/api/local-models/library" in h.state.fail, { timeout: 5000 }).toBe(false);
   h.progress(running.id, 4 * GiB);
   await expect(bar).toHaveAttribute("aria-valuenow", "61", { timeout: 5000 });
@@ -626,7 +626,7 @@ test("an older hub without these parts shows its servers as before", async ({ pa
 for (const width of [320, 390]) {
   test(`nothing runs off the edge at ${width} px: long names, a failed download, the dialogs open`, async ({ page }) => {
     const longRepo = "someone-with-a-long-name/Qwen3-Coder-30B-A3B-Instruct-1M-Abliterated-Uncensored-GGUF";
-    const long: PoolModel = { repo: longRepo, files: ["Qwen3-Coder-30B-A3B-Instruct-1M-Abliterated-Uncensored-UD-Q4_K_XL-00001-of-00002.gguf", "Qwen3-Coder-30B-A3B-Instruct-1M-Abliterated-Uncensored-UD-Q4_K_XL-00002-of-00002.gguf"], quant: "UD-Q4_K_XL", sizeBytes: 17.7 * GiB, gated: false };
+    const long: HfModel = { repo: longRepo, files: ["Qwen3-Coder-30B-A3B-Instruct-1M-Abliterated-Uncensored-UD-Q4_K_XL-00001-of-00002.gguf", "Qwen3-Coder-30B-A3B-Instruct-1M-Abliterated-Uncensored-UD-Q4_K_XL-00002-of-00002.gguf"], quant: "UD-Q4_K_XL", sizeBytes: 17.7 * GiB, gated: false };
     const failedDl: LocalDownload = { id: `hf:${longRepo}/${long.files[0]}`, source: "huggingface", name: "Qwen3-Coder-30B-A3B-Instruct-1M-Abliterated-Uncensored UD-Q4_K_XL", model: long, ollama: null, state: "failed", doneBytes: 3 * GiB, totalBytes: long.sizeBytes, bytesPerSec: null, error: "The disk is almost full (keeping 2.0 GB free): free up space, then start the download again (it picks up where it stopped).", code: "low_disk", step: null, updatedAt: 1 };
     await hub(page, {
       library: library({ files: [fileOf(QWEN.models[1]), { ...fileOf(long), id: `${longRepo}/${long.files[0]}` }], downloads: [failedDl], folder: { path: "/Volumes/A-very-long-drive-name-for-models/llm/models", shown: "/Volumes/A-very-long-drive-name-for-models/llm/models", isDefault: false, drive: "A-very-long-drive-name-for-models", freeBytes: 812 * GiB, totalBytes: 1000 * GiB, problem: null } }),

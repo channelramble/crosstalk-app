@@ -1,6 +1,6 @@
 import type { Page, WebSocketRoute } from "@playwright/test";
 import type { MachineInfo } from "@crosstalk/shared";
-import { test, expect, noHorizontalOverflow } from "./fixtures";
+import { test, expect, noHorizontalOverflow, reachable } from "./fixtures";
 import { otherMachine, pong } from "./otherMachine";
 
 // Machines and devices: pairing, signing a device out, the links between machines (Settings → Machines and the chat
@@ -12,7 +12,7 @@ import { otherMachine, pong } from "./otherMachine";
 /** A request to the machine this app opens from (the test hub, through the dev server). */
 const home = (path: string) => (url: URL) => url.origin === "http://127.0.0.1:5198" && url.pathname === path;
 const onPhone = (page: Page) => page.viewportSize()!.width <= 760;
-const machinesHeading = (page: Page) => page.getByRole("heading", { name: "Machines", exact: true });
+const machinesHeading = (page: Page) => page.locator("#machines").getByRole("heading", { name: "Machines", exact: true });
 
 const linkInfo = (url: string, over: Partial<MachineInfo> = {}): MachineInfo => ({
   id: "h_linux",
@@ -155,6 +155,8 @@ test("a machine unlinked on another device leaves this screen", async ({ page })
   const row = page.locator(".machine-row").filter({ hasText: "Linux box" });
   await expect(row).toContainText("Not on this device yet");
   await row.getByRole("button", { name: "Unlink", exact: true }).click();
+  // Asked in the app's own sheet, which says what unlinking does.
+  await page.getByRole("dialog", { name: "Unlink Linux box?", exact: true }).getByRole("button", { name: "Unlink", exact: true }).click();
   await expect(page.locator(".toast").filter({ hasText: "isn't linked" })).toBeVisible();
   await expect(row).toHaveCount(0, { timeout: 5_000 });
 });
@@ -183,6 +185,8 @@ test("the chat list stops offering a machine that was just unlinked", async ({ p
   const row = page.locator(".machine-row").filter({ hasText: "Linux box" });
   await row.scrollIntoViewIfNeeded();
   await row.getByRole("button", { name: "Unlink", exact: true }).click();
+  // Asked in the app's own sheet, which says what unlinking does.
+  await page.getByRole("dialog", { name: "Unlink Linux box?", exact: true }).getByRole("button", { name: "Unlink", exact: true }).click();
   await expect(row).toHaveCount(0);
   await expect((await chats(page)).locator(".csb-machine").filter({ hasText: "Linux box was linked" })).toHaveCount(0);
 });
@@ -196,9 +200,22 @@ test("the chat list stops offering a machine that was just unlinked", async ({ p
 test("the pairing dialog says when its code has run out", async ({ page }) => {
   await page.route(home("/api/pairing-codes"), (route) => route.fulfill({ json: { code: "ABCD-EFGH", expiresAt: Date.now() + 2500, url: null } }));
   await page.goto("/#/settings/devices");
+  await reachable(page);
   await page.getByRole("button", { name: "Pair a new device", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Pair a device", exact: true });
   await expect(dialog.locator(".code-big")).toHaveText("ABCD-EFGH");
   await noHorizontalOverflow(page);
   await expect(dialog).toContainText(/expired|ran out|no longer works|make a new/i, { timeout: 8_000 });
+});
+
+test("a machine only this computer can open: the pairing dialog says what a phone needs, instead of a code that can't work", async ({ page }) => {
+  await page.route(home("/api/pairing-codes"), (route) => route.fulfill({ json: { code: "ABCD-EFGH", expiresAt: Date.now() + 60_000, url: null } }));
+  await page.goto("/#/settings/devices");
+  await page.getByRole("button", { name: "Pair a new device", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Pair a device", exact: true });
+  await expect(dialog.getByRole("note")).toContainText("Another device can't reach this machine yet.");
+  await expect(dialog.getByRole("link", { name: "Tailscale", exact: true })).toHaveAttribute("href", "https://tailscale.com/download");
+  await expect(dialog.locator(".code-big")).toHaveCount(0);
+  await expect(dialog.getByRole("img", { name: "Pairing QR code" })).toHaveCount(0);
+  await noHorizontalOverflow(page);
 });

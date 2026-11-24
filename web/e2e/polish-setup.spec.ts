@@ -105,6 +105,10 @@ async function section(page: Page) {
   await page.goto("/#/settings/agent-setup");
   const card = page.locator(".agent-setup");
   await expect(card).toBeVisible();
+  // The commands, Add for me and the prompt are behind "Do it by hand" (where there's a list at all).
+  const byHand = card.locator("details.as-byhand");
+  await expect(card.locator("[data-focus-here]")).not.toContainText("Checking");
+  if ((await byHand.count()) && (await byHand.getAttribute("open")) === null) await byHand.locator("summary").click();
   return card;
 }
 

@@ -3,7 +3,7 @@ import type { Room } from "@crosstalk/shared";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test, expect, noHorizontalOverflow } from "./fixtures";
+import { test, expect, noHorizontalOverflow, chatSettingsAll, closeChatSettings } from "./fixtures";
 import { otherMachine } from "./otherMachine";
 
 // Pinned chats (ChatRow.tsx, pins.ts) and naming a chat in New chat. Phone flows run in the 320 and 390 projects at
@@ -89,9 +89,9 @@ test("on a phone, chats are pinned from the list, moved up and down, kept after 
     let side = await chatList(page);
     await expect(side.getByRole("region", { name: "Pinned", exact: true })).toHaveCount(0);
 
-    // Alpha's ⋯ (finger-sized) opens its options just under it.
+    // Alpha's ⋯ opens its options just under it (with a mouse, as here; a touch screen has no ⋯ and opens them on a
+    // long press: chatListState.spec.ts).
     const alpha = rowOf(side, a.room.name);
-    expect((await more(alpha, a.room.name).boundingBox())!.height).toBeGreaterThanOrEqual(40);
     await more(alpha, a.room.name).click();
     await expect(more(alpha, a.room.name)).toHaveAttribute("aria-expanded", "true");
     const pinIt = tray(alpha, a.room.name).getByRole("button", { name: "Pin to top", exact: true });
@@ -140,11 +140,11 @@ test("on a phone, chats are pinned from the list, moved up and down, kept after 
     side = await chatList(page);
     await expect.poll(() => pinnedNames(side)).toEqual([b.room.name, a.room.name]);
 
-    // Unpinned: back with its agent's chats, by when it was last used (Charlie is newer), and still in view.
+    // Unpinned: back under Recent, by when it was last used (Charlie is newer), and still in view.
     await more(bravo, b.room.name).click();
     await tray(bravo, b.room.name).getByRole("button", { name: "Unpin", exact: true }).click();
     await expect.poll(() => pinnedNames(side)).toEqual([a.room.name]);
-    const codex = side.locator(".csb-group").filter({ has: page.locator(".csb-agent-name", { hasText: "Codex" }) });
+    const codex = side.getByRole("region", { name: "Recent", exact: true });
     await expect.poll(() => codex.locator(".csb-chat-name").allTextContents()).toEqual([c.room.name, b.room.name]);
     await expect(more(bravo, b.room.name)).toBeFocused();
     now = await saved(request, token);
@@ -207,8 +207,8 @@ test("a machine with an older Crosstalk says to update it, and its chat stays wh
   await expect(page.locator(".toast").filter({ hasText: "Update Crosstalk on Linux box to pin its chats." })).toBeVisible();
   await expect.poll(() => linux.pinned.map((p) => p.id)).toEqual(["r_linux_older"]);
   await expect(side.getByRole("region", { name: "Pinned", exact: true })).toHaveCount(0);
-  // Still with its agent's chats, and Pin to top is still there to try once it's updated.
-  const codex = side.locator(".csb-group").filter({ has: page.locator(".csb-agent-name", { hasText: "Codex" }) });
+  // Still under Recent, and Pin to top is still there to try once it's updated.
+  const codex = side.getByRole("region", { name: "Recent", exact: true });
   await expect(rowOf(codex, "Fix login")).toBeVisible();
   await expect(tray(row, "Fix login").getByRole("button", { name: "Pin to top", exact: true })).toBeVisible();
   await noHorizontalOverflow(page);
@@ -276,7 +276,7 @@ test("Chat settings pins and unpins its chat", async ({ page, request, token }) 
   await page.setViewportSize({ width: 390, height: 844 });
   const x = await chat(request, token, `Settings pin ${Math.random().toString(36).slice(2, 6)}`);
   const settings = async () => {
-    await page.getByRole("button", { name: "Chat settings", exact: true }).click();
+    await chatSettingsAll(page);
     const dialog = page.getByRole("dialog", { name: "Chat settings", exact: true });
     await expect(dialog).toBeVisible();
     return dialog;
@@ -288,12 +288,13 @@ test("Chat settings pins and unpins its chat", async ({ page, request, token }) 
     const pinned = dialog.getByRole("checkbox", { name: "Pinned", exact: true });
     await expect(pinned).not.toBeChecked();
     await expect(dialog).toContainText("Stays at the top of your chat list, on every device.");
+    // Saved as the switch is flipped: there's no Save to find.
     await pinned.click({ force: true });
+    await expect.poll(async () => (await saved(request, token)).get(x.room.id)?.pinnedAt ?? 0).toBeGreaterThan(0);
+    await expect(pinned).toBeChecked();
     await noHorizontalOverflow(page);
     await page.screenshot({ ...shot("pins-chat-settings.png"), animations: "disabled" });
-    await dialog.getByRole("button", { name: "Save", exact: true }).click();
-    await expect(dialog).toHaveCount(0);
-    await expect.poll(async () => (await saved(request, token)).get(x.room.id)?.pinnedAt ?? 0).toBeGreaterThan(0);
+    await closeChatSettings(page);
     const side = await chatList(page);
     await expect.poll(() => pinnedNames(side)).toEqual([x.room.name]);
     await side.getByRole("button", { name: "Close", exact: true }).click();
@@ -301,9 +302,8 @@ test("Chat settings pins and unpins its chat", async ({ page, request, token }) 
     dialog = await settings();
     await expect(dialog.getByRole("checkbox", { name: "Pinned", exact: true })).toBeChecked();
     await dialog.getByRole("checkbox", { name: "Pinned", exact: true }).click({ force: true });
-    await dialog.getByRole("button", { name: "Save", exact: true }).click();
-    await expect(dialog).toHaveCount(0);
     await expect.poll(async () => (await saved(request, token)).get(x.room.id)?.pinnedAt ?? null).toBeNull();
+    await expect(dialog.getByRole("checkbox", { name: "Pinned", exact: true })).not.toBeChecked();
   } finally {
     await x.cleanup();
   }
@@ -325,7 +325,7 @@ test("Chat settings never undoes a pin or an unpin made on another device while 
     await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
   };
   const settings = async () => {
-    await page.getByRole("button", { name: "Chat settings", exact: true }).click();
+    await chatSettingsAll(page);
     const dialog = page.getByRole("dialog", { name: "Chat settings", exact: true });
     await expect(dialog).toBeVisible();
     return dialog;
@@ -334,24 +334,24 @@ test("Chat settings never undoes a pin or an unpin made on another device while 
     await page.goto(`/#/room/${x.room.id}`);
     await expect(page.getByRole("heading", { name: x.room.name, exact: true })).toBeVisible();
 
-    // Opened unpinned, then pinned on another device: nothing changed here, so nothing to save.
+    // Opened unpinned, then pinned on another device: the switch says so, and nothing here is waiting to undo it.
     let dialog = await settings();
     await expect(dialog.getByRole("checkbox", { name: "Pinned", exact: true })).not.toBeChecked();
     await elsewhere(true);
-    await expect(dialog.getByRole("button", { name: "Save", exact: true })).toBeDisabled();
+    await expect(dialog.getByRole("checkbox", { name: "Pinned", exact: true })).toBeChecked();
     // Something else changed and saved: the pin stays.
     await dialog.getByRole("textbox", { name: "Name", exact: true }).fill(`${x.room.name} 2`);
-    await dialog.getByRole("button", { name: "Save", exact: true }).click();
-    await expect(dialog).toHaveCount(0);
+    await dialog.getByRole("button", { name: "Save name", exact: true }).click();
     await expect.poll(async () => (await saved(request, token)).get(x.room.id)?.name).toBe(`${x.room.name} 2`);
     expect((await saved(request, token)).get(x.room.id)?.pinnedAt ?? 0).toBeGreaterThan(0);
+    await closeChatSettings(page);
 
     // Opened pinned, then unpinned on another device: Escape closes it without asking about changes, and it stays
     // unpinned.
     dialog = await settings();
     await expect(dialog.getByRole("checkbox", { name: "Pinned", exact: true })).toBeChecked();
     await elsewhere(false);
-    await expect(dialog.getByRole("button", { name: "Save", exact: true })).toBeDisabled();
+    await expect(dialog.getByRole("checkbox", { name: "Pinned", exact: true })).not.toBeChecked();
     await page.keyboard.press("Escape");
     await expect(dialog).toHaveCount(0);
     expect((await saved(request, token)).get(x.room.id)?.pinnedAt).toBeUndefined();

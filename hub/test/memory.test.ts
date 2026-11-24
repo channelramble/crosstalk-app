@@ -3,12 +3,11 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { MachineMemory } from "@crosstalk/shared";
-import { MEMORY_BANDS, THRASH_PAGES_PER_SEC, memoryBandOf, memoryLine, memoryNotice, memoryRefusal, memoryWays, thrashPagesPerSec } from "@crosstalk/shared";
-import { MemoryGuard, blindReader, linuxReader, readerFor, type HolderProbe, type MemoryReader, type Reading } from "../src/memory";
+import { MEMORY_BANDS, MEMORY_STEER, MEMORY_STEER_OWN, THRASH_PAGES_PER_SEC, memoryBandOf, memoryBriefing, memoryLine, memoryNoResumeLine, memoryNotice, memoryRefusal, memoryWays, thrashPagesPerSec } from "@crosstalk/shared";
+import { MEMORY_ACT, MemoryGuard, blindReader, groupProcesses, linuxReader, programName, readerFor, type AgentProcess, type HolderProbe, type MemoryActions, type MemoryReader, type ProcessRow, type Reading } from "../src/memory";
 import { ImageEditor, editorNeedBytes } from "../src/imageEditor";
 import { LocalRunners } from "../src/localRunners";
 import { HttpError } from "../src/engine/engine";
-import { poolNeedBytes } from "../src/pool/node";
 
 // The memory guard (hub/src/memory.ts). Nothing here starts a process, reads one of the user's, or touches their
 // ComfyUI or llama-server: the machine is a fake reader, and the one test that does look at this Mac only reads a
@@ -329,25 +328,6 @@ test("one image edit is counted from the files the editor page names, wherever C
   cleanUp();
 });
 
-test("the model pool's server counts its files plus llama.cpp's cache and headroom", () => {
-  const dir = tempDir("ct-pool-need-");
-  const file = join(dir, "model.gguf");
-  writeFileSync(file, Buffer.alloc(1024));
-  truncate(file, 4 * GiB);
-  // 4 GB of weights, 8,192 tokens of cache at the fallback 128 KiB a token, and 1 GB of headroom.
-  expect(poolNeedBytes([file], 8192)).toBe(4 * GiB + 8192 * 128 * 1024 + GiB);
-  // A context of 0 is the model's own, which can't be counted beforehand: only the files are.
-  expect(poolNeedBytes([file], 0)).toBe(4 * GiB);
-  expect(poolNeedBytes([join(dir, "gone.gguf")], 8192)).toBeNull();
-  // Named devices of this machine's own: it holds the model, so it is charged for it.
-  expect(poolNeedBytes([file], 8192, ["Metal0"])).toBe(4 * GiB + 8192 * 128 * 1024 + GiB);
-  // Every layer on the helpers (which is every pool whose main machine lends no GPU): the weights and the cache live
-  // on their GPUs and this machine only streams tensors through, so none of the model is this machine's to hold.
-  // Charging it the whole model refused the pool on the one configuration a pool is for.
-  expect(poolNeedBytes([file], 8192, "helpers")).toBeNull();
-  cleanUp();
-});
-
 // ---- the words ----
 
 test("the words say what is wrong, what is holding it, and what a person can do", () => {
@@ -452,18 +432,18 @@ test("a ComfyUI the hub didn't start is found on the editor's port and counted",
   expect(v.text).toContain("turn it off in Settings");
 });
 
-test("the pool's own server is one holder, however many ways the hub knows of it", async () => {
+test("one process is one holder, however many ways the hub knows of it", async () => {
   const guard = guardOn({
     footprints: { 42: 10 * GiB },
     listeners: async (port) => (port === 8090 ? [42] : []),
     holders: [
-      { what: "the model pool's server", ours: true, section: "model-pool", pid: 42 },
-      // The "Model pool" account points at 127.0.0.1:8090, which is this very process.
+      { what: "llama.cpp on port 8090", ours: true, section: "local-models", pid: 42 },
+      // A custom-model account points at 127.0.0.1:8090, which is this very process.
       { what: "the model server on port 8090", ours: false, section: null, port: 8090 },
     ],
   });
   const v = await guard.verdict({ what: "the image editor", needBytes: GiB, on: "ram" });
-  expect(v.holders.map((h) => h.what)).toEqual(["the model pool's server"]);
+  expect(v.holders.map((h) => h.what)).toEqual(["llama.cpp on port 8090"]);
   // 16 GB less one 10 GB model, not less two of them: counted twice, this refused everything after it.
   expect(guard.status().takenBytes).toBe(10 * GiB);
   expect(v.freeBytes).toBe(6 * GiB);
@@ -486,16 +466,6 @@ test("a model server that isn't running is not listed as holding the machine", a
   expect(v.text).not.toContain("port 8080");
   // A process that is there but couldn't be measured is a different thing to say, and keeps its row.
   expect(v.holders[0].bytes).toBeNull();
-});
-
-test("what a start replaces isn't counted as holding the machine", async () => {
-  const guard = guardOn({ footprints: { 7: 5 * GiB }, holders: [{ what: "the model pool's helper", ours: true, section: "model-pool", pid: 7 }] });
-  // A run that was cancelled leaves a helper here, and the next run ends it as part of starting: judging the new one
-  // beside the old one asked for twice the room on the same machine, and the pool has no "Start anyway".
-  await expect(guard.verdict({ what: "the model pool's helper", needBytes: 6 * GiB })).resolves.toMatchObject({ ok: false });
-  const v = await guard.verdict({ what: "the model pool's helper", needBytes: 6 * GiB, replacing: 7 });
-  expect(v.ok).toBe(true);
-  expect(v.holders).toEqual([]);
 });
 
 // ---- the signals: a rate worth dividing by, pages of the right size, and a band that scales ----
@@ -567,19 +537,6 @@ test("a Linux hub works out its own page size from /proc, and one that can't rea
   expect(memoryLine(s, "the server")).toBe(why);
   expect(memoryLine(s, "the server")).not.toContain("Memory is fine");
   guard.stop();
-});
-
-test("a refusal only offers Start anyway where the screen that asked has one", () => {
-  const holders = [{ what: "the image editor", ours: true, section: "image-editor" as const, bytes: 12 * GiB }];
-  const words = memoryRefusal({ what: "the model pool's server", needBytes: 40 * GiB, freeBytes: 2 * GiB, machine: "Mac mini", holders, why: "space", canForce: false });
-  expect(words).toBe(
-    "the model pool's server needs about 40.0 GB and 2.0 GB is free on Mac mini. the image editor (12.0 GB) is holding the rest: turn it off in Settings, then start the model pool's server again.",
-  );
-  expect(words).not.toContain("anyway");
-  // Nothing measured at all still leaves something to do.
-  expect(memoryRefusal({ what: "the model pool's server", needBytes: null, freeBytes: 0, machine: "Mac mini", holders: [], why: "pressure", canForce: false })).toBe(
-    "Mac mini is nearly out of memory (nothing is free), so starting the model pool's server now would make everything on it slow. Close what you don't need on Mac mini, then start the model pool's server again.",
-  );
 });
 
 // ---- the two places that start something heavy ----
@@ -689,4 +646,496 @@ test("the image editor is refused with its own measured need, and nothing of the
   expect(editor.lastStatus().state).toBe("off");
   editor.shutdown();
   cleanUp();
+});
+
+// ---- who holds the memory ----
+
+const MiB = 1024 ** 2;
+const NEO = "/Applications/BrowserOS neo.app/Contents";
+const NEO_PAGE = `${NEO}/Frameworks/BrowserOS neo Framework.framework/Versions/155.0/Helpers/BrowserOS neo Helper (Renderer).app/Contents/MacOS/BrowserOS neo Helper (Renderer)`;
+const NEO_GPU = `${NEO}/Frameworks/BrowserOS neo Framework.framework/Versions/155.0/Helpers/BrowserOS neo Helper (GPU).app/Contents/MacOS/BrowserOS neo Helper (GPU)`;
+const CHROME = "/Applications/Google Chrome.app/Contents";
+const CLAUDE = "/Users/u/.local/share/claude/versions/2.1.330";
+
+/** An agent as the engine reports it: Claude Code in the chat "Shopping", replying and using the browser. */
+const shopper = (over: Partial<AgentProcess> = {}): AgentProcess => ({ memberId: "mb_shop", roomId: "r_shop", agent: "Claude Code", chat: "Shopping", pids: [200], replying: true, browsing: true, ...over });
+
+/**
+ * A process table like the one on 2026-11-21: the hub's Claude Code with its helpers, the agents' browser with `pages`
+ * page processes (sizes in MiB), and the person's own Chrome, which must only ever be named.
+ */
+function table(pages: number[], extra: ProcessRow[] = []): ProcessRow[] {
+  return [
+    { pid: 200, ppid: 100, path: CLAUDE, bytes: 400 * MiB },
+    { pid: 201, ppid: 200, path: "/opt/homebrew/bin/node", bytes: 60 * MiB },
+    { pid: 300, ppid: 1, path: `${NEO}/MacOS/BrowserOS neo`, bytes: 300 * MiB, args: "" },
+    { pid: 301, ppid: 300, path: NEO_GPU, bytes: 200 * MiB },
+    ...pages.map((mb, i) => ({ pid: 310 + i, ppid: 300, path: NEO_PAGE, bytes: mb * MiB })),
+    { pid: 400, ppid: 1, path: `${CHROME}/MacOS/Google Chrome`, bytes: 700 * MiB, args: "" },
+    { pid: 401, ppid: 400, path: `${CHROME}/Frameworks/Google Chrome Framework.framework/Helpers/Google Chrome Helper (Renderer).app/Contents/MacOS/Google Chrome Helper (Renderer)`, bytes: 500 * MiB },
+    { pid: 500, ppid: 1, path: "/System/Library/CoreServices/Finder.app/Contents/MacOS/Finder", bytes: 90 * MiB },
+    // Another user's process: it can be seen, not measured.
+    { pid: 88, ppid: 1, path: "WindowServer", bytes: null },
+    ...extra,
+  ];
+}
+
+test("a look at the process table is sorted into agents by chat, the agents' browser, and the three biggest other programs", () => {
+  const rows = table([900, 700, 500], [
+    { pid: 600, ppid: 1, path: "/usr/local/bin/ollama", bytes: 300 * MiB },
+    { pid: 601, ppid: 1, path: "/Applications/Slack.app/Contents/MacOS/Slack", bytes: 280 * MiB },
+    { pid: 602, ppid: 1, path: "/Applications/Notes.app/Contents/MacOS/Notes", bytes: 270 * MiB },
+    // A headless browser the agent started itself counts with the agents' browser, not with the agent or the person.
+    { pid: 210, ppid: 200, path: "/Users/u/Library/Caches/ms-playwright/chromium-1140/chrome-mac/Chromium.app/Contents/MacOS/Chromium", bytes: 150 * MiB, args: "--headless" },
+    { pid: 211, ppid: 210, path: "/Users/u/Library/Caches/ms-playwright/chromium-1140/chrome-mac/Chromium.app/Contents/Frameworks/Chromium Framework.framework/Helpers/Chromium Helper (Renderer).app/Contents/MacOS/Chromium Helper (Renderer)", bytes: 250 * MiB },
+  ]);
+  const got = groupProcesses(rows, { agents: [shopper()], self: 100 });
+  const browser = got.find((h) => h.kind === "browser")!;
+  expect(browser).toMatchObject({ what: "the agents' browser", ours: true, section: null, bytes: (300 + 200 + 900 + 700 + 500 + 150 + 250) * MiB, roomId: "r_shop", chat: "Shopping", memberId: "mb_shop" });
+  // Only page processes can ever be asked to quit, biggest first: never the browser itself or its GPU process.
+  expect(browser.pages).toEqual([{ pid: 310, bytes: 900 * MiB }, { pid: 311, bytes: 700 * MiB }, { pid: 312, bytes: 500 * MiB }, { pid: 211, bytes: 250 * MiB }]);
+  // The agent's own processes, under its chat's name, without the browser it started.
+  expect(got.find((h) => h.kind === "agent")).toMatchObject({ what: "Claude Code in Shopping", bytes: 460 * MiB, roomId: "r_shop", memberId: "mb_shop", pids: [200, 201] });
+  // The person's Chrome is one row under the app's name, helpers and all; then the next two; Notes and Finder don't make it.
+  expect(got.filter((h) => h.kind === "other").map((h) => [h.what, h.bytes, h.ours])).toEqual([["Google Chrome", 1200 * MiB, false], ["ollama", 300 * MiB, false], ["Slack", 280 * MiB, false]]);
+  // Biggest first, as the phone lists them.
+  expect(got.map((h) => h.what)).toEqual(["the agents' browser", "Google Chrome", "Claude Code in Shopping", "ollama", "Slack"]);
+  // What is counted elsewhere (a model server Crosstalk reports by itself) is left out, with all it started.
+  expect(groupProcesses(rows, { agents: [shopper()], claimed: [600] }).some((h) => h.what === "ollama")).toBe(false);
+  expect(groupProcesses(rows, { agents: [shopper()], claimed: [200] }).some((h) => h.kind === "agent")).toBe(false);
+});
+
+test("the browser is put down to a chat only when one agent is plainly the one using it", () => {
+  const rows = table([900, 700]);
+  const other = shopper({ memberId: "mb_code", roomId: "r_code", chat: "Refactor", pids: [], browsing: false });
+  // One reply uses it: that chat.
+  expect(groupProcesses(rows, { agents: [shopper(), other] }).find((h) => h.kind === "browser")).toMatchObject({ roomId: "r_shop" });
+  // Nobody's reply has used a browser, or the one that did has ended: no chat is named, so none can be stopped for it.
+  for (const agents of [[shopper({ browsing: false }), other], [shopper({ replying: false })], []]) {
+    const browser = groupProcesses(rows, { agents }).find((h) => h.kind === "browser")!;
+    expect(browser.roomId).toBeUndefined();
+    expect(browser.memberId).toBeUndefined();
+  }
+  // Two replies use it at once: neither is named (stopping the wrong chat would be worse than naming none).
+  expect(groupProcesses(rows, { agents: [shopper(), { ...other, pids: [], browsing: true }] }).find((h) => h.kind === "browser")!.memberId).toBeUndefined();
+});
+
+test("a program is named by its app, or by the folder that says what it is when its file is only a version number", () => {
+  expect(programName(`${CHROME}/Frameworks/X.framework/Helpers/Google Chrome Helper (Renderer).app/Contents/MacOS/Google Chrome Helper (Renderer)`)).toBe("Google Chrome");
+  expect(programName(CLAUDE)).toBe("claude");
+  expect(programName("/opt/homebrew/Cellar/python@3.12/3.12.4/bin/python3.12")).toBe("python3.12");
+  expect(programName("WindowServer")).toBe("WindowServer");
+});
+
+test("a Linux hub lists its processes from /proc with no process spawned, and reads a browser's command line", () => {
+  const files: Record<string, string> = {
+    "/proc/meminfo": "MemTotal:       16000000 kB\nMemFree:          400000 kB\nMemAvailable:    4000000 kB\nSwapTotal:       4000000 kB\nSwapFree:        1000000 kB\n",
+    "/proc/vmstat": "nr_free_pages 100000\npswpin 1\npswpout 1\n",
+    // "pid (name) state ppid ...": the 24th field is its resident pages (4 KiB here).
+    "/proc/10/stat": `10 (claude) S 1 ${"0 ".repeat(19)}200000 0`,
+    "/proc/11/stat": `11 (chrome (x)) S 10 ${"0 ".repeat(19)}100000 0`,
+    "/proc/11/cmdline": "/opt/browseros-neo/browseros-neo\0--type=renderer\0--lang=en\0",
+    "/proc/12/stat": `12 (kworker/0:1) I 2 ${"0 ".repeat(19)}0 0`,
+  };
+  const links: Record<string, string> = { "/proc/10/exe": "/home/u/.local/share/claude/versions/2.1.330", "/proc/11/exe": "/opt/browseros-neo/browseros-neo" };
+  const r = linuxReader(
+    (p) => files[p] ?? (() => { throw new Error("no such file"); })(),
+    { list: () => ["10", "11", "12", "999", "self", "meminfo"], link: (p) => links[p] ?? (() => { throw new Error("not allowed"); })() },
+  );
+  r.read();
+  const rows = r.processes!((path) => path.includes("browseros"))!;
+  expect(rows).toEqual([
+    { pid: 10, ppid: 1, path: "/home/u/.local/share/claude/versions/2.1.330", bytes: 200000 * 4096 },
+    { pid: 11, ppid: 10, path: "/opt/browseros-neo/browseros-neo", bytes: 100000 * 4096, args: "/opt/browseros-neo/browseros-neo --type=renderer --lang=en" },
+    // A kernel thread: no program to point at and nothing resident, so it is named and not measured.
+    { pid: 12, ppid: 2, path: "kworker/0:1", bytes: null },
+  ]);
+  // The browser's page process is found by its command line there, and counted with the agents' browser.
+  const browser = groupProcesses(rows, { agents: [shopper({ pids: [10] })] }).find((h) => h.kind === "browser")!;
+  expect(browser.pages).toEqual([{ pid: 11, bytes: 100000 * 4096 }]);
+});
+
+test("this machine's own process table can be read (read-only: nothing is spawned, signalled or changed)", () => {
+  const r = readerFor(process.platform);
+  if (r.blind || !r.processes) return;
+  const rows = r.processes((path) => path === process.execPath)!;
+  const me = rows.find((p) => p.pid === process.pid)!;
+  expect(me.ppid).toBe(process.ppid);
+  expect(me.bytes).toBeGreaterThan(0);
+  expect(me.path).toContain("bun");
+  expect(me.args).toContain("test");
+  expect(rows.length).toBeGreaterThan(10);
+});
+
+// ---- what the guard does about it ----
+
+/** A machine a test moves by hand: its level, its swap, and its process table. Nothing real is read or touched. */
+function squeezable(o: { level: number; rows: () => ProcessRow[] }) {
+  let level = o.level;
+  let swapPages = 0;
+  let swapUsed = 2 * GiB;
+  const reader: MemoryReader = {
+    blind: null,
+    ramBytes: () => 16 * GiB,
+    pageBytes: () => 16 * 1024,
+    read: () => ({ level, freeBytes: Math.round((level / 100) * 16 * GiB), swapPages, swapUsedBytes: swapUsed }),
+    footprint: () => null,
+    processes: () => o.rows(),
+  };
+  return { reader, level: (n: number) => void (level = n), now: () => level, swap: (pages: number, used = swapUsed) => void ((swapPages = pages), (swapUsed = used)) };
+}
+
+/** A guard on such a machine, with every action written down in the order it happened instead of done. */
+function acting(o: { rows: () => ProcessRow[]; agents?: () => AgentProcess[]; acts?: boolean | (() => boolean); steer?: boolean; holders?: HolderProbe[]; act?: Partial<MemoryActions>; state?: { text: string | null } }) {
+  const m = squeezable({ level: 60, rows: o.rows });
+  const calls: string[] = [];
+  const notes: { title: string; body: string; roomId?: string; acted?: boolean }[] = [];
+  let now = 1_000_000;
+  let replying = true;
+  const guard = new MemoryGuard({
+    machineName: () => "Mac mini",
+    holders: async () => o.holders ?? [],
+    reader: m.reader,
+    now: () => now,
+    notify: (n) => (calls.push(`notify ${n.title}`), void notes.push(n)),
+    acts: typeof o.acts === "function" ? o.acts : () => o.acts !== false,
+    agents: o.agents ?? (() => [shopper({ replying })]),
+    pause: async () => {},
+    ...(o.state ? { readState: () => o.state!.text, writeState: (text: string) => void (o.state!.text = text) } : {}),
+    act: {
+      endIdle: (ms) => (calls.push(`endIdle ${ms}`), 2),
+      hold: (on) => void calls.push(`hold ${on}`),
+      steer: async (id, text) => (calls.push(`steer ${id} ${text}`), o.steer !== false),
+      stop: async (room, id, error) => (calls.push(`stop ${room} ${id} ${error}`), (replying = false), true),
+      say: (room, text) => void calls.push(`say ${room} ${text}`),
+      endPage: (pid) => void calls.push(`endPage ${pid}`),
+      ...o.act,
+    },
+  });
+  /** One look, `secs` later, at this level; then everything it started has finished. */
+  const look = async (level: number, secs = 10) => {
+    now += secs * 1000;
+    m.level(level);
+    guard.tick();
+    await guard.settled();
+  };
+  return { guard, m, calls, notes, look, at: () => now };
+}
+
+test("a browser that keeps growing brings the tight step, then the full one, in that order and each once", async () => {
+  // The browser's pages, growing look by look, until some are closed.
+  let pages = [600, 500, 400];
+  const closed: number[] = [];
+  const rows = () => table(pages).filter((r) => !closed.includes(r.pid));
+  const t = acting({
+    rows,
+    act: {
+      // A page asked to quit goes, and the machine gets some memory back.
+      endPage: (pid) => {
+        t.calls.push(`endPage ${pid}`);
+        closed.push(pid);
+        t.m.level(t.m.now() + 6);
+      },
+    },
+  });
+  await t.look(60); // the very first look: nothing is ever done from one reading
+  await t.look(40); // getting full: who holds it is looked at from here on
+  expect(t.guard.status().holders.map((h) => h.what)).toEqual(["the agents' browser", "Google Chrome", "Claude Code in Shopping"]);
+  expect(t.calls).toEqual([]);
+
+  // Tight, with the browser a good deal bigger than when the machine left "fine".
+  pages = [1500, 1200, 900, 500];
+  await t.look(33);
+  const steer = `steer mb_shop ${MEMORY_STEER}`;
+  expect(t.calls).toEqual([
+    `endIdle ${MEMORY_ACT.idleMs}`,
+    "hold true",
+    steer,
+    "say r_shop Mac mini is nearly out of memory. Crosstalk asked Claude Code to close the pages it opened, and will stop this reply if it keeps growing.",
+    "notify Mac mini is nearly out of memory",
+  ]);
+  expect(MEMORY_STEER).toBe("This machine is nearly out of memory. Close every browser tab you opened and work one page at a time.");
+  expect(t.notes[0]).toMatchObject({ body: "The agents' browser in Shopping holds 4.5 GB. Crosstalk asked Claude Code to close pages and will stop that reply if it keeps growing.", roomId: "r_shop" });
+  expect(t.guard.holding()).toBe(true);
+  // Still tight: nothing again.
+  await t.look(31);
+  expect(t.calls.length).toBe(5);
+
+  // It gets worse: the phone hears of the full band at once, but nothing is stopped on one reading.
+  pages = [2600, 2200, 1800, 1500, 1400];
+  await t.look(22);
+  expect(t.calls.slice(5)).toEqual(["notify Mac mini is out of memory"]);
+  expect(t.notes[1].body).toContain("The biggest thing running is the agents' browser (9.8 GB)");
+  expect(t.notes[1].body).not.toContain("stops nothing by itself");
+  await t.look(21);
+  expect(t.calls.length).toBe(6);
+  // Twenty seconds under the full line: the reply is stopped, and the browser's biggest pages are asked to quit until
+  // the machine is out of the tight band again (20 -> 26 -> 32 -> 38).
+  await t.look(20);
+  expect(t.calls.slice(6)).toEqual([
+    "stop r_shop mb_shop Crosstalk stopped this reply: Mac mini was about to freeze.",
+    "say r_shop Stopped Claude Code: Mac mini was about to freeze (its browser held 9.8 GB). Tap Try again when you're ready.",
+    "endPage 310",
+    "endPage 311",
+    "endPage 312",
+    "notify Mac mini was about to freeze",
+  ]);
+  expect(t.notes[2]).toMatchObject({ body: "Stopped Claude Code: Mac mini was about to freeze (its browser held 9.8 GB). Tap Try again when you're ready. It also closed 3 pages in the agents' browser.", roomId: "r_shop", acted: true });
+  // Never the browser itself (300), its GPU process (301), or anything of the person's Chrome (400, 401). Two pages
+  // are left open: the machine had room again.
+  expect(closed).toEqual([310, 311, 312]);
+
+  // Out of trouble, but not for long enough yet: replies still wait, and nothing is done.
+  await t.look(38);
+  await t.look(39, 40);
+  expect(t.calls.length).toBe(12);
+  expect(t.guard.holding()).toBe(true);
+  // A minute of room: what waited starts.
+  await t.look(41, 20);
+  expect(t.calls.slice(12)).toEqual(["hold false"]);
+  expect(t.guard.holding()).toBe(false);
+  t.guard.stop();
+});
+
+test("nothing is done twice in one spell, however long the machine stays full; a new spell starts over", async () => {
+  let pages = [1500, 1200];
+  const t = acting({ rows: () => table(pages) });
+  await t.look(60);
+  await t.look(40);
+  pages = [2500, 2000];
+  await t.look(20); // straight into the full band: still the tight step first
+  expect(t.calls.filter((c) => c.startsWith("stop")).length).toBe(0);
+  expect(t.calls.filter((c) => c.startsWith("steer")).length).toBe(1);
+  await t.look(20);
+  await t.look(20);
+  // The pages stay (this machine's fake ones don't go when asked): both are asked once, and that is all.
+  const done = [...t.calls];
+  expect(done.filter((c) => c.startsWith("stop")).length).toBe(1);
+  expect(done.filter((c) => c.startsWith("endPage"))).toEqual(["endPage 310", "endPage 311"]);
+  for (let i = 0; i < 30; i++) await t.look(i % 2 ? 20 : 30);
+  // Thirty more looks, in and out of the full band: one more thing only, the replies that waited start after three minutes.
+  expect(t.calls.slice(done.length)).toEqual(["hold false"]);
+  expect(t.calls.filter((c) => c.startsWith("notify")).length).toBe(2);
+
+  // A minute and more of room, then trouble again: that is a new spell, and it is acted on again.
+  await t.look(60, 30);
+  await t.look(60, 40);
+  await t.look(60, 30);
+  await t.look(40);
+  pages = [2600, 2100];
+  await t.look(30);
+  expect(t.calls.filter((c) => c.startsWith("endIdle")).length).toBe(2);
+  t.guard.stop();
+});
+
+test("pages stop being closed once the browser is back under 3 GB, and none is closed while it is smaller than that", async () => {
+  // Under 3 GB at the full step: the reply is stopped, the browser is left alone.
+  let pages = [600, 500];
+  const small = acting({ rows: () => table(pages) });
+  await small.look(60);
+  await small.look(40);
+  pages = [1300, 1000];
+  for (const level of [20, 20, 20]) await small.look(level);
+  expect(small.calls.some((c) => c.startsWith("stop r_shop"))).toBe(true);
+  expect(small.calls.some((c) => c.startsWith("endPage"))).toBe(false);
+  expect(small.notes.at(-1)!.body).toBe("Stopped Claude Code: Mac mini was about to freeze (its browser held 2.7 GB). Tap Try again when you're ready.");
+  small.guard.stop();
+
+  // 5.4 GB, and the level never comes back: the two biggest pages take it under 3 GB, and the rest stay open.
+  pages = [600, 500];
+  const closed: number[] = [];
+  const big = acting({ rows: () => table(pages).filter((r) => !closed.includes(r.pid)), act: { endPage: (pid) => void closed.push(pid) } });
+  await big.look(60);
+  await big.look(40);
+  pages = [2000, 1500, 800, 400, 300];
+  for (const level of [20, 20, 20]) await big.look(level);
+  expect(closed).toEqual([310, 311]);
+  big.guard.stop();
+});
+
+test("with Free memory by itself off nothing is done: the phone is told, with who holds what, and that nothing is stopped", async () => {
+  let pages = [600, 500, 400];
+  const t = acting({ rows: () => table(pages), acts: false });
+  await t.look(60);
+  await t.look(40);
+  pages = [1500, 1200, 900, 500];
+  await t.look(33);
+  pages = [2200, 1800, 1300, 800, 300];
+  for (const level of [22, 21, 20, 19, 18, 18, 18, 18]) await t.look(level);
+  // (6.7 GB: 6,400 MiB of pages and the browser's own 500.)
+  expect(t.calls).toEqual(["notify Mac mini is nearly out of memory", "notify Mac mini is out of memory"]);
+  expect(t.notes[0]).toMatchObject({ body: "The agents' browser in Shopping holds 4.5 GB. Stop that reply to free it. Crosstalk stops nothing by itself.", roomId: "r_shop" });
+  expect(t.notes[1].body).toContain("the agents' browser (6.7 GB)");
+  expect(t.notes[1].body).toContain("Crosstalk stops nothing by itself.");
+  expect(t.guard.holding()).toBe(false);
+  expect(t.guard.status().acts).toBe(false);
+  t.guard.stop();
+});
+
+test("an agent that can't take a message mid-reply is only watched, and the notice doesn't claim it was asked", async () => {
+  let pages = [600, 500];
+  const t = acting({ rows: () => table(pages), steer: false });
+  await t.look(60);
+  await t.look(40);
+  pages = [2000, 1500];
+  await t.look(33);
+  expect(t.calls).toContain("say r_shop Mac mini is nearly out of memory. Crosstalk will stop this reply if it keeps growing.");
+  expect(t.notes[0].body).toBe("The agents' browser in Shopping holds 3.9 GB. Crosstalk will stop that reply if it keeps growing.");
+  t.guard.stop();
+});
+
+test("no reply is stopped, and none waits, when what fills the machine isn't the agents': the image editor is named instead", async () => {
+  // The editor holds 12 GB; the agent's own processes grow to 2.5 GB beside it. Stopping its reply would free little.
+  let agent = 400;
+  const rows = () => [{ pid: 200, ppid: 100, path: CLAUDE, bytes: agent * MiB }, { pid: 700, ppid: 1, path: "/opt/homebrew/bin/python3.12", bytes: 12 * GiB }];
+  const t = acting({ rows, agents: () => [shopper({ browsing: false })], holders: [{ what: "the image editor", ours: true, section: "image-editor", bytes: 12 * GiB, claims: [700] }] });
+  await t.look(60);
+  await t.look(40);
+  agent = 2500;
+  await t.look(30);
+  for (const level of [20, 20, 20, 20, 20]) await t.look(level);
+  expect(t.calls.filter((c) => !c.startsWith("notify"))).toEqual([`endIdle ${MEMORY_ACT.idleMs}`]);
+  expect(t.notes[0].body).toContain("The biggest thing running is the image editor (12.0 GB)");
+  expect(t.notes[0].body).toContain("Turn the image editor off");
+  expect(t.notes[0].roomId).toBeUndefined();
+  // The editor's own process isn't listed a second time under "python3.12".
+  expect(t.guard.status().holders.map((h) => h.what)).toEqual(["the image editor", "Claude Code in Shopping"]);
+  // What the next model has to fit beside is still only the editor.
+  expect(t.guard.status().takenBytes).toBe(12 * GiB);
+  t.guard.stop();
+});
+
+test("an agent whose own processes fill the machine is told so in its own words, and stopped the same way", async () => {
+  // No browser at all: a build under the agent grows to 5 GB.
+  let build = 300;
+  const rows = () => [{ pid: 200, ppid: 100, path: CLAUDE, bytes: 400 * MiB }, { pid: 220, ppid: 200, path: "/usr/bin/clang", bytes: build * MiB }];
+  const t = acting({ rows, agents: () => [shopper({ chat: "Build", browsing: false })] });
+  await t.look(60);
+  await t.look(40);
+  build = 4700;
+  await t.look(33);
+  expect(t.calls).toContain(`steer mb_shop ${MEMORY_STEER_OWN}`);
+  expect(MEMORY_STEER_OWN).toBe("This machine is nearly out of memory, and what you are running holds most of it. End the commands and programs you no longer need, and run one thing at a time.");
+  expect(t.notes[0].body).toBe("Claude Code in Build holds 5.0 GB. Crosstalk asked Claude Code to end what it doesn't need and will stop that reply if it keeps growing.");
+  for (const level of [20, 20, 20]) await t.look(level);
+  expect(t.calls).toContain("say r_shop Stopped Claude Code: Mac mini was about to freeze (it held 5.0 GB). Tap Try again when you're ready.");
+  expect(t.calls.some((c) => c.startsWith("endPage"))).toBe(false);
+  t.guard.stop();
+});
+
+test("the full step also comes from heavy swapping for 30 s, or a level still falling a minute after the tight step", async () => {
+  // Swapping: tight, then the swap counters move faster than the kernel's thrashing line for half a minute.
+  let pages = [600, 500];
+  const a = acting({ rows: () => table(pages) });
+  await a.look(60);
+  await a.look(40);
+  pages = [2000, 1500];
+  await a.look(33);
+  let swapped = 0;
+  for (let i = 0; i < 3; i++) {
+    a.m.swap((swapped += THRASH_PAGES_PER_SEC * 10 + 10));
+    await a.look(32);
+    expect(a.calls.some((c) => c.startsWith("stop"))).toBe(false);
+  }
+  a.m.swap((swapped += THRASH_PAGES_PER_SEC * 10 + 10));
+  await a.look(32);
+  expect(a.calls.some((c) => c.startsWith("stop r_shop mb_shop"))).toBe(true);
+  a.guard.stop();
+
+  // Falling: tight at 34, and a minute later it is five points lower without ever reaching the full band.
+  pages = [600, 500];
+  const b = acting({ rows: () => table(pages) });
+  await b.look(60);
+  await b.look(40);
+  pages = [2000, 1500];
+  await b.look(34);
+  for (const level of [33, 32, 31, 30, 29]) await b.look(level);
+  expect(b.calls.some((c) => c.startsWith("stop"))).toBe(false); // 50 s after, and already five lower: not yet
+  await b.look(29);
+  expect(b.calls.some((c) => c.startsWith("stop r_shop mb_shop"))).toBe(true);
+  b.guard.stop();
+});
+
+test("getting full with swap still growing fast counts as tight before the level gets there", async () => {
+  let pages = [600, 500];
+  const t = acting({ rows: () => table(pages) });
+  await t.look(60);
+  t.m.swap(0, 2 * GiB);
+  await t.look(42);
+  pages = [2000, 1500];
+  // Swap in use grows a little: not enough.
+  t.m.swap(0, 2 * GiB + 100 * MiB);
+  await t.look(41);
+  expect(t.calls).toEqual([]);
+  // Then by more than half a gigabyte inside a minute, with the level still above the tight line.
+  t.m.swap(0, 2 * GiB + 700 * MiB);
+  await t.look(40);
+  expect(t.calls[0]).toBe(`endIdle ${MEMORY_ACT.idleMs}`);
+  expect(t.notes[0].title).toBe("Mac mini is nearly out of memory");
+  t.guard.stop();
+});
+
+test("what the guard last saw is kept, so a hub that comes back after the machine froze knows which reply was filling it", async () => {
+  const state = { text: null as string | null };
+  let pages = [600, 500];
+  const t = acting({ rows: () => table(pages), state });
+  expect(t.guard.wentDown()).toBeNull();
+  await t.look(60);
+  await t.look(40);
+  expect(state.text).toBeNull(); // nothing is written while nothing is wrong
+  pages = [2000, 1500];
+  await t.look(33);
+  expect(JSON.parse(state.text!)).toEqual({ band: "tight", step: "tight", roomId: "r_shop", memberId: "mb_shop", at: t.at() });
+  const written = state.text;
+  await t.look(32);
+  expect(state.text).toBe(written); // only when something changes
+  // The machine freezes here: the hub never stops on purpose. The next hub reads what was kept.
+  const next = new MemoryGuard({ machineName: () => "Mac mini", holders: async () => [], reader: blindReader("test"), readState: () => state.text });
+  expect(next.wentDown()).toEqual({ at: JSON.parse(written!).at, band: "tight", roomId: "r_shop", memberId: "mb_shop" });
+  // It is read once: the hub that read it clears it, so being killed later on a quiet machine isn't taken for this again.
+  const again = { text: written };
+  expect(new MemoryGuard({ machineName: () => "Mac mini", holders: async () => [], reader: blindReader("test"), readState: () => again.text, writeState: (text) => void (again.text = text) }).wentDown()).not.toBeNull();
+  expect(JSON.parse(again.text!)).toMatchObject({ band: "fine", step: "none" });
+  // The line its chat gets instead of the reply starting again by itself.
+  expect(memoryNoResumeLine("Mac mini", "2:41 AM")).toBe("Mac mini ran out of memory at 2:41 AM while this was running. Tap Try again to carry on.");
+
+  // A hub that stops on purpose (a restart, an update) clears it: the next start is an ordinary one.
+  t.guard.stop();
+  expect(JSON.parse(state.text!)).toMatchObject({ band: "fine", step: "none" });
+  expect(new MemoryGuard({ machineName: () => "Mac mini", holders: async () => [], reader: blindReader("test"), readState: () => state.text }).wentDown()).toBeNull();
+  // Nothing kept, or something unreadable, is an ordinary start too.
+  expect(new MemoryGuard({ machineName: () => "Mac mini", holders: async () => [], reader: blindReader("test"), readState: () => "{not json" }).wentDown()).toBeNull();
+});
+
+test("turning Free memory by itself off lets the replies that waited start, and every device hears the switch", async () => {
+  let on = true;
+  let pages = [600, 500];
+  const sent: MachineMemory[] = [];
+  const t = acting({ rows: () => table(pages), acts: () => on });
+  await t.look(60);
+  await t.look(40);
+  pages = [2000, 1500];
+  await t.look(33);
+  expect(t.guard.holding()).toBe(true);
+  expect(t.guard.status().acts).toBe(true);
+  on = false;
+  t.guard.settingChanged();
+  expect(t.guard.holding()).toBe(false);
+  expect(t.calls.at(-1)).toBe("hold false");
+  expect(t.guard.status().acts).toBe(false);
+  void sent;
+  t.guard.stop();
+});
+
+test("the notice no longer says Crosstalk stops nothing once it may, and agents on a small machine are told to keep few pages open", () => {
+  const m: MachineMemory = { band: "tight", level: 30, blind: null, ramBytes: 16 * GiB, takenBytes: null, swapPagesPerSec: 0, swapUsedBytes: null, holders: [{ what: "the agents' browser", ours: true, section: null, bytes: 6 * GiB, kind: "browser" }], at: 1 };
+  expect(memoryNotice(m, "Mac mini").body).toBe("Mac mini is nearly out of memory, so everything on it is slow. The biggest thing running is the agents' browser (6.0 GB). Close pages in the agents' browser. Crosstalk stops nothing by itself.");
+  expect(memoryNotice({ ...m, acts: false }, "Mac mini").body).toContain("Crosstalk stops nothing by itself.");
+  expect(memoryNotice({ ...m, acts: true }, "Mac mini").body).toBe("Mac mini is nearly out of memory, so everything on it is slow. The biggest thing running is the agents' browser (6.0 GB). Close pages in the agents' browser.");
+  expect(memoryWays({ ...m, holders: [{ what: "Claude Code in Shopping", ours: true, section: null, bytes: 3 * GiB, kind: "agent" }, { what: "Google Chrome", ours: false, section: null, bytes: GiB, kind: "other" }] }).map((w) => w.text)).toEqual(["Stop Claude Code in Shopping", "Quit Google Chrome on this machine"]);
+  // 16 GB and below get the line; a bigger machine doesn't.
+  expect(memoryBriefing(16 * GiB)).toContain("close each tab as soon as you're done with it");
+  expect(memoryBriefing(8 * GiB)).not.toBeNull();
+  expect(memoryBriefing(32 * GiB)).toBeNull();
+  expect(memoryBriefing(0)).toBeNull();
 });

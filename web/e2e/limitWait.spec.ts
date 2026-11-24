@@ -54,7 +54,10 @@ test("a chat that ran out of messages says when it carries on, and Try now start
     const side = page.getByRole("complementary", { name: "Chats", exact: true });
     const sideRow = side.locator(".csb-chat").filter({ hasText: "Out of messages" });
     await expect(sideRow).toContainText(/Back at (\w{3} )?\d/);
-    await expect(sideRow.locator(".csb-dot.waiting")).toHaveAttribute("aria-label", /Waiting for its usage limit · Back at (\w{3} )?\d/);
+    // Under Working (it carries on by itself), its quiet ring beside the words, and the row's one label says it too.
+    await expect(side.getByRole("region", { name: "Working", exact: true }).locator(".csb-chat").filter({ hasText: "Out of messages" })).toHaveCount(1);
+    await expect(sideRow.locator(".csb-chat-sub .csb-dot.waiting")).toHaveCount(1);
+    await expect(sideRow).toHaveAccessibleName(/^Out of messages, (new reply, )?Back at (\w{3} )?\d/);
     await noHorizontalOverflow(page);
     await page.screenshot({ ...shot("limit-waiting-list.png"), animations: "disabled" });
     await sideRow.click();
@@ -137,8 +140,8 @@ test("Settings: carrying on when the limit resets is on by default, and saves of
     await expect.poll(async () => (await (await request.get(url, { headers })).json()).carryOnAfterLimit).toBe(false);
     await page.reload();
     await expect(card.getByRole("checkbox", { name: "Carry on when the limit resets", exact: true })).not.toBeChecked();
-    // The other usage setting is untouched by it.
-    await expect(card.getByRole("checkbox", { name: "Pause near usage limits", exact: true })).not.toBeChecked();
+    // It's the only switch on the card: "Pause near usage limits" is a fixed default now.
+    await expect(card.getByRole("checkbox")).toHaveCount(1);
     await card.getByRole("checkbox", { name: "Carry on when the limit resets", exact: true }).check();
     await expect.poll(async () => (await (await request.get(url, { headers })).json()).carryOnAfterLimit).toBe(true);
   } finally {

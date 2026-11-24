@@ -10,7 +10,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { arch as osArch, homedir, platform as osPlatform, userInfo } from "node:os";
 import { join, resolve } from "node:path";
-import { PROVIDER_INFO, type Device, type PtyInfo, type ServiceTestResult, type SetupChecklist } from "@crosstalk/shared";
+import { settingsPath, PROVIDER_INFO, type Device, type PtyInfo, type ServiceTestResult, type SetupChecklist } from "@crosstalk/shared";
 import type { App } from "../app";
 import { pairingCodeHash } from "../auth";
 import { HOME, HUB_VERSION } from "../config";
@@ -50,9 +50,9 @@ export class Setup {
     public probes: SetupProbes = {},
   ) {
     this.key = setupKeyFor(app.internalSecret);
-    // A sign-in, an install, a dialog on the Mac or the pool changing: the next list is worked out afresh.
+    // A sign-in, an install or a dialog on the Mac: the next list is worked out afresh.
     app.bus.on((e) => {
-      if (e.t === "provider" || e.t === "account" || e.t === "macDialogs" || e.t === "pool") this.cache = null;
+      if (e.t === "provider" || e.t === "account" || e.t === "macDialogs") this.cache = null;
     });
   }
 
@@ -103,7 +103,6 @@ export class Setup {
       // those answers are kept (six hours for the releases, ten minutes for the address), so a cold one is rare.
       p.browseros ? within(p.browseros(mcpAgents), 15_000) : undefined,
     ]);
-    const pool = app.pool.view();
     return {
       now: Date.now(),
       hub: {
@@ -137,7 +136,6 @@ export class Setup {
       machines,
       machineVersions: Object.fromEntries(machines.map((m, i) => [m.id, versions[i] ?? null])),
       browseros: p.browseros ? (browseros ?? null) : undefined,
-      pool: { configured: !!pool.config.model, state: pool.status.state, detail: pool.status.detail, alias: pool.config.alias, machines: pool.config.machines.filter((m) => m.enabled).length },
     };
   }
 
@@ -165,7 +163,7 @@ export class Setup {
     this.codes.push({ hash: await pairingCodeHash(code), expiresAt });
     const machine = this.app.machineName();
     log.info(`a setup agent made a pairing code, valid ${m} minutes`);
-    void this.app.push.send({ title: "Crosstalk", body: `A setup agent on ${machine} made a code to pair a device, valid ${m} minutes. If nobody asked for one, check Settings → Devices.`, url: "./#/settings/devices", tag: "setup-pair-code" });
+    void this.app.push.send({ title: "Crosstalk", body: `A setup agent on ${machine} made a code to pair a device, valid ${m} minutes. If nobody asked for one, check ${settingsPath("devices")}.`, url: "./#/settings/devices", tag: "setup-pair-code" });
     return { code, expiresAt, minutes: m, url, localUrl: `http://127.0.0.1:${this.app.config.port}` };
   }
 
@@ -180,9 +178,9 @@ export class Setup {
   /** The newest lines of the hub's log, with codes, keys and tokens hidden. */
   async log(lines: unknown): Promise<string[]> {
     const n = Math.max(1, Math.min(200, Math.round(Number(lines ?? 50)) || 50));
-    if (!this.probes.log) throw new HttpError(404, "This hub keeps no log file to read.", "no_log");
+    if (!this.probes.log) throw new HttpError(404, "Crosstalk keeps no log file to read here.", "no_log");
     const got = await within(this.probes.log(n), 6000);
-    if (!got) throw new HttpError(404, "Couldn't read the hub's log.", "no_log");
+    if (!got) throw new HttpError(404, "Couldn't read Crosstalk's log.", "no_log");
     return redactLog(got.slice(-n));
   }
 
@@ -194,7 +192,7 @@ export class Setup {
     if (agent !== "claude" && agent !== "codex") throw new HttpError(400, "Add the setup tools to which agent? claude or codex.");
     const name = PROVIDER_INFO[agent].name;
     const bin = this.app.providers.which(agent);
-    if (!bin) throw new HttpError(409, `${name} isn't installed on ${this.app.machineName()}. Install it first, under AI services.`, "not_installed");
+    if (!bin) throw new HttpError(409, `${name} isn't installed on ${this.app.machineName()}. Install it first, under ${settingsPath("ai-services")}.`, "not_installed");
     const home = HOME === resolve(join(homedir(), ".crosstalk")) ? [] : [agent === "claude" ? "-e" : "--env", `CROSSTALK_HOME=${HOME}`];
     const argv = agent === "claude" ? [bin, "mcp", "add", "--scope", "user", "crosstalk-setup", ...home, "--", ...this.self, "setup-mcp"] : [bin, "mcp", "add", "crosstalk-setup", ...home, "--", ...this.self, "setup-mcp"];
     log.info(`adding the setup tools to ${name}`);

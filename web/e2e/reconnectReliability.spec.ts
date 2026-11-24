@@ -115,7 +115,7 @@ test("reconnecting invalidates cached rooms and late responses cannot restore a 
 
 test("a failed reconnect snapshot retries instead of leaving stale state indefinitely", async ({ page }) => {
   await page.goto("/#/devices");
-  await expect(page.getByRole("heading", { name: "Devices", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Paired devices", exact: true })).toBeVisible();
   const storePath = await appStore(page);
   // Let the page's own first sync finish, so the failure below hits the refresh under test.
   await expect.poll(() => page.evaluate(async (path) => (await import(path)).useStore.getState().syncing, storePath)).toBe(false);
@@ -237,7 +237,7 @@ test("returning to the app with a live connection shows no banner and keeps Stop
       await expect(page.locator(".conn-strip")).toHaveCount(0);
       await expect(stop).toBeVisible();
       await expect(page.locator(".msg.agent .cursor")).toBeVisible();
-      await expect(page.getByText("Reply status unknown until the conversation syncs.", { exact: true })).toHaveCount(0);
+      await expect(page.getByText("Reply status unknown until the chat syncs.", { exact: true })).toHaveCount(0);
       await expect(page.getByText("Catching up…", { exact: true })).toHaveCount(0);
       await page.waitForTimeout(250);
     }

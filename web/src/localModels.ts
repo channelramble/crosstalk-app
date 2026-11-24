@@ -1,4 +1,4 @@
-import type { LocalModel, LocalModelServer, PoolState } from "@crosstalk/shared";
+import type { LocalModel, LocalModelServer } from "@crosstalk/shared";
 import { bytes } from "./services";
 
 // Settings → Local models (views/LocalModelsSection.tsx): its words and the switch's state machine as pure functions, so they can be tested.
@@ -71,22 +71,4 @@ export function serverMemory(s: Pick<LocalModelServer, "memoryBytes">): string {
 /** Each reason a model can't be switched from here, once (every model of LM Studio says the same). */
 export function whyNotes(models: LocalModel[]): string[] {
   return [...new Set(models.filter((m) => !m.canSwitch && m.why).map((m) => m.why!))];
-}
-
-/** The model pool's on/off state, for its line in Local models; null when the hub hasn't said. */
-export function poolLine(state: PoolState | undefined): string | null {
-  switch (state) {
-    case undefined:
-      return null;
-    case "off":
-      return "Off";
-    case "running":
-      return "On";
-    case "stopping":
-      return "Turning off…";
-    case "error":
-      return "Problem";
-    default:
-      return "Starting…";
-  }
 }

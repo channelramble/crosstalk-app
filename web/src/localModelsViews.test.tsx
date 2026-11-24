@@ -25,7 +25,7 @@ const library = (over: Partial<LocalLibrary> = {}): LocalLibrary => ({
   folder: { path: "/Users/me/.crosstalk/models", shown: "~/.crosstalk/models", isDefault: true, drive: null, freeBytes: 120 * GiB, totalBytes: 460 * GiB, problem: null },
   files: [],
   downloads: [],
-  programs: [{ kind: "ollama", path: "/opt/homebrew/bin/ollama", from: "Homebrew" }, { kind: "llamacpp", path: "/opt/homebrew/bin/llama-server", from: "the model pool's llama.cpp b11669" }],
+  programs: [{ kind: "ollama", path: "/opt/homebrew/bin/ollama", from: "Homebrew" }, { kind: "llamacpp", path: "/opt/homebrew/bin/llama-server", from: "Crosstalk's llama.cpp b11669" }],
   started: [],
   hasHfToken: false,
   reserveBytes: 2 * GiB,
@@ -39,9 +39,9 @@ const QWEN = { id: "unsloth/Qwen3-8B-GGUF/Qwen3-8B-Q4_K_M.gguf", repo: "unsloth/
 
 test("Start a server: where each program came from, Start for what's installed, and LM Studio's own app", () => {
   const html = draw(createElement(StartServers, { library: library({ files: [QWEN] }), shownPorts: [], actions: actions(), onStart: () => {} }));
-  expect(html).toContain('aria-label="Start a server"');
+  expect(html).toContain('aria-label="Start Ollama or llama.cpp"');
   expect(html).toContain("From Homebrew. Pulls models from its library.");
-  expect(html).toContain("From the model pool's llama.cpp b11669. Serves one downloaded model.");
+  expect(html).toContain("From Crosstalk's llama.cpp b11669. Serves one downloaded model.");
   expect(html).toContain('aria-label="Start Ollama"');
   expect(html).toContain('aria-label="Start llama.cpp"');
   expect(html).toContain("LM Studio is managed in LM Studio: start it there, then press Rescan.");
@@ -186,7 +186,6 @@ test("the token field: a password field until one is saved, then only Replace an
   expect(empty).toContain('type="password"');
   expect(empty).toContain('aria-label="Hugging Face token"');
   expect(empty).toContain('href="https://huggingface.co/orcarouter/Gated-GGUF"');
-  expect(empty).toContain("The Model pool uses the same one.");
   const saved = draw(createElement(TokenField, { has: true, repo: null, onSaved: () => {} }));
   expect(saved).toContain(">Saved</span>");
   expect(saved).toContain(">Replace token</button>");

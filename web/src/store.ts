@@ -1,10 +1,12 @@
 import { create } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
 import { hubWasUpdated } from "./version";
-import { canNavigate, showInSettings } from "./navigation";
+import { canNavigate, settingsPlaceFor, settingsPlaceNow, showInSettings } from "./navigation";
+import { startHistory, wentTo } from "./back";
+import { SETTINGS_INDEX, settingsPath } from "./settingsTabs";
 import { accountKey } from "./accounts";
 import type { RoomAgentActivity } from "./roomActivity";
-import { PROVIDER_INFO, memberAccount, signInAgentWords, type Approval, type ChatProvider, type HubInfo, type ImageEditorStatus, type MacStatus, type Member, type PtyInfo, type PoolView, type Room, type SignInNeed, type StorageStatus } from "@crosstalk/shared";
+import { PROVIDER_INFO, memberAccount, signInAgentWords, type Approval, type ChatProvider, type HubInfo, type ImageEditorStatus, type MacStatus, type Member, type PtyInfo, type Room, type SignInNeed, type StorageStatus } from "@crosstalk/shared";
 import { api, setConnection, type Connection } from "./api";
 import { createHubStore, emptyHubData, type HubData, type HubHooks, type HubState } from "./hubStore";
 import { loadMachines, machineKey, saveMachines } from "./machines";
@@ -14,7 +16,7 @@ import { openSignIn } from "./signInSheet";
 export type { RoomData } from "./hubStore";
 
 /** "rooms" is the home screen (pick an agent); "agent" is one agent's chats; "room" is a chat. */
-export type View = "rooms" | "agent" | "room" | "usage" | "setup" | "devices" | "terminal" | "approvals" | "settings" | "bookmarks";
+export type View = "rooms" | "agent" | "room" | "usage" | "setup" | "devices" | "terminal" | "approvals" | "settings" | "bookmarks" | "screen";
 
 export interface Toast {
   id: number;
@@ -75,9 +77,6 @@ interface State extends Omit<HubData, "conn"> {
   /** Try now on a machine that can't be reached (the active one unless `key` says), without waiting between tries. */
   reconnectNow(key?: string): void;
   refreshAccounts(): Promise<void>;
-  /** The active machine's model pool (see HubActions.loadPool and poolCall). */
-  loadPool(): Promise<PoolView>;
-  poolCall(method: string, path: string, body?: unknown, timeoutMs?: number): Promise<PoolView>;
   /** The active machine's image editor (see HubActions.imageEditorCall). */
   imageEditorCall(on?: boolean, force?: boolean): Promise<ImageEditorStatus>;
   /** The active machine as a Mac server (see HubActions.loadMac, openOnMac, dismissMacDialog). */
@@ -125,16 +124,18 @@ export interface Machine {
   macDialogs: HubData["macDialogs"];
   /** Its templates (null until known, and from a hub before templates). */
   templates: HubData["templates"];
-  /** Its model pool as a model to chat with (null from a hub before the offer). */
-  poolOffer: HubData["poolOffer"];
   /** Its bookmarked messages (null until known, and from a hub before bookmarks). */
   bookmarked: HubData["bookmarked"];
+  /** Its agents' helpers, by agent: the chat list says which chats still work after their reply ended. */
+  tasks: HubData["tasks"];
+  /** Since when each of its agents' running replies has run: the chat list's "Working · 12m". */
+  replyStarts: HubData["replyStarts"];
 }
 
 export const useMachines = create<{ list: Machine[] }>(() => ({ list: [] }));
 
 /** The hub fields mirrored from the active machine's store. */
-const HUB_FIELDS = ["status", "syncing", "syncSlow", "syncError", "downSince", "loadedAt", "updateReady", "hub", "device", "rooms", "roomActivity", "members", "approvals", "usage", "accounts", "providers", "logins", "ptys", "roomData", "tasks", "storage", "memory", "pool", "poolOffer", "imageEditor", "macDialogs", "asks", "spend", "templates", "signIns", "signInSessions", "bookmarked"] as const;
+const HUB_FIELDS = ["status", "syncing", "syncSlow", "syncError", "downSince", "loadedAt", "updateReady", "hub", "device", "rooms", "roomActivity", "members", "approvals", "usage", "accounts", "providers", "logins", "ptys", "roomData", "tasks", "storage", "memory", "imageEditor", "macDialogs", "asks", "spend", "templates", "signIns", "signInSessions", "bookmarked", "replyStarts"] as const;
 type HubField = (typeof HUB_FIELDS)[number];
 
 function pickHub(s: HubData): Pick<State, HubField | "conn"> {
@@ -161,7 +162,7 @@ export function onPtyData(id: string, fn: PtyListener): () => void {
 export function machineName(conn: Connection, hub: HubInfo | null): string {
   if (hub?.name) return hub.name;
   if (hub?.hostname) return hub.hostname.replace(/\.local$/, "");
-  if (!conn.baseUrl) return "This hub";
+  if (!conn.baseUrl) return "This machine";
   try {
     return new URL(conn.baseUrl).host.split(".")[0];
   } catch {
@@ -180,16 +181,21 @@ export function hubStore(key: string): StoreApi<HubState> | undefined {
   return hubs.get(key);
 }
 
-function routeFromHash(): { view: View; roomId: string | null; agent: ChatProvider | null } {
+function routeFromHash(): { view: View; roomId: string | null; agent: ChatProvider | null; place: string } {
   const h = location.hash.replace(/^#\/?/, "");
   const [view, id] = h.split("/");
-  if (view === "room" && id) return { view: "room", roomId: id, agent: null };
-  if (view === "agent" && (id === "claude" || id === "codex")) return { view: "agent", roomId: null, agent: id };
-  // A section or a tab to open Settings at: #/settings/agent-setup (the tray app links there), #/settings/machines.
-  // Settings works out which tab holds it (settingsTabs.ts), so every section id it has ever had still lands.
-  if (view === "settings" && id && /^[\w-]{1,40}$/.test(id)) showInSettings(id);
-  if (["usage", "setup", "devices", "terminal", "approvals", "settings", "bookmarks"].includes(view)) return { view: view as View, roomId: null, agent: null };
-  return { view: "rooms", roomId: null, agent: null };
+  if (view === "room" && id) return { view: "room", roomId: id, agent: null, place: hashFor("room", id, null) };
+  if (view === "agent" && (id === "claude" || id === "codex")) return { view: "agent", roomId: null, agent: id, place: hashFor("agent", null, id) };
+  // A section or a page to open Settings at: #/settings/agent-setup (the tray app links there), #/settings/machines.
+  // Settings works out which page holds it (settingsTabs.ts), so every section id it has ever had still lands. A plain
+  // #/settings is its list of pages: going back to that address from a page shows the list again.
+  if (view === "settings") {
+    const named = id && /^[\w-]{1,40}$/.test(id) ? id : undefined;
+    showInSettings(named ?? SETTINGS_INDEX);
+    return { view: "settings", roomId: null, agent: null, place: settingsPlaceFor(named) };
+  }
+  if (["usage", "setup", "devices", "terminal", "approvals", "bookmarks", "screen"].includes(view)) return { view: view as View, roomId: null, agent: null, place: `#/${view}` };
+  return { view: "rooms", roomId: null, agent: null, place: "#/" };
 }
 
 /**
@@ -245,10 +251,12 @@ export async function deleteRoomHere(roomId: string): Promise<void> {
   }
 }
 
-/** The address for a screen, so reloads and the back button land on it again. */
+/** The address for a screen, so reloads and the back button land on it again (back.ts keeps the history by these). */
 function hashFor(view: View, roomId: string | null, agent: ChatProvider | null): string {
   if (view === "room" && roomId) return `#/room/${roomId}`;
   if (view === "agent" && agent) return `#/agent/${agent}`;
+  // Settings' pages are places of their own, over its list.
+  if (view === "settings") return settingsPlaceNow();
   return view === "rooms" ? "#/" : `#/${view}`;
 }
 
@@ -265,7 +273,7 @@ export const useStore = create<State>((set, get) => {
     const list: Machine[] = [...hubs.entries()].map(([key, store]) => {
       const s = store.getState();
       const old = prev.find((m) => m.key === key);
-      const next: Machine = { key, conn: s.conn, name: machineName(s.conn, s.hub), status: s.status, syncing: s.syncing, downSince: s.downSince, loadedAt: s.loadedAt, hub: s.hub, rooms: s.rooms, members: s.members, approvals: s.approvals, roomActivity: s.roomActivity, storage: s.storage, accounts: s.accounts, providers: s.providers, macDialogs: s.macDialogs, templates: s.templates, poolOffer: s.poolOffer, bookmarked: s.bookmarked };
+      const next: Machine = { key, conn: s.conn, name: machineName(s.conn, s.hub), status: s.status, syncing: s.syncing, downSince: s.downSince, loadedAt: s.loadedAt, hub: s.hub, rooms: s.rooms, members: s.members, approvals: s.approvals, roomActivity: s.roomActivity, storage: s.storage, accounts: s.accounts, providers: s.providers, macDialogs: s.macDialogs, templates: s.templates, bookmarked: s.bookmarked, tasks: s.tasks, replyStarts: s.replyStarts };
       return old && (Object.keys(next) as (keyof Machine)[]).every((k) => old[k] === next[k]) ? old : next;
     });
     if (list.length !== prev.length || list.some((m, i) => m !== prev[i])) useMachines.setState({ list });
@@ -288,7 +296,7 @@ export const useStore = create<State>((set, get) => {
       // Deleted on this device: off to Home (its dialog then goes on to the agent's page).
       else if (here) {
         set({ roomId: null, view: "rooms" });
-        history.replaceState(null, "", hashFor("rooms", null, null));
+        wentTo(hashFor("rooms", null, null));
       }
       // Deleted on another device while it's open here: its screen says so.
       else set({ goneRoom: roomId });
@@ -299,7 +307,7 @@ export const useStore = create<State>((set, get) => {
       const store = hubs.get(key);
       const name = store ? machineName(store.getState().conn, store.getState().hub) : "a machine";
       get().removeMachine(key);
-      get().toast("error", hubs.size ? `This device was signed out of ${name}. Add it again in Settings → Machines.` : "This device is no longer paired. Connect it again to continue.");
+      get().toast("error", hubs.size ? `This device was signed out of ${name}. Add it again in ${settingsPath("machines")}.` : "This device is no longer paired. Connect it again to continue.");
     },
     approval: (a, s) => announceRequest(key, a, s),
     ptyData: (ptyId, data) => ptyListeners.get(ptyId)?.forEach((fn) => fn(data)),
@@ -420,16 +428,6 @@ export const useStore = create<State>((set, get) => {
       await hubs.get(get().active)?.getState().refreshAccounts();
     },
 
-    loadPool() {
-      const store = hubs.get(get().active);
-      return store ? store.getState().loadPool() : Promise.reject(new Error("No machine is connected. Pair one first."));
-    },
-
-    poolCall(method, path, body, timeoutMs) {
-      const store = hubs.get(get().active);
-      return store ? store.getState().poolCall(method, path, body, timeoutMs) : Promise.reject(new Error("No machine is connected. Pair one first."));
-    },
-
     imageEditorCall(on, force) {
       const store = hubs.get(get().active);
       return store ? store.getState().imageEditorCall(on, force) : Promise.reject(new Error("No machine is connected. Pair one first."));
@@ -472,20 +470,20 @@ export const useStore = create<State>((set, get) => {
         if (key !== null && key !== get().active) get().activate(key);
       }
       set({ roomId: id, view: id ? "room" : "rooms", goneRoom: null });
-      history.replaceState(null, "", hashFor(id ? "room" : "rooms", id, null));
+      wentTo(hashFor(id ? "room" : "rooms", id, null));
       if (id && !get().roomData[id]?.loaded) void get().loadHistory(id);
     },
 
     openAgent(p) {
       if ((get().view !== "agent" || get().agent !== p) && !canNavigate()) return;
       set({ view: "agent", agent: p, roomId: null, goneRoom: null });
-      history.replaceState(null, "", hashFor("agent", null, p));
+      wentTo(hashFor("agent", null, p));
     },
 
     setView(v) {
       if (v !== get().view && !canNavigate()) return;
       set({ view: v, goneRoom: null, ...(v !== "room" ? { roomId: v === "rooms" ? null : get().roomId } : {}) });
-      history.replaceState(null, "", hashFor(v, get().roomId, get().agent));
+      wentTo(hashFor(v, get().roomId, get().agent));
     },
 
     setShowAgents(v) {
@@ -568,19 +566,21 @@ useStore.subscribe((s) => {
   else if (s.view === "rooms") remember({ view: "rooms" });
 });
 
-window.addEventListener("hashchange", () => {
-  const r = routeFromHash();
+// The browser's Back and Forward, a link to another screen, an address typed in (back.ts): the app shows the screen the
+// address names. Unsaved edits can refuse to be left (canNavigate): the answer says so, and back.ts puts the address
+// back to what's on screen, so a reload still opens it.
+{
   const s = useStore.getState();
-  if (r.view === "room" && r.roomId) s.openRoom(r.roomId);
-  else if (r.view === "agent" && r.agent) s.openAgent(r.agent);
-  else if (r.view !== s.view) s.setView(r.view);
-  // A hash change has already changed the address before the guard runs.
-  // Restore it when the user keeps editing so reloads still open this screen.
-  const current = useStore.getState();
-  if (current.view !== r.view || (r.view === "room" && current.roomId !== r.roomId) || (r.view === "agent" && current.agent !== r.agent)) {
-    history.replaceState(null, "", hashFor(current.view, current.roomId, current.agent));
-  }
-});
+  startHistory(hashFor(s.view, s.roomId, s.agent), () => {
+    const r = routeFromHash();
+    const was = useStore.getState();
+    if (r.view === "room" && r.roomId) was.openRoom(r.roomId);
+    else if (r.view === "agent" && r.agent) was.openAgent(r.agent);
+    else if (r.view !== was.view) was.setView(r.view);
+    const now = useStore.getState();
+    return { asked: r.place, shown: hashFor(now.view, now.roomId, now.agent) };
+  });
+}
 
 // ---- notifications (web/PWA; native shells hook the same function) ----
 
@@ -653,3 +653,7 @@ export const usesApiKey = (roomId: string) => (s: Pick<State, "members" | "accou
 /** Whether an agent can start chats on a machine: installed, and signed in (or given an API key). */
 export const agentReady = (s: Pick<State, "providers" | "accounts">, p: ChatProvider) =>
   !!s.providers[p]?.installed && (!!s.providers[p]?.signedIn || Object.values(s.accounts).some((a) => a.provider === p && a.signedIn));
+
+/** Whether an agent can answer on a machine as itself: its own sign-in or an API key of its own, not an AI service it only drives. */
+export const agentSignedIn = (s: Pick<State, "providers" | "accounts">, p: ChatProvider) =>
+  !!s.providers[p]?.installed && (!!s.providers[p]?.signedIn || Object.values(s.accounts).some((a) => a.provider === p && a.kind !== "endpoint" && a.signedIn));

@@ -14,7 +14,7 @@ g.localStorage ??= { getItem: () => null, setItem() {}, removeItem() {} };
 g.navigator ??= { userAgent: "test" };
 g.document ??= { addEventListener() {}, removeEventListener() {}, visibilityState: "visible", querySelector: () => null };
 g.matchMedia ??= () => ({ matches: false, addEventListener() {}, removeEventListener() {} });
-const { ServiceRow } = await import("./views/AiServices");
+const { AccountRow } = await import("./views/AccountsList");
 const { useStore } = await import("./store");
 const { agentCanRun, openCodeUnusable } = await import("./services");
 
@@ -31,7 +31,7 @@ const before = first.providers;
 afterEach(() => Object.assign(first, { providers: before }));
 const row = (status?: ProviderStatus) => {
   Object.assign(first, { providers: status ? { opencode: status } : {} });
-  return renderToStaticMarkup(createElement(ServiceRow, { account: refuseless }));
+  return renderToStaticMarkup(createElement(AccountRow, { account: refuseless }));
 };
 /** The move's button: its tag, or undefined when there's none. */
 const button = (html: string) => [...html.matchAll(/<button\b[^>]*>(?:(?!<\/button>).)*<\/button>/gs)].map((m) => m[0]).find((b) => b.includes("Run it with OpenCode"));
@@ -47,7 +47,7 @@ test("the right OpenCode: the button is on, with nothing to explain", () => {
 test("OpenCode not installed: the button waits, and says why", () => {
   const html = row(missing);
   expect(button(html)).toContain("disabled");
-  expect(words(html)).toContain("OpenCode isn't installed on this machine yet. Press Install under OpenCode below, then run it with OpenCode.");
+  expect(words(html)).toContain("OpenCode isn't installed on this machine yet. Tap Install on OpenCode's line under Other services, then run it with OpenCode.");
 });
 
 test("a version 1: the button waits, in the hub's words rather than \"isn't installed\"", () => {

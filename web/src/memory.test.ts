@@ -16,7 +16,7 @@ const incident = (over: Partial<MachineMemory> = {}): MachineMemory => ({
   swapUsedBytes: Math.round(9.6 * GiB),
   holders: [
     { what: "the image editor", ours: true, section: "image-editor", bytes: Math.round(16.9 * GiB) },
-    { what: "the model server on port 8080", ours: false, section: null, bytes: Math.round(3.8 * GiB) },
+    { what: "the model running on port 8080", ours: false, section: null, bytes: Math.round(3.8 * GiB) },
   ],
   at: 1,
   ...over,
@@ -42,7 +42,7 @@ test("it says what is wrong, what is holding the machine, and the one or two thi
   // Crosstalk's own thing gets a button; the person's own gets words, because the hub never ends what it didn't start.
   expect(memoryWays(m)).toEqual([
     { text: "Turn the image editor off", section: "image-editor" },
-    { text: "Quit the model server on port 8080 on this machine", section: null },
+    { text: "Quit the model running on port 8080 on this machine", section: null },
   ]);
   // At most two: a phone screen holds two choices, not five.
   expect(memoryWays(incident({ holders: [...m.holders, { what: "llama.cpp on port 9000", ours: true, section: "local-models", bytes: GiB }] })).length).toBe(2);
@@ -54,5 +54,5 @@ test("what can't be measured is left out of the words instead of being guessed a
   expect(memorySwap(incident({ swapUsedBytes: null }))).toBeNull();
   expect(memorySwap(incident({ swapPagesPerSec: 0 }))).toBe("9.6 GB has moved to the disk. That is why everything feels slow.");
   expect(memoryLine(incident({ holders: [] }), "Mac mini")).toBe("Mac mini is out of memory. Replies and edits can take minutes until something stops.");
-  expect(memoryLine(incident({ band: "unknown", blind: "This hub can't read its machine's memory." }), "Server")).toBe("This hub can't read its machine's memory.");
+  expect(memoryLine(incident({ band: "unknown", blind: "Crosstalk can't read this machine's memory." }), "Server")).toBe("Crosstalk can't read this machine's memory.");
 });

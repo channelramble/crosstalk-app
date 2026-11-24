@@ -1,6 +1,6 @@
 // Settings -> Costs, the chat's cost line, and the notices about spending limits (docs/SPEC-0.4.md, track T4).
 // The hub's answers are mocked here, so the shared test hub's state stays as it was.
-import { test, expect, noHorizontalOverflow } from "./fixtures";
+import { test, expect, noHorizontalOverflow, chatSettings } from "./fixtures";
 import type { APIRequestContext, Page, WebSocketRoute } from "@playwright/test";
 import type { AccountSpend, BudgetState, SpendTotals } from "@crosstalk/shared";
 import { join } from "node:path";
@@ -43,7 +43,7 @@ async function mockSpend(page: Page, accounts: AccountSpend[]) {
     puts.push({ provider, account: decodeURIComponent(account), body });
     if (state.putFails > 0) {
       state.putFails--;
-      return r.fulfill({ status: 500, json: { error: "The hub is busy" } });
+      return r.fulfill({ status: 500, json: { error: "Crosstalk is busy" } });
     }
     const a = state.accounts.find((x) => x.provider === provider && x.account === decodeURIComponent(account))!;
     const period = body.period ?? a.budget?.period ?? "month";
@@ -86,7 +86,7 @@ test("costs lists each account with today, this month and total, and where it st
   ]);
   await tall(page, 2300);
   await openCosts(page);
-  await expect(page.getByText("What your AI accounts cost at API prices. Plan sign-ins show what the use would cost; only API keys and online services are billed.")).toBeVisible();
+  await expect(page.getByText("What your accounts cost at API prices. An account on a plan shows what the use would cost; only API keys and accounts billed per use are charged.")).toBeVisible();
 
   // What is billed is added up, and the plan sign-ins' notional figures are not in it: with the two plans' $0.60, $15.30
   // and $57 it would read $4.20, $567 and $761. The key whose replies were partly estimated makes the sums ≈ as well.
@@ -107,12 +107,12 @@ test("costs lists each account with today, this month and total, and where it st
   expect(new Set(regions.map(([, title]) => title)).size).toBe(regions.length);
   const plan = page.getByRole("region", { name: "Costs for Main · Claude Code", exact: true });
   await expect(plan.locator(".cost-name")).toHaveText("Main · Claude Code");
-  for (const word of ["Today", "This month", "Total", "$0.40", "$12.30", "$48.00", "Plan sign-in", "5 replies without a price"]) await expect(plan).toContainText(word);
+  for (const word of ["Today", "This month", "Total", "$0.40", "$12.30", "$48.00", "On your plan", "5 replies without a price"]) await expect(plan).toContainText(word);
   await expect(plan.getByRole("button", { name: "Set a limit" })).toHaveCount(0);
   await expect(plan).toContainText("isn't billed per reply");
   // The other agent's sign-in is "Main" too: a card of its own, with its own figures and region name.
   const other = page.getByRole("region", { name: "Costs for Main · Codex", exact: true });
-  await expect(other).toContainText("Plan sign-in");
+  await expect(other).toContainText("On your plan");
   await expect(other).toContainText("$9.00");
 
   // Under 80%: a quiet bar, with Change limit and Remove limit.
@@ -148,11 +148,11 @@ test("costs lists each account with today, this month and total, and where it st
   // An AI service has no limit yet: it can get one.
   const service = page.getByRole("region", { name: "Costs for Kimi on Together · Codex", exact: true });
   await expect(service.locator(".cost-name")).toHaveText("Kimi on Together · Codex");
-  await expect(service.locator(".cost-sub")).toHaveText("AI service");
+  await expect(service.locator(".cost-sub")).toHaveText("Service or own model");
   await expect(service.getByRole("button", { name: "Set a limit", exact: true })).toBeVisible();
   await expect(service).toContainText("No limit.");
 
-  await expect(page.getByText("Crosstalk adds up what each reply reports. The exact bill is on your provider's site.")).toBeVisible();
+  await expect(page.getByText("Crosstalk adds up what each reply reports. The exact bill is on each account's own site.")).toBeVisible();
   // Estimates are drawn here, so the screen says what ≈ means; and it says where the figures start, so this month's earlier use isn't expected in them.
   await expect(page.getByText("≈ means worked out from a reply's tokens and a price list.", { exact: true })).toBeVisible();
   await expect(page.getByText("Figures start when this version was installed, so earlier use this month isn't included.", { exact: true })).toBeVisible();
@@ -239,7 +239,7 @@ test("a limit is changed, removed after asking, and a save that fails says so an
   // The hub can't save it right now: the dialog stays, says why, and Save limit tries again.
   spend.state.putFails = 1;
   await dialog.getByRole("button", { name: "Save limit", exact: true }).click();
-  await expect(dialog.getByRole("alert")).toHaveText("The hub is busy. Try again, or tap Cancel.");
+  await expect(dialog.getByRole("alert")).toHaveText("Crosstalk is busy. Try again, or tap Cancel.");
   await expect(field).toHaveValue("300");
   await page.screenshot(shot("05-limit-dialog-save-failed.png"));
   await dialog.getByRole("button", { name: "Save limit", exact: true }).click();
@@ -310,7 +310,7 @@ test("costs say when there are no replies yet, and when the hub is too old, with
   await page.reload();
   await expect(page.getByRole("heading", { name: "Costs", exact: true })).toBeVisible();
   const problem = page.getByRole("alert").filter({ hasText: "can't show costs yet" });
-  await expect(problem).toContainText("This machine's hub is older and can't show costs yet. Update Crosstalk on it, then try again.");
+  await expect(problem).toContainText("This machine runs an older Crosstalk that can't show costs yet. Update Crosstalk on it, then try again.");
   await expect(page.getByRole("checkbox", { name: "Look up prices online" })).toHaveCount(0);
   await problem.scrollIntoViewIfNeeded();
   await page.screenshot(shot("08-costs-older-hub.png"));
@@ -409,8 +409,8 @@ test("a chat says what it has cost, with ≈ when some replies have no price, an
   Object.assign(s.member, { readSeq: 2 });
   try {
     await s.open();
-    await page.getByRole("button", { name: /Show context and plan limits/ }).click();
-    const pop = page.getByRole("dialog", { name: "Context and plan limits", exact: true });
+    // What the chat has cost is with the account that pays for it: the sheet's Answers with.
+    const pop = await chatSettings(page, "Answers with");
     await expect(pop.getByText("This chat: $1.23", { exact: true })).toBeVisible();
     await expect(pop).not.toContainText("without a price");
     // This chat's account is an API key: its cost is billed, with nothing about a plan.
@@ -446,8 +446,8 @@ test("a chat on a plan sign-in says its figure is what the use would cost, not a
   Object.assign(s.member, { readSeq: 2 });
   try {
     await s.open();
-    await page.getByRole("button", { name: /Show context and plan limits/ }).click();
-    const pop = page.getByRole("dialog", { name: "Context and plan limits", exact: true });
+    // What the chat has cost is with the account that pays for it: the sheet's Answers with.
+    const pop = await chatSettings(page, "Answers with");
     await expect(pop.locator(".chat-cost")).toHaveText("This chat: ≈$12.30 at API prices, included in your plan");
     await page.screenshot(shot("20-chat-cost-line-plan.png"));
     await noHorizontalOverflow(page);
@@ -473,8 +473,8 @@ test("a plan chat's figure waits for its account's figures, so it never shows as
   try {
     await s.open();
     const answered = page.waitForResponse((res) => res.url().endsWith(`/api/rooms/${s.room.id}/spend`));
-    await page.getByRole("button", { name: /Show context and plan limits/ }).click();
-    const pop = page.getByRole("dialog", { name: "Context and plan limits", exact: true });
+    // What the chat has cost is with the account that pays for it: the sheet's Answers with.
+    const pop = await chatSettings(page, "Answers with");
     await expect(pop).toBeVisible();
     // The chat's own figure is here, and the line still isn't drawn: it would say "$12.30" with no word about the plan.
     await answered;
@@ -510,7 +510,7 @@ test("passing 80% gives one notice, and Raise limit takes you to Settings → Co
     await page.screenshot(shot("13-notice-80.png"));
     await noHorizontalOverflow(page);
     await toasts.first().getByRole("button", { name: "Raise limit", exact: true }).click();
-    await expect(page.getByRole("heading", { name: "Settings", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Usage & costs", exact: true })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Costs", exact: true })).toBeInViewport();
     await expect(page.getByRole("region", { name: "Costs for API key · Claude Code", exact: true })).toBeVisible();
     await page.screenshot(shot("14-notice-opens-costs.png"));

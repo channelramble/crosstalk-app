@@ -220,7 +220,7 @@ test("a chat's first message is sent once it's made; one naming another agent, o
     const u = new URL(String(url));
     if (u.pathname === "/api/asks/targets") {
       looked.push(`${u.searchParams.get("room")} ${u.searchParams.get("machines")}`);
-      return listFails ? new Response(JSON.stringify({ error: "Can't reach the hub." }), { status: 502 }) : new Response(JSON.stringify(choices));
+      return listFails ? new Response(JSON.stringify({ error: "Can't reach the machine." }), { status: 502 }) : new Response(JSON.stringify(choices));
     }
     posted.push({ url: String(url), body: JSON.parse(String(init?.body)) });
     return failWith ? new Response(JSON.stringify({ error: failWith }), { status: 413 }) : new Response(JSON.stringify({ id: "m1" }));

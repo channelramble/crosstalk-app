@@ -16,7 +16,7 @@ g.navigator ??= { userAgent: "test" };
 g.document ??= { addEventListener() {}, removeEventListener() {}, visibilityState: "visible", querySelector: () => null };
 g.matchMedia ??= () => ({ matches: false, addEventListener() {}, removeEventListener() {} });
 const { AgentOptions } = await import("./views/AgentOptions");
-const { ServiceRow } = await import("./views/AiServices");
+const { AccountRow } = await import("./views/AccountsList");
 
 /** The words on screen: tags stripped, entities read. */
 const words = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, "&").replace(/&#x2192;/g, "→").replace(/\s+/g, " ").trim();
@@ -54,7 +54,7 @@ const account = (over: Partial<AgentAccount["endpoint"]> | null): AgentAccount =
   error: null,
   checkedAt: Date.now(),
 });
-const row = (a: AgentAccount) => words(renderToStaticMarkup(createElement(ServiceRow, { account: a })));
+const row = (a: AgentAccount) => words(renderToStaticMarkup(createElement(AccountRow, { account: a })));
 
 test("the model picker says what the tools cost on the model that was measured, and when", () => {
   const shown = picker([model({ toolCost: cost() })]);

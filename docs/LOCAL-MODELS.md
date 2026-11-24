@@ -16,15 +16,13 @@ Built and tested against fakes only: no real Hugging Face download, Ollama, llam
   see a sliding window aren't counted per token in the families llama.cpp windows (Gemma 2/3/3n, gpt-oss, Command R7B,
   Llama 4); a window in another family's header (Phi-3) counts every layer; MLA and hybrid models are handled); 128 KiB a
   token when it can't be read. A model trained for less than 32k is offered, counted and started at its own context.
-- **What the machine can give** (`machineFrom`): on Apple silicon, Metal's working set as llama.cpp reports it (the pool's
-  install, else a llama-server found here; listing it never touches a helper), else about 2/3 of the memory up to 36 GB and
+- **What the machine can give** (`machineFrom`): on Apple silicon, Metal's working set as llama.cpp reports it (the
+  llama-server found here lists it), else about 2/3 of the memory up to 36 GB and
   3/4 above, marked "about"; on a PC, the GPUs' free memory; without a GPU, the memory less a quarter (at least 4 GB).
-- **Downloads**: the model pool's downloader (`pool/models.ts`, now with a `root` folder argument; the pool's own default is
-  unchanged): resumable `.part` files pinned to one commit, the hub's reserve kept free before and during (507 `low_disk`
+- **Downloads** (`hub/src/local/models.ts`, into the folder chosen): resumable `.part` files pinned to one commit, the hub's reserve kept free before and during (507 `low_disk`
   with "Free up space, change the folder, or pick a smaller file"; what downloads already running on the same disk still
-  need is counted first), Stop (keeps what's downloaded), Resume, Remove. Up to 3 at once. One file is downloaded by one
-  downloader at a time (`downloadingBy`, `DOWNLOADERS`): the pool and Local models share the default folder, and each is
-  told plainly while the other writes a file. Remove of a download the pool finished meanwhile only forgets it. Kept in kv
+  need is counted first), Stop (keeps what's downloaded), Resume, Remove. Up to 3 at once, and one per model.
+  Remove of a download whose files are all there after all only forgets it. Kept in kv
   `localModels.downloads`; one running when the hub stops (or crashes) carries on when it starts again
   (`resumeInterrupted`, from `App.start`, never in in-memory hubs). Ollama pulls stream `/api/pull` progress; Stop ends
   the request (Ollama keeps its part, unless an Ollama starts meanwhile without `OLLAMA_NOPRUNE`). The disk watched is
@@ -35,7 +33,7 @@ Built and tested against fakes only: no real Hugging Face download, Ollama, llam
   own Trash (the Finder's `<drive>/.Trashes/<uid>`, freedesktop.org's `<drive>/.Trash-<uid>` or an administrator's
   `.Trash/<uid>`); when that can't be used it stays, 409 `no_trash`, and the page offers **Delete for good**, which asks
   again before it sends `forGood`. A second Remove of the same model waits for the first.
-- **The folder** (kv `localModels.folder`; default `~/.crosstalk/models`, the pool's): any folder the hub can write to (made if
+- **The folder** (kv `localModels.folder`; default `~/.crosstalk/models`): any folder the hub can write to (made if
   missing, checked with a real write from a child process in its own process group, answered at its time limit: macOS may
   hold the write for a question on its screen). Under `/Volumes`, `/media`, `/run/media` or `/mnt`, a path on a mounted
   drive (its real mount point, `/mnt/data/disk2` too) is on that drive; one whose drive folder the system makes and takes
@@ -44,12 +42,12 @@ Built and tested against fakes only: no real Hugging Face download, Ollama, llam
   folder under `/mnt` is this disk's. A stopped download carries on in the folder it began in (Resume isn't held by the
   folder chosen now). The page's every-second look at the folder (`folderLater`, the walk `modelFilesIn`) is asynchronous:
   one that takes over 1.5 s is answered with the last look, `pending`, and the page asks again.
-- **The Hugging Face token** is the model pool's (secrets `HF_TOKEN`, `PUT /api/pool/hf-token`): it only goes to Hugging Face
+- **The Hugging Face token** is a hub secret (`HF_TOKEN`, `PUT /api/local-models/hf-token`): it only goes to Hugging Face
   (not to its storage redirects), and is never sent back, logged or kept with a download.
 - **Start and stop** (`hub/src/localRunners.ts`; web `views/LocalModelsLibrary.tsx`): `ollama serve` (`OLLAMA_HOST=127.0.0.1:<port>`;
   the program on the PATH, Homebrew's, or the one inside the Ollama app; `OLLAMA_NOPRUNE=1` while a pull is running or
   stopped, so it keeps the pull's part) and `llama-server -m <file> --host 127.0.0.1 --port <port> -c <context> -a <alias>
-  -np 1` (Homebrew's, or the model pool's build), with `-ngl 999` on a Mac and on a PC whose GPUs hold the model (else
+  -np 1` (Homebrew's, or a build in `~/.crosstalk/llama` when there's no other), with `-ngl 999` on a Mac and on a PC whose GPUs hold the model (else
   llama.cpp splits it, the page's Slow), and `-c` never past the model's own context. A port is free only when it binds on
   127.0.0.1 and nothing answers at 127.0.0.1 or ::1 (a program on every address; test hubs, with
   `CROSSTALK_LOCAL_SERVER_PORTS` empty, only bind). Like the image editor: detached in
@@ -69,12 +67,13 @@ Built and tested against fakes only: no real Hugging Face download, Ollama, llam
 |---|---|---|
 | `GET /api/local-models/library` | | `LocalLibrary` (machine, folder, files, downloads, programs, started servers, hasHfToken, reserve, free ports) |
 | `PUT /api/local-models/folder` | `{ path: string \| null }` | `LocalFolder` (400 for a bad path, 409 `folder` for one it can't use) |
+| `PUT /api/local-models/hf-token` | `{ token: string \| null }` | `{ hasHfToken }` (400 for something that isn't a token) |
 | `GET /api/local-models/search?q=` | | `LocalSearchHit[]` |
-| `GET /api/local-models/files?repo=` | a repo, link or file link | `LocalRepoFiles` (the pool's choices plus `kvBytesPerToken`, `contextLength`) |
+| `GET /api/local-models/files?repo=` | a repo, link or file link | `LocalRepoFiles` (the repo's models plus `kvBytesPerToken`, `contextLength`) |
 | `GET /api/local-models/ollama?model=` | | `LocalOllamaInfo` (404 for an unknown name or an `hf.co/…` one) |
 | `POST /api/local-models/downloads` | `LocalDownloadStart` | `LocalLibrary` (starts, or picks a stopped one up) |
 | `POST /api/local-models/downloads/stop` | `{ id }` | `LocalLibrary` |
-| `POST /api/local-models/downloads/remove` · `/files/remove` | `{ id, forGood? }` | `LocalLibrary` (409 `no_trash` when the drive's Trash can't be used, `busy` while the pool writes it or a Remove of it runs) |
+| `POST /api/local-models/downloads/remove` · `/files/remove` | `{ id, forGood? }` | `LocalLibrary` (409 `no_trash` when the drive's Trash can't be used, `busy` while a Remove of it runs) |
 | `POST /api/local-models/start` | `LocalServerStart` | `LocalLibrary` (409 `port_taken`, `no_program`) |
 | `POST /api/local-models/stop` | `{ id }` | `LocalLibrary` (a failed start is put away; 404 for any server Crosstalk didn't start) |
 
@@ -82,7 +81,7 @@ Built and tested against fakes only: no real Hugging Face download, Ollama, llam
 
 ## Tests and hooks
 
-- Hub: `gguf.test.ts`, `local-library.test.ts`, `local-runners.test.ts`. Fakes: `fixtures/pool-fakes.ts` `fakeHuggingFace`
+- Hub: `gguf.test.ts`, `local-library.test.ts`, `local-runners.test.ts`. `local-llama.test.ts`, `local-hf-models.test.ts`. Fakes: `fixtures/local-fakes.ts` `fakeHuggingFace`
   (now with search and closed byte ranges), `fixtures/fake-local-models.ts` (Ollama's `/api/pull`, resumable), the new
   `fixtures/fake-ollama` program and `fixtures/gguf.ts` headers; the fake llama-server also reads its settings from
   `<its path>.json` (servers start with a short environment).

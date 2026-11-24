@@ -123,10 +123,10 @@ pub fn decide(i: Inputs) -> Status {
         if up {
             a.open = true;
             a.pair = i.setup.bin_exists;
-            (State::Outside, Tone::Ok, "Running outside the service".into(), format!("A hub answers on port {port}, but no background service started it (a terminal?), so Start and Stop can't manage it."))
+            (State::Outside, Tone::Ok, "Running outside the service".into(), format!("Crosstalk answers on port {port}, but no background service started it (a terminal?), so Start and Stop can't manage it."))
         } else if i.setup.bin_exists {
             a.install = true;
-            (State::NoService, Tone::Off, "Not set up to run".into(), format!("The hub is at {}, but no background service starts it.", i.setup.bin.display()))
+            (State::NoService, Tone::Off, "Not set up to run".into(), format!("Crosstalk is at {}, but nothing starts it in the background.", i.setup.bin.display()))
         } else {
             a = Actions { install: true, ..Actions::default() };
             (State::NotInstalled, Tone::Off, "Not installed".into(), "Crosstalk isn't set up on this computer yet.".into())
@@ -139,7 +139,7 @@ pub fn decide(i: Inputs) -> Status {
             }
             (_, Health::Other { detail }) => {
                 a.stop = i.service.loaded;
-                (State::OtherProgram, Tone::Problem, format!("Port {port} is taken"), format!("{detail} The hub can't use the port while that program has it."))
+                (State::OtherProgram, Tone::Problem, format!("Port {port} is taken"), format!("{detail} Crosstalk can't use the port while that program has it."))
             }
             (Phase::Running, Health::Down { .. }) if i.age.is_some_and(|s| s < STARTING_SECS) => {
                 a.stop = true;
@@ -161,7 +161,7 @@ pub fn decide(i: Inputs) -> Status {
             (_, Health::Up { .. }) => {
                 a.open = true;
                 a.pair = i.setup.bin_exists;
-                (State::Outside, Tone::Ok, "Running outside the service".into(), format!("A hub answers on port {port}, but the background service didn't start it (a terminal?), so Start and Stop can't manage it."))
+                (State::Outside, Tone::Ok, "Running outside the service".into(), format!("Crosstalk answers on port {port}, but the background service didn't start it (a terminal?), so Start and Stop can't manage it."))
             }
             (Phase::Waiting, _) if i.waiting_for.is_some_and(|s| s >= STARTING_SECS) => {
                 // Loaded, but nothing starts it again (a job without KeepAlive that exited cleanly).

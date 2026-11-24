@@ -392,7 +392,7 @@ describe("one wait per agent", () => {
     }
   });
 
-  test("Answer now in a group chat carries the waiting agent on instead of queuing a second try", async () => {
+  test("Try again under your message in a group chat carries the waiting agent on instead of queuing a second try", async () => {
     const h = setup();
     try {
       const room = h.chat({ chat: { provider: "mock", origin: "web", group: true } });
@@ -400,7 +400,7 @@ describe("one wait per agent", () => {
       h.add(room, "two");
       await h.say(room, "@one please build it");
       expect(h.engine.limitWaiting(room.id, stuck.id)).not.toBe(null);
-      h.engine.retry(room.id); // Answer now, under the message nothing has answered
+      h.engine.retry(room.id); // Try again, under the message nothing has answered
       await h.idle();
       expect(h.engine.limitWaiting(room.id, stuck.id)).toBe(null);
       expect(h.turns(room).filter((t) => t.memberId === stuck.id && t.status === "done")).toHaveLength(1);

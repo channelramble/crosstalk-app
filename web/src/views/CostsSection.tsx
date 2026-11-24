@@ -50,12 +50,12 @@ export function CostsSection() {
         Costs
       </h2>
       <p className="help" style={{ marginTop: 0 }}>
-        What your AI accounts cost at API prices. Plan sign-ins show what the use would cost; only API keys and online services are billed.
+        What your accounts cost at API prices. An account on a plan shows what the use would cost; only API keys and accounts billed per use are charged.
       </p>
       {accounts === null ? (
         error ? (
           <div className="card" role="alert">
-            <p style={{ marginTop: 0 }}>{error.older ? "This machine's hub is older and can't show costs yet. Update Crosstalk on it, then try again." : `Couldn't load costs: ${error.message}`}</p>
+            <p style={{ marginTop: 0 }}>{error.older ? "This machine runs an older Crosstalk that can't show costs yet. Update Crosstalk on it, then try again." : `Couldn't load costs: ${error.message}`}</p>
             <button className="btn small" onClick={reload}>
               Try again
             </button>
@@ -88,7 +88,7 @@ export function CostsSection() {
             </>
           )}
           <PriceLookup />
-          <p className="tiny muted cost-foot">Crosstalk adds up what each reply reports. The exact bill is on your provider's site.</p>
+          <p className="tiny muted cost-foot">Crosstalk adds up what each reply reports. The exact bill is on each account's own site.</p>
           {anyApproximate(shown) && <p className="tiny muted cost-foot">{APPROX_NOTE}</p>}
           <p className="tiny muted cost-foot">{BEFORE_COSTS}</p>
           {prices && (
@@ -152,7 +152,7 @@ function AccountCard({ a, onLimit }: { a: AccountSpend; onLimit: (title: string)
       {a.flat ? (
         <p className="cost-note">{FLAT_RATE_NOTE}</p>
       ) : a.kind === "signin" ? (
-        <p className="cost-note">A plan sign-in isn't billed per reply, so it has no limit. The figures are what the use would cost at API prices.</p>
+        <p className="cost-note">An account on a plan isn't billed per reply, so it has no limit. The figures are what the use would cost at API prices.</p>
       ) : (
         <div className="cost-limit">
           <div className="cost-limit-title">

@@ -2,8 +2,8 @@ import { expect, test } from "bun:test";
 import { OPENCODE_VERSION, type AccountSpend, type AgentAccount, type LocalServer, type ModelCatalog, type ProviderStatus, type ServiceTestResult } from "@crosstalk/shared";
 import { servicePreset } from "./presets";
 import {
-  agentChoiceHelp, agentsFor, agentsLine, bytes, chooseAgent, errorMessage, formatContext, initialSelection, installFailure, installWords, kindLine, makeDefault, MAX_MODELS, modelChoices, modelNames, modelsLine, noDot, noTools, openCodeState, parseModelNames, protocolFor,
-  routeMissing, saveBody, serverInUse, serverLine, serviceFixLine, serviceList, serviceOutcome, spendChip, staleLine, statusOf, switchAgent, switchedWords, switchFailure, testBody, testFailure, testLines, toggleModel, typedModelNames,
+  agentChoiceHelp, agentsFor, bytes, chooseAgent, errorMessage, formatContext, initialSelection, installFailure, installWords, makeDefault, MAX_MODELS, modelChoices, modelNames, modelsLine, noDot, noTools, openCodeState, parseModelNames, protocolFor,
+  routeMissing, saveBody, serverInUse, serverLine, serviceOutcome, spendChip, staleLine, switchAgent, switchedWords, switchFailure, testBody, testFailure, testLines, toggleModel, typedModelNames,
 } from "./services";
 
 const none = { responses: "no", messages: "no", chat: "no" } as const;
@@ -117,15 +117,6 @@ test("the model count is the models that can be picked, and says how many names 
 
 // Settings -> AI services could test a service of your own and change it nowhere: the row's words name where each kind
 // is changed, and a custom model is changed on the row itself (its address, key and models).
-test("every row says where its service is changed", () => {
-  expect(serviceFixLine(account({ kind: "endpoint", provider: "codex", endpoint: { baseUrl: "http://127.0.0.1:8080", models: ["qwen3-8b"], contextWindow: null, hasKey: false, protocol: "chat" } }))).toBe("Change its address, key or models with Change. Remove it under Codex → Accounts below.");
-  expect(serviceFixLine(account({ kind: "apikey", signedIn: false, provider: "claude" }))).toBe("Replace the key under Claude Code below.");
-  expect(serviceFixLine(account({ signedIn: false }))).toBe("Press Sign in under Codex below.");
-  // Nothing to fix on a sign-in that works, or a key the agent accepts.
-  expect(serviceFixLine(account({ signedIn: true }))).toBeNull();
-  expect(serviceFixLine(account({ kind: "apikey", signedIn: true }))).toBeNull();
-});
-
 test("a model the service says can't run tools is marked and never picked for you, but can still be ticked", () => {
   // Venice's list says this per model (supportsFunctionCalling); a service that says nothing is never read as a no.
   const r = result({ models: [{ id: "glm-5", contextWindow: 198_000, tools: true }, { id: "hermes-3", contextWindow: 128_000, tools: false }, { id: "quiet", contextWindow: null }] });
@@ -228,43 +219,6 @@ test("a context typed by hand fills in when the service didn't say, and a namele
   expect(saveBody({ agent: "claude", result: r, preset: null, baseUrl: "x", apiKey: "", label: "", models: ["qwen3-coder"], context: "12" }).contextWindow).toBeNull();
 });
 
-test("the list has Claude Code then Codex, each agent's own sign-in first, and nothing else", () => {
-  const all: Record<string, AgentAccount> = {
-    "codex:k": account({ id: "k", label: "Kimi", kind: "endpoint" }),
-    codex: account(),
-    "claude:w": account({ provider: "claude", id: "w", label: "Work" }),
-    claude: account({ provider: "claude" }),
-    gemini: account({ provider: "gemini" }),
-    "claude:a": account({ provider: "claude", id: "a", label: "API key", kind: "apikey" }),
-  };
-  expect(serviceList(all).map((a) => `${a.provider}/${a.label}`)).toEqual(["claude/Main", "claude/API key", "claude/Work", "codex/Main", "codex/Kimi"]);
-  // The two agents that run only on services list those, after Claude Code's and Codex's; never a stray sign-in of theirs.
-  const onServices: Record<string, AgentAccount> = {
-    ...all,
-    "opencode:r": account({ provider: "opencode", id: "r", label: "Refuseless", kind: "endpoint" }),
-    "builtin:n": account({ provider: "builtin", id: "n", label: "NanoGPT", kind: "endpoint" }),
-    opencode: account({ provider: "opencode" }),
-    builtin: account({ provider: "builtin" }),
-  };
-  expect(serviceList(onServices).map((a) => `${a.provider}/${a.label}`)).toEqual(["claude/Main", "claude/API key", "claude/Work", "codex/Main", "codex/Kimi", "builtin/NanoGPT", "opencode/Refuseless"]);
-});
-
-test("the Agents line says truthfully which agent runs which service", () => {
-  const codex = account();
-  const refuseless = account({ provider: "opencode", id: "r", label: "Refuseless", kind: "endpoint" });
-  const nano = account({ provider: "builtin", id: "n", label: "NanoGPT", kind: "endpoint" });
-  // The whole line now, what it's for included: "sign in to your plan" only ever names Claude Code and Codex, and the agents
-  // that run on a service's key say they have no sign-in (web/src/builtinSignIn.test.ts).
-  expect(agentsLine([codex])).toBe("Claude Code and Codex run every service above. Install them, sign in to your plan or add accounts here.");
-  expect(agentsLine([codex, refuseless])).toBe("Claude Code and Codex run the other services above. OpenCode runs Refuseless, with the key above, and needs no sign-in. Install Claude Code or Codex, sign in to your plan or add accounts here.");
-  expect(agentsLine([codex, nano])).toBe("Claude Code and Codex run the other services above. Crosstalk's own agent runs NanoGPT itself, with the key above, and needs no sign-in. Install Claude Code or Codex, sign in to your plan or add accounts here.");
-  expect(agentsLine([codex, nano, refuseless])).toBe("Claude Code and Codex run the other services above. OpenCode runs Refuseless and Crosstalk's own agent runs NanoGPT itself, with the keys above, and need no sign-in. Install Claude Code or Codex, sign in to your plan or add accounts here.");
-  expect(agentsLine([refuseless])).toBe("OpenCode runs Refuseless, with the key above: no sign-in, and no Claude Code or Codex needed. To use those too, install them, sign in to your plan or add accounts here.");
-  expect(agentsLine([nano])).toBe("Crosstalk's own agent runs NanoGPT itself, with the key above: no sign-in, and no Claude Code or Codex needed. To use those too, install them, sign in to your plan or add accounts here.");
-  expect(agentsLine([refuseless, nano])).toBe("OpenCode runs Refuseless and Crosstalk's own agent runs NanoGPT itself, with the keys above: no sign-in, and no Claude Code or Codex needed. To use those too, install them, sign in to your plan or add accounts here.");
-  expect(agentsLine([refuseless, { ...refuseless, id: "r2", label: "Refuseless work" }])).toBe("OpenCode runs Refuseless and Refuseless work, with the keys above: no sign-in, and no Claude Code or Codex needed. To use those too, install them, sign in to your plan or add accounts here.");
-});
-
 test("Use it with says what the agent picked is, where that is the choice", () => {
   // Any other service is the same under either agent.
   expect(agentChoiceHelp(["codex", "claude"], "codex")).toBe("Both can run it. Pick the one you want to chat with.");
@@ -307,7 +261,7 @@ test("an install's one line, from start to end, and honest about how it ended", 
   // The hub no longer has its terminal (it restarted).
   expect(words({ phase: "failed", exitCode: null })).toBe("Couldn't see how the install ended: Mac mini no longer has its terminal.");
   expect(installFailure("OpenCode", "Couldn't start a terminal.", 500)).toBe("The install didn't start: Couldn't start a terminal. Try again in a moment.");
-  expect(installFailure("OpenCode", "not found", 404)).toBe("This machine's hub is too old to install OpenCode from here. Update it first.");
+  expect(installFailure("OpenCode", "not found", 404)).toBe("This machine runs an older Crosstalk that can't install OpenCode from here. Update Crosstalk on it first.");
 });
 
 test("a Refuseless or NanoGPT service can move between the two agents that run only on services, and nothing else can", () => {
@@ -332,35 +286,9 @@ test("a Refuseless or NanoGPT service can move between the two agents that run o
   expect(switchedWords("Refuseless", "builtin", "opencode", false)).toBe("Refuseless now runs with OpenCode, with the same key.");
   expect(switchedWords("Refuseless", "builtin", "opencode", true)).toBe("Refuseless now runs with OpenCode, with the same key. Chats already on it stay with Crosstalk agent, so that row stays. Press Remove on it once they're deleted.");
   expect(switchFailure("Run it with OpenCode", "OpenCode isn't installed.", 400)).toBe("Couldn't move it: OpenCode isn't installed. Press Run it with OpenCode to try again.");
-  expect(switchFailure("Run it with OpenCode", "not found", 404)).toBe("This machine's hub is too old to move a service to another agent. Update it first.");
+  expect(switchFailure("Run it with OpenCode", "not found", 404)).toBe("This machine runs an older Crosstalk that can't move an account to another agent. Update Crosstalk on it first.");
   // A hub that has the route says 404 in its own words: that isn't "too old".
   expect(switchFailure("Run it with OpenCode", "No such account", 404)).toBe("Couldn't move it: No such account. Press Run it with OpenCode to try again.");
-});
-
-test("a row says the agent and what the account is", () => {
-  expect(kindLine(account({ provider: "claude", plan: "Max", account: "me@example.com" }))).toBe("Claude Code · Max · me@example.com");
-  expect(kindLine(account({ kind: "apikey" }))).toBe("Codex · API key, billed per use");
-  const endpoint = { baseUrl: "https://api.moonshot.ai", models: ["kimi"], contextWindow: null, hasKey: true };
-  expect(kindLine(account({ kind: "endpoint", endpoint }))).toBe("Codex · Custom model · api.moonshot.ai");
-  expect(kindLine(account({ kind: "endpoint", endpoint: { ...endpoint, protocol: "chat" } }))).toBe("Codex · Custom model · api.moonshot.ai · chat adapter");
-});
-
-test("the dot: a plan or a key shows the agent's live state; a custom model shows the last check, else what the model list says", () => {
-  expect(statusOf(account({ signedIn: true }), null, null)).toEqual({ tone: "ok", text: "Signed in" });
-  expect(statusOf(account({ signedIn: false }), null, null)).toEqual({ tone: "warn", text: "Not signed in" });
-  expect(statusOf(account({ signedIn: null }), null, null)).toEqual({ tone: "idle", text: "Sign-in not confirmed" });
-  const endpoint = account({ kind: "endpoint" });
-  expect(statusOf(endpoint, null, null)).toEqual({ tone: "idle", text: "Not tested yet" });
-  expect(statusOf(endpoint, null, catalog({ live: true }))).toEqual({ tone: "idle", text: "Not tested yet" });
-  expect(statusOf(endpoint, null, catalog({ live: false }))).toEqual({ tone: "bad", text: "Can't reach it" });
-  expect(statusOf(endpoint, serviceOutcome(result({ works: [{ provider: "codex", via: "responses" }] })), catalog({ live: false }))).toEqual({ tone: "ok", text: "Reachable" });
-  // A saved key is checked the way a plan sign-in is, so its row shows the agent's live state too.
-  expect(statusOf(account({ kind: "apikey", signedIn: false }), null, null)).toEqual({ tone: "warn", text: "Key not accepted" });
-  expect(statusOf(account({ kind: "apikey", signedIn: true }), null, null)).toEqual({ tone: "ok", text: "Key accepted" });
-  expect(statusOf(account({ kind: "apikey", signedIn: null }), null, null)).toEqual({ tone: "idle", text: "Key not confirmed" });
-  expect(statusOf(account({ kind: "apikey", signedIn: false }), serviceOutcome(result({ works: [{ provider: "codex", via: "responses" }] })), null).text).toBe("Key not accepted");
-  // A plan's old check never overrides its live state.
-  expect(statusOf(account({ signedIn: false }), serviceOutcome(result({ works: [{ provider: "codex", via: "responses" }] })), null).text).toBe("Not signed in");
 });
 
 test("a row lists a custom model's live names, or its saved ones when no list came", () => {
@@ -421,13 +349,13 @@ test("a check that can't run says what to do; only a hub without the route is to
   expect(testFailure("Failed to fetch.")).toBe("The check didn't run: Failed to fetch. Press Test to try again.");
   // The hub's own words for a route it doesn't have (any case, and a text answer's newline).
   for (const message of ["not found", "Not found", "not found\n"]) {
-    expect(testFailure(message, 404)).toContain("too old to check services");
+    expect(testFailure(message, 404)).toContain("older Crosstalk that can't check an account this way");
     expect(routeMissing(message, 404)).toBe(true);
   }
   // A 404 from a hub that has the route is about something else (a removed account, say): it's reported as it came.
-  expect(testFailure("No such custom model", 404)).toBe("The check didn't run: No such custom model. Press Test to try again.");
-  expect(testFailure("No such account", 404)).not.toContain("too old");
-  expect(testFailure("room not found", 404)).not.toContain("too old");
+  expect(testFailure("That account isn't here any more", 404)).toBe("The check didn't run: That account isn't here any more. Press Test to try again.");
+  expect(testFailure("No such account", 404)).not.toContain("older Crosstalk");
+  expect(testFailure("That chat isn't here any more.", 404)).not.toContain("older Crosstalk");
   // Neither is "not found" with another status.
   expect(testFailure("not found", 500)).toBe("The check didn't run: not found. Press Test to try again.");
   expect(routeMissing("not found")).toBe(false);

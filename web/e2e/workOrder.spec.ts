@@ -11,7 +11,7 @@ test("asking the reviewer directly: only it answers, and no build is promised", 
   try {
     await page.goto(`/#/room/${room.id}`);
     await page.getByRole("textbox", { name: "Message", exact: true }).fill("@reviewer which port?");
-    await expect(page.locator(".group-answers")).toHaveText("Only @reviewer will answer. The others read it on their next turn.");
+    await expect(page.locator(".group-answers")).toHaveText("Only @reviewer will answer. The others read it when they next reply.");
     await page.getByRole("button", { name: "Send to @reviewer", exact: true }).click();
     await expect(page.getByRole("button", { name: /^@reviewer: / })).toBeVisible();
     await expect(page.getByRole("button", { name: /^@builder: / })).toHaveCount(0);
@@ -32,7 +32,7 @@ test("build and review say who builds and who checks before you send, then show 
   await request.post(`http://127.0.0.1:8451/api/rooms/${room.id}/members`, { headers, data: { provider: "mock", handle: "reviewer", config: { reply: "APPROVED: checked the change.", delayMs: 1800 } } });
   try {
     await page.goto(`/#/room/${room.id}`);
-    await expect(page.locator(".group-answers")).toHaveText("@builder builds it, then @reviewer checks the work.");
+    await expect(page.locator(".group-answers")).toHaveText("@builder builds it, then @reviewer reviews it.");
     await page.getByRole("textbox", { name: "Message", exact: true }).fill("Do the task");
     await page.getByRole("button", { name: "Send", exact: true }).click();
     await expect(page.getByRole("button", { name: /^@builder: / })).toBeVisible();

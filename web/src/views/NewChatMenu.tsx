@@ -59,8 +59,6 @@ export function useChatStarters(when = true): Starters {
   const multi = machines.length > 1;
   const here = machines.find((m) => m.key === active);
   const servers = useLocalServers(when);
-  // The model pool of the open machine: one entry whatever state it's in (newChat.ts poolRow).
-  const pool = useStore((s) => s.poolOffer);
   return chatStarters({
     // An agent can start a chat if it's ready on any machine (the New chat dialog asks which).
     ready: CHAT_PROVIDERS.filter((p) => machines.some((m) => agentReady(m, p))),
@@ -71,8 +69,6 @@ export function useChatStarters(when = true): Starters {
     // tools. The menu never asks by itself — the New chat dialog does, and says what a no-tools model means.
     models: (a) => (conn ? entries[catalogKey(machineKey(conn), a.provider, a.id)]?.catalog?.models ?? null : null),
     machine: multi ? here?.name ?? null : null,
-    pool,
-    machineKey: active,
   });
 }
 
@@ -120,7 +116,7 @@ export function NewChatMenu({ starters, onPick, label = "New chat" }: { starters
     setToward(to === "all" ? "fwd" : "back");
     setStep(to);
   };
-  // The models of your own, in one order for every screen (newChat.ts `yours`): the pool, your services, servers to add.
+  // The models of your own, in one order for every screen (newChat.ts `yours`): your services, then servers to add.
   const rows = starters.yours;
   const { first, folded } = foldStarters(rows);
   if (step === "all" && folded.length > 0) {

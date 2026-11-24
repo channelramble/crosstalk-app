@@ -144,8 +144,8 @@ test("text and page size zooms the whole app at once, is kept on this device and
     await page.setViewportSize({ width: 390, height: 844 });
     await expect.poll(composerBottom).toBe(844);
     // Menus and sheets fit too.
-    await page.getByTitle("Model").click();
-    await expect(page.getByRole("dialog", { name: "Model" })).toBeVisible();
+    await page.locator(".chat-controls .ctl-model").click();
+    await expect(page.getByRole("dialog", { name: "Chat settings", exact: true }).getByRole("region", { name: "Answers with", exact: true })).toBeVisible();
     await fitsScreen(page);
     await page.keyboard.press("Escape");
     await page.getByRole("button", { name: "Chat settings" }).click();
@@ -172,7 +172,7 @@ test("text and page size zooms the whole app at once, is kept on this device and
         await fitsScreen(page);
         // A smaller page doesn't make the message box smaller than 16px on screen (iOS would zoom into it).
         expect(await page.getByRole("textbox", { name: "Message", exact: true }).evaluate((el) => parseFloat(getComputedStyle(el).fontSize) * Number(getComputedStyle(document.documentElement).zoom))).toBeGreaterThanOrEqual(16);
-        await page.getByTitle("Model").click();
+        await page.locator(".chat-controls .ctl-model").click();
         await fitsScreen(page);
         await page.keyboard.press("Escape");
       }
@@ -199,7 +199,7 @@ test("at the biggest text size the composer's model name isn't cut off: permissi
     const controls = page.locator(".chat-controls");
     const perm = controls.getByRole("button", { name: /^Permissions: / });
     const label = controls.locator(".ctl-model .ellipsis");
-    await expect(label).toHaveText("Sonnet 5.5");
+    await expect(label).toHaveText(/^Sonnet 5\.5/);
     const whole = () => label.evaluate((el) => el.scrollWidth <= el.clientWidth + 1);
     // At 100% permissions are said in words.
     await expect(controls).not.toHaveClass(/narrow/);
@@ -537,14 +537,16 @@ test("screens name the machine they run on instead of assuming a Mac", async ({ 
   const headers = { authorization: `Bearer ${token}` };
   const { hub: info } = await (await request.get(`${hub}/api/state`, { headers })).json();
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto("/#/settings/more");
+  // The Terminal row is under Advanced on the Machines page, which opens by itself when asked for.
+  await page.goto("/#/settings/advanced");
   await expect(page.getByText(`A shell on ${info.name}`, { exact: true })).toBeVisible();
   await expect(page.locator(".app")).not.toContainText("the Mac");
-  // Every tab of Settings, not only the one the Terminal row is in: each holds its own copy now.
-  for (const name of ["Agents", "Models", "Devices", "Usage"]) {
+  // Every page of Settings, not only the one the Terminal row is in.
+  for (const name of ["Accounts", "New chats", "Agents together", "Usage & costs", "This device", "Your own models"]) {
     await settingsTab(page, name);
     await expect(page.locator(".app")).not.toContainText("the Mac");
   }
   await page.getByRole("button", { name: "Show chats" }).click();
-  for (const heading of await page.locator(".csb-agent").all()) await expect(heading).toHaveAttribute("title", new RegExp(`chats and sessions on ${info.name}$`));
+  // (The chat list has no agent headings to name the machine any more; nothing in it calls it "the Mac" either.)
+  await expect(page.getByRole("complementary", { name: "Chats", exact: true })).not.toContainText("the Mac");
 });

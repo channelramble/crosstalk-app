@@ -1,6 +1,6 @@
 import type { Page } from "@playwright/test";
 import type { Member, Room } from "@crosstalk/shared";
-import { test, expect, noHorizontalOverflow, openGroupSettings } from "./fixtures";
+import { test, expect, noHorizontalOverflow, openGroupSettings, chatSettings, modelInForce, pickPermission } from "./fixtures";
 
 // Group chats: several agents in one chat. Claude Code and Codex agents here are only ever set up, never sent a message
 // (the test hub's agents would be the real CLIs): anything that runs a reply uses the scripted mock agent.
@@ -51,6 +51,8 @@ test("New chat starts a group chat: its agents each with their own settings, who
   // At least two: the last two can't be removed.
   await expect(agents.getByRole("button", { name: "Remove Codex", exact: true })).toBeDisabled();
   await dialog.getByRole("radio", { name: /^Everyone answers in turn/ }).click();
+  // Who leads is behind "More".
+  await dialog.getByRole("button", { name: /^More/ }).click();
   await dialog.getByRole("combobox", { name: "Lead", exact: true }).selectOption("1");
   await noHorizontalOverflow(page);
   await dialog.screenshot({ path: test.info().outputPath("new-group-chat.png") });
@@ -70,15 +72,16 @@ test("New chat starts a group chat: its agents each with their own settings, who
   // @name means that agent answers (not Ask others): the chip row and the button say so.
   const message = page.getByRole("textbox", { name: "Message", exact: true });
   await message.fill("@claude what's left?");
-  await expect(answers).toHaveText("Only @claude will answer. The others read it on their next turn.");
+  await expect(answers).toHaveText("Only @claude will answer. The others read it when they next reply.");
   await expect(page.getByRole("button", { name: "Send to @claude", exact: true })).toHaveText("Send to @claude");
   await message.fill("");
   await noHorizontalOverflow(page);
   await page.screenshot({ path: test.info().outputPath("group-chat.png") });
 
-  // It's in the chat list with the other group chats.
+  // It's in the chat list, a row among the other chats (there's no section of group chats), with its agents' avatars.
   const after = await chatList(page);
-  await expect(after.getByRole("region", { name: "Group chats", exact: true })).toContainText("Release plan");
+  await expect(after.locator(".csb-chat").filter({ hasText: "Release plan" }).locator(".group-avatar .avatar")).toHaveCount(2);
+  await expect(after.getByRole("region", { name: "Group chats", exact: true })).toHaveCount(0);
 });
 
 test("the controls under the message box are for one agent at a time", async ({ page, request, token }) => {
@@ -88,25 +91,20 @@ test("the controls under the message box are for one agent at a time", async ({ 
   const checker = members.find((m) => m.handle === "checker")!;
   try {
     await page.goto(`/#/room/${room.id}`);
-    // The lead's to begin with.
-    const pick = page.getByRole("button", { name: "Settings for @claude. Pick another agent", exact: true });
-    await expect(pick).toBeVisible();
-    await pick.click();
-    await expect(page.getByRole("button", { name: "claude model", exact: true })).toBeVisible();
-    const menu = page.getByRole("dialog", { name: "Settings for", exact: true });
-    await menu.getByRole("menuitemradio", { name: /^@checker/ }).click();
-    await expect(page.getByRole("button", { name: "Settings for @checker. Pick another agent", exact: true })).toBeVisible();
-    // Its own model and model list, and a change goes to it alone.
-    await page.getByRole("button", { name: "codex model", exact: true }).click();
-    await expect(page.getByRole("dialog", { name: "Model", exact: true })).toContainText("codex model");
-    await page.keyboard.press("Escape");
+    // The row under the message box is the lead's, and counts the others.
+    const row = page.getByRole("group", { name: "This chat's settings", exact: true });
+    await expect(row.getByRole("button", { name: "@claude's Model: claude model", exact: true })).toBeVisible();
+    await row.getByRole("button", { name: "1 more agent. Open this chat's settings", exact: true }).click();
+    // Each agent has its own block in the chat's settings: its own model and model list, and a change goes to it alone.
+    const answers = await chatSettings(page, "Answers with", "checker");
+    await expect(modelInForce(answers)).toContainText("codex model");
     const saved = page.waitForRequest((req) => req.url().endsWith(`/api/members/${checker.id}`) && req.method() === "PATCH");
-    await page.getByRole("button", { name: /^Permissions: / }).click();
-    await page.getByRole("dialog", { name: "Permissions", exact: true }).getByRole("menuitemradio", { name: /^Can edit(?! &)/ }).click();
+    await pickPermission(await chatSettings(page, "May do", "checker"), "edits");
     expect((await saved).postDataJSON().permissionMode).toBe("edits");
-    // Compact now isn't offered: in a group chat "/compact" would be a message for whoever answers.
-    await page.getByRole("button", { name: /Show context and plan limits$/ }).click();
-    await expect(page.getByRole("button", { name: "Compact now", exact: true })).toHaveCount(0);
+    // Summarize now isn't offered: in a group chat "/compact" would be a message for whoever answers.
+    const memory = await chatSettings(page, "Memory", "checker");
+    await expect(memory.getByRole("combobox", { name: "Summarize by itself at", exact: true })).toBeVisible();
+    await expect(memory.getByRole("button", { name: "Summarize now", exact: true })).toHaveCount(0);
     await noHorizontalOverflow(page);
   } finally { await request.delete(`${HUB}/api/rooms/${room.id}`, { headers }); }
 });
@@ -149,7 +147,7 @@ test("@ in a group chat names who answers; Ask others stays in a message's actio
     // Typed after the pick, so the message keeps its @name: only @second answers, and the lead doesn't.
     await message.pressSequentially("Say hello");
     await expect(message).toHaveValue("@second Say hello");
-    await expect(page.locator(".group-answers")).toHaveText("Only @second will answer. The others read it on their next turn.");
+    await expect(page.locator(".group-answers")).toHaveText("Only @second will answer. The others read it when they next reply.");
     const sent = page.waitForResponse((res) => res.url().endsWith(`/api/rooms/${h.room.id}/messages`) && res.request().method() === "POST");
     await page.getByRole("button", { name: "Send to @second", exact: true }).click();
     expect(await (await sent).json()).toMatchObject({ text: "@second Say hello", mentions: [h.members[1].id] });
@@ -177,9 +175,9 @@ test("a room an older app makes (POST /api/rooms, then its agents) opens as a gr
     await expect(page.locator(".messages")).toContainText("Checked.");
     await expect(page.locator(".group-answers")).toHaveText("@builder answers. Type @ to pick who answers.");
     const settings = await openGroupSettings(page);
-    const agents = settings.getByRole("list", { name: "Agents in this chat", exact: true });
-    await expect(agents.getByRole("listitem")).toHaveCount(2);
-    await expect(agents.getByRole("listitem").first()).toContainText("Lead");
+    const agents = settings.locator(".cs-agent");
+    await expect(agents).toHaveCount(2);
+    await expect(agents.first().locator("> .cs-fold-head")).toContainText("Lead");
     await expect(settings.getByRole("button", { name: "Add an agent", exact: true })).toBeVisible();
     await noHorizontalOverflow(page);
   } finally { await g.remove(); }

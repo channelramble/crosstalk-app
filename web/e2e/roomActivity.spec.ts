@@ -19,8 +19,9 @@ test("chat lists keep provider identity and search matches the requested chat", 
     await page.goto("/");
     await expect(page.getByRole("region", { name: "Recent chats", exact: true })).toContainText("Claude contribution");
     const side = await sidebar(page);
-    await expect(side.locator(".csb-group").filter({ has: page.locator(".csb-agent-name", { hasText: "Claude Code" }) })).toContainText("Claude contribution");
-    await expect(side.locator(".csb-group").filter({ has: page.locator(".csb-agent-name", { hasText: "Codex" }) })).toContainText("Codex contribution");
+    // Whose chat each one is: its row's avatar (the list is by state, with no heading per agent).
+    await expect(side.locator(".csb-chat").filter({ hasText: "Claude contribution" }).locator(":scope > .avatar")).toHaveAttribute("aria-label", "Claude Code");
+    await expect(side.locator(".csb-chat").filter({ hasText: "Codex contribution" }).locator(":scope > .avatar")).toHaveAttribute("aria-label", "Codex");
     await side.getByRole("textbox", { name: "Search chats", exact: true }).fill("Codex contribution");
     await expect(side.locator(".csb-chat")).toHaveCount(1);
     await expect(side.locator(".csb-chat")).toContainText("Codex contribution");
@@ -28,7 +29,7 @@ test("chat lists keep provider identity and search matches the requested chat", 
   } finally { await a.cleanup(); await b.cleanup(); }
 });
 
-test("working and approval badges remain visible beside long chat names on a phone", async ({ page, request, token }) => {
+test("working and needing an OK are said in words under long chat names on a phone", async ({ page, request, token }) => {
   const a = await chat(request, token, "claude", "A long project name with spaces and details for ongoing verification");
   const b = await chat(request, token, "codex", "B long project name waiting for a decision from its owner");
   await page.route("**/api/state", async (route) => {
@@ -39,18 +40,25 @@ test("working and approval badges remain visible beside long chat names on a pho
   try {
     await page.goto("/");
     const side = await sidebar(page);
-    const working = side.locator(".csb-chat").filter({ hasText: a.room.name }).getByLabel("Working", { exact: true });
+    const busy = side.getByRole("region", { name: "Working", exact: true }).locator(".csb-chat").filter({ hasText: a.room.name });
+    await expect(busy.locator(".csb-chat-words")).toHaveText("Working");
+    await expect(busy.locator(".csb-chat-words")).toBeVisible();
+    // Beside the word, a ring, not a filled dot: it can't be taken for the unread dot at a row's end.
+    const working = busy.locator(".csb-chat-sub .csb-dot.busy");
     await expect(working).toBeVisible();
-    // A ring, not a filled dot: it can't be taken for "New reply" beside it.
     await expect(working).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
     await expect(working).toHaveCSS("border-top-width", "2px");
-    await expect(side.locator(".csb-chat").filter({ hasText: b.room.name }).getByLabel("Needs you", { exact: true })).toBeVisible();
+    const asks = side.getByRole("region", { name: "Needs you", exact: true }).locator(".csb-chat").filter({ hasText: b.room.name });
+    await expect(asks.locator(".csb-chat-words")).toHaveText("Needs your OK");
+    await expect(asks.locator(".csb-chat-words")).toBeVisible();
+    // The long names give way; the words under them are whole.
+    for (const row of [busy, asks]) expect(await row.locator(".csb-chat-words").evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
     if (process.env.CT_SHOTS && page.viewportSize()!.width === 390) await page.screenshot({ path: `${process.env.CT_SHOTS}/drawer-working.png`, animations: "disabled" });
     await noHorizontalOverflow(page);
   } finally { await a.cleanup(); await b.cleanup(); }
 });
 
-test("a chat's activity badge updates from live member events without reloading", async ({ page, request, token }) => {
+test("a chat's state updates from live member events without reloading", async ({ page, request, token }) => {
   const c = await chat(request, token, "codex", "Live status chat");
   let socket: WebSocketRoute;
   let member: any;
@@ -66,37 +74,42 @@ test("a chat's activity badge updates from live member events without reloading"
     const row = side.locator(".csb-chat").filter({ hasText: c.room.name });
     await expect(row.locator(".csb-dot")).toHaveCount(0);
     socket!.send(JSON.stringify({ t: "member", member: { ...member, status: "working" } }));
-    await expect(row.getByLabel("Working", { exact: true })).toBeVisible();
+    await expect(row.locator(".csb-chat-words")).toHaveText("Working");
+    await expect(row.locator(".csb-dot.busy")).toHaveCount(1);
     socket!.send(JSON.stringify({ t: "member", member: { ...member, status: "approval" } }));
-    await expect(row.getByLabel("Needs you", { exact: true })).toBeVisible();
+    await expect(row.locator(".csb-chat-words")).toHaveText("Needs your OK");
+    await expect(row.locator(".csb-dot.needs")).toHaveCount(1);
     socket!.send(JSON.stringify({ t: "member", member: { ...member, status: "idle" } }));
     await expect(row.locator(".csb-dot")).toHaveCount(0);
     await noHorizontalOverflow(page);
   } finally { await c.cleanup(); }
 });
 
-test("a chat that stopped with an error shows a red dot and stays visible without Show all", async ({ page, request, token }) => {
+test("a chat that stopped with an error says Failed under Needs you, with a red dot, however old it is", async ({ page, request, token }) => {
   const failed = await chat(request, token, "codex", "Stopped on an error");
   const newer = [];
-  for (let i = 0; i < 9; i++) newer.push(await chat(request, token, "codex", `Newer chat ${i}`));
-  // The oldest of ten (eight show before "Show all"), a second apart: its agent stopped with an error.
+  for (let i = 0; i < 13; i++) newer.push(await chat(request, token, "codex", `Newer chat ${i}`));
+  // The oldest of fourteen (twelve show before "Show all"), a second apart: its agent stopped with an error.
   const made = new Map([failed, ...newer].map((c, i) => [c.room.id, i]));
   await page.route("**/api/state", async (route) => {
     const snap = await (await route.fetch()).json();
-    snap.rooms = snap.rooms.map((r: any) => (made.has(r.id) ? { ...r, updatedAt: Date.now() - (10 - made.get(r.id)!) * 1000 } : r));
+    snap.rooms = snap.rooms.map((r: any) => (made.has(r.id) ? { ...r, updatedAt: Date.now() - (14 - made.get(r.id)!) * 1000 } : r));
     snap.members = snap.members.map((m: any) => (m.roomId === failed.room.id ? { ...m, status: "error", statusDetail: "Codex exited" } : m));
     await route.fulfill({ json: snap });
   });
   try {
     await page.goto("/");
     const side = await sidebar(page);
-    const codex = side.locator(".csb-group").filter({ has: page.locator(".csb-agent-name", { hasText: "Codex" }) });
-    const row = codex.locator(".csb-chat").filter({ hasText: "Stopped on an error" });
-    await expect(row.getByLabel("Stopped with an error", { exact: true })).toBeVisible();
+    // Never behind Show all: it's under Needs you, above every newer chat, saying so in words.
+    const row = side.getByRole("region", { name: "Needs you", exact: true }).locator(".csb-chat").filter({ hasText: "Stopped on an error" });
+    await expect(row.locator(".csb-chat-words")).toHaveText("Failed");
     await expect(row.locator(".csb-dot.error")).toHaveCSS("background-color", "rgb(255, 90, 95)");
-    // Shown without Show all: the eight newest, then it.
-    await expect(codex.locator(".csb-chat")).toHaveCount(9);
-    await expect(codex.getByRole("button", { name: "Show all 10", exact: true })).toBeVisible();
+    await expect(row.locator(".csb-chat-sub")).toHaveCSS("color", "rgb(255, 90, 95)");
+    // The newer ones are under Recent: its newest twelve, the last behind Show all.
+    const recent = side.getByRole("region", { name: "Recent", exact: true });
+    await expect(recent.locator(".csb-chat").filter({ hasText: "Newer chat" })).toHaveCount(12);
+    await expect(recent.getByRole("button", { name: /^Show all \d+$/ })).toBeVisible();
+    expect((await row.boundingBox())!.y).toBeLessThan((await recent.boundingBox())!.y);
     await noHorizontalOverflow(page);
     if (process.env.CT_SHOTS && page.viewportSize()!.width === 390) await page.screenshot({ path: `${process.env.CT_SHOTS}/drawer-error.png`, animations: "disabled" });
   } finally {

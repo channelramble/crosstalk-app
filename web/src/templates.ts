@@ -3,7 +3,7 @@
 // code (`…` and ``` blocks) is left as it is, and so is anything code-like in braces ({"a": 1}, ${name}). The pure parts are
 // here (no store: unit-tested); templateApi.ts talks to the hubs.
 
-import { EFFORT_LABELS, PROVIDER_INFO, type PromptTemplate, type Room, type TemplateInput } from "@crosstalk/shared";
+import { settingsPath, EFFORT_LABELS, PROVIDER_INFO, type PromptTemplate, type Room, type TemplateInput } from "@crosstalk/shared";
 import { folderName } from "./chatList";
 
 /** The longest blank name: longer, it's text in braces, not a blank. */
@@ -162,7 +162,7 @@ export function templateNote(t: Pick<PromptTemplate, "agent" | "account" | "mode
     if (!parts.length) return null;
     return parts.length > 1 ? `Its model and folder are for ${from}, so yours are used here.` : `Its ${parts[0]} is for ${from}, so yours is used here.`;
   }
-  if (t.agent && t.model && modelAccount(t, here) === null) return `Its model is for ${PROVIDER_INFO[t.agent].name}'s main sign-in, which isn't signed in here, so yours is used.`;
+  if (t.agent && t.model && modelAccount(t, here) === null) return `Its model is for ${PROVIDER_INFO[t.agent].name}'s main account, which isn't signed in here, so yours is used.`;
   return null;
 }
 
@@ -185,7 +185,7 @@ export function templateProblem(e: unknown, machine: string): { why: "older" | "
   const message = e instanceof Error ? e.message : String(e);
   if (status === 404 && /^not found$/i.test(message)) return { why: "older", text: olderHub(machine) };
   if (status === 0) return { why: "down", text: `Can't reach ${machine}. Try again when it's back.` };
-  if (status === 401) return { why: "other", text: `This device was signed out of ${machine}. Add it again in Settings → Machines.` };
+  if (status === 401) return { why: "other", text: `This device was signed out of ${machine}. Add it again in ${settingsPath("machines")}.` };
   return { why: "other", text: message };
 }
 

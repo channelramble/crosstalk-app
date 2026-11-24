@@ -2,10 +2,12 @@
 // conversation that lives in that agent's own app on this machine (a Claude Code session or a Codex thread),
 // bringing in what was said there.
 
+import { askable } from "./teamwork";
 import { existsSync, mkdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import {
+  settingsPath,
   CHAT_PROVIDERS,
   DEFAULT_ACCOUNT,
   GROUP_MAX,
@@ -105,6 +107,8 @@ export interface NewChat {
   permissionMode?: PermissionMode;
   /** The model the chat's helper agents use (missing: the agent's default for that; empty: the chat's own model). */
   helperModel?: string | null;
+  /** Who does its helper work (HelpersOn); missing: the machine's default for new chats; null: the agent's own helpers. */
+  helpers?: unknown;
   cwd?: string;
   name?: string;
   /** Other chats' agents can't reach it (a copy of a chat kept from them is too). */
@@ -126,7 +130,7 @@ export class Chats {
   private provider(p: unknown, account?: unknown): ServiceAgent {
     // Crosstalk's own agent and OpenCode run only on an AI service: a chat with one names one of its accounts.
     if (isServiceOnlyAgent(p)) {
-      if (typeof account !== "string" || !this.app.providers.endpointOf(p, account)) throw new HttpError(400, `${PROVIDER_INFO[p].name} runs on an AI service: add one for it in Settings → AI services, then start the chat on it.`);
+      if (typeof account !== "string" || !this.app.providers.endpointOf(p, account)) throw new HttpError(400, `${PROVIDER_INFO[p].name} needs an account to run on: add one for it in ${settingsPath("ai-services")}, then start the chat on it.`);
       return p;
     }
     if (!CHAT_PROVIDERS.includes(p as ChatProvider)) throw new HttpError(400, "Chats are with Claude Code or Codex");
@@ -175,10 +179,12 @@ export class Chats {
     const effort = input.effort === undefined ? (ownDefaults ? defaults?.effort ?? null : null) : input.effort?.trim() || null;
     const helperModel = input.helperModel === undefined ? (ownDefaults ? defaults?.helperModel ?? null : null) : input.helperModel?.trim() || null;
     if (helperModel && !/^[\w.:@/[\]-]{1,100}$/.test(helperModel)) throw new HttpError(400, "bad helper model");
+    // Only Claude Code and Codex have the tools that hand work to a helper on another account (helpers.ts).
+    const helpers = isServiceOnlyAgent(provider) ? null : input.helpers === undefined ? this.app.defaultHelpers(provider, account ?? DEFAULT_ACCOUNT) : this.app.cleanHelpers(input.helpers);
     return {
       model: input.model === undefined ? (ownDefaults ? defaults?.model ?? null : null) : input.model?.trim() || null,
       permissionMode,
-      config: { ...(account ? { account } : {}), ...(effort ? { effort } : {}), ...(helperModel ? { helperModel } : {}) },
+      config: { ...(account ? { account } : {}), ...(effort ? { effort } : {}), ...(helperModel ? { helperModel } : {}), ...(helpers ? { helpersOn: helpers } : {}) },
     };
   }
 
@@ -217,16 +223,28 @@ export class Chats {
   /**
    * Starts a group chat: two or more agents (GROUP_MIN to GROUP_MAX), each with its own account, model and effort, who
    * all read the whole chat. A message @mentioning one of them goes to only them; one that mentions nobody goes to the
-   * lead, or to everyone in turn (the lead first).
+   * lead, to everyone in turn (the lead first), or to the lead whose work the next agent then reviews.
    */
   createGroup(body: unknown): Room {
     const input = (body ?? {}) as Partial<Record<keyof NewGroupChat, unknown>>;
     const list = Array.isArray(input.members) ? input.members : [];
     if (list.length < GROUP_MIN) throw new HttpError(400, `Pick at least ${GROUP_MIN} agents for a group chat`);
     if (list.length > GROUP_MAX) throw new HttpError(400, `A group chat has at most ${GROUP_MAX} agents`);
-    if (input.answers !== undefined && input.answers !== "lead" && input.answers !== "turns") throw new HttpError(400, "Say who answers: the lead, or everyone in turn");
+    if (input.answers !== undefined && input.answers !== "lead" && input.answers !== "turns" && input.answers !== "review") throw new HttpError(400, "Say how they work together: one leads, everyone answers in turn, or one builds and another reviews");
     const lead = input.lead === undefined ? 0 : Number(input.lead);
     if (!Number.isInteger(lead) || lead < 0 || lead >= list.length) throw new HttpError(400, "The lead must be one of the agents");
+    // Review rounds (one is the lead's work, then its review) and working at the same time: what was picked, else what
+    // Settings says new chats start with.
+    const defaults = this.app.defaults();
+    const rounds = input.rounds === undefined ? null : Number(input.rounds);
+    if (rounds !== null && (!Number.isInteger(rounds) || rounds < 1 || rounds > 25)) throw new HttpError(400, "Review rounds go from 1 to 25");
+    if (input.parallel !== undefined && typeof input.parallel !== "boolean") throw new HttpError(400, "Say whether agents may work at the same time with true or false");
+    // Crosstalk's own agent and OpenCode answer one person in a chat of their own: they have no way to read a group chat
+    // or to say when they have a message, so a group chat's agents are Claude Code and Codex, on any of their accounts.
+    for (const raw of list) {
+      const p = (raw as { provider?: unknown } | null)?.provider;
+      if (isServiceOnlyAgent(p)) throw new HttpError(400, `${PROVIDER_INFO[p].name} can't be in a group chat. Pick Claude Code or Codex for it, on any of their accounts.`);
+    }
     const store = this.app.store;
     const { name, cwd } = this.place(input.name, typeof input.cwd === "string" ? input.cwd : undefined);
     const now = Date.now();
@@ -244,6 +262,7 @@ export class Chats {
         model: text(m.model, "model"),
         effort: text(m.effort, "effort"),
         helperModel: text(m.helperModel, "helper model"),
+        ...(m.helpers !== undefined ? { helpers: m.helpers } : {}),
         permissionMode: (text(m.permissionMode, "permission setting") ?? undefined) as PermissionMode | undefined,
       });
       const handle = this.groupHandle(provider, memberAccount(settings), text(m.handle, "name") ?? null, taken);
@@ -254,12 +273,13 @@ export class Chats {
       id: newId("r"),
       name,
       cwd,
-      mode: input.answers === "turns" ? "roundrobin" : "direct",
+      mode: input.answers === "turns" ? "roundrobin" : input.answers === "review" ? "review" : "direct",
       leadMemberId: members[lead].id,
-      // Review rounds, should it be switched to Build & review later.
-      maxHops: this.app.defaults().maxHops,
+      // Review rounds as Room.maxHops counts them (the lead's work and its review are two hops), kept even when the chat
+      // doesn't review yet: it's what it starts with when switched to that later.
+      maxHops: rounds === null ? defaults.maxHops : rounds * 2 - 1,
       rounds: 1,
-      parallel: false,
+      parallel: input.parallel === undefined ? defaults.parallel : input.parallel,
       createdAt: now,
       updatedAt: now,
       archived: false,
@@ -341,7 +361,7 @@ export class Chats {
   /** A short-lived connection to Codex (the Codex app's server when it's running) for reading threads. */
   private async withCodex<T>(fn: (rpc: JsonRpc) => Promise<T>): Promise<T> {
     const bin = this.app.providers.which("codex");
-    if (!bin) throw new HttpError(409, "Codex isn't installed on the hub");
+    if (!bin) throw new HttpError(409, "Codex isn't installed on the machine");
     const rpc = await connectCodex(bin, { env: this.app.providers.agentEnv("codex", DEFAULT_ACCOUNT) });
     try {
       return await fn(rpc);
@@ -367,7 +387,7 @@ export class Chats {
         return codexThreadsToSessions([r?.thread])[0];
       });
     }
-    if (!found) throw new HttpError(404, "That conversation isn't on the hub machine anymore");
+    if (!found) throw new HttpError(404, "That chat isn't on the machine any more");
     const cwd = found.cwd && existsSync(found.cwd) ? found.cwd : this.app.config.workspaceRoot;
     const room = this.create({ provider, cwd, name: found.title, local: { id, origin: found.source } });
     await this.sync(room.id);
@@ -572,20 +592,34 @@ export class Chats {
   context(room: Room, member: Member): NonNullable<DriverContext["chat"]> {
     const session = this.app.store.getMemberSession(member.id);
     const fork = forkPending(member, session);
-    if (room.chat?.group) return { helper: null, fork, notes: null, group: true };
+    // Who does its helper work, when that isn't its own helpers (helpers.ts): said in its standing instructions.
+    const on = this.app.helpers.note(member);
+    const helpers = on ? { helpers: on } : {};
+    if (room.chat?.group) return { helper: null, fork, notes: null, group: true, ...helpers };
     const tw = this.app.hubSettings().teamwork;
     const other: Provider = member.provider === "claude" ? "codex" : "claude";
-    const ready = this.app.providers.get(other)?.installed && this.app.providers.get(other)?.signedIn !== false;
+    // Who it may ask a quick question (teamwork.ts): the accounts the person ticked, else the other agent's main sign-in.
+    const asking = tw.enabled ? askable(this.app, member) : { list: [], chosen: false };
+    const ready = asking.chosen ? asking.list.length > 0 : this.app.providers.get(other)?.installed && this.app.providers.get(other)?.signedIn !== false;
     // Computers connected to the hub (say, a MacBook with a phone plugged in) are reachable from every chat.
     const machine = `this machine (${this.app.machineName()})`;
     const notes = [sharingNote(room, machine), this.app.xchat.offered(room, member) ? chatsNote(this.app.machineName()) : null, this.app.computers.briefing()?.replace(/^- /, "")].filter(Boolean).join("\n\n");
-    if (!tw.enabled || !ready) return { helper: null, fork, notes };
+    if (!tw.enabled || !ready) return { helper: null, fork, notes, ...helpers };
+    if (asking.chosen) {
+      const names = asking.list.map((a) => `${a.name} (who: "${a.handle}")`).join(", ");
+      const note = [
+        `You can ask another agent one focused question with the ask_agent tool. The person lets you ask: ${names}.`,
+        `Only use it when a second opinion would really help, such as a stubborn bug or a risky change worth checking. Each question uses up part of that account's plan or balance, so at most ${tw.perReply} ${tw.perReply === 1 ? "question" : "questions"} per reply.`,
+        `The one you ask can read the files in ${room.cwd} but can't change anything, and it can't see this conversation: write a short, self-contained question.`,
+      ].join(" ");
+      return { helper: { provider: "agent", note }, fork, notes, ...helpers };
+    }
     const name = PROVIDER_INFO[other].name;
     const note = [
       `You can ask ${name}, another coding agent, for help with the ask_${other} tool.`,
       `Only use it when a second opinion would really help, such as a stubborn bug or a risky change worth checking. Each question uses up part of the user's ${name} plan, so at most ${tw.perReply} ${tw.perReply === 1 ? "question" : "questions"} per reply.`,
       `${name} can read the files in ${room.cwd} but can't change anything, and it can't see this conversation: write a short, self-contained question.`,
     ].join(" ");
-    return { helper: { provider: other, note }, fork, notes };
+    return { helper: { provider: other, note }, fork, notes, ...helpers };
   }
 }

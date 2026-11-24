@@ -12,19 +12,14 @@ test("an agent's helper model saves, and changing only that still asks before di
     await page.goto(`/#/room/${room.id}`);
     // A room is a group chat now: an agent is changed from the chat's settings.
     const dialog = await openGroupAgent(page, "builder");
-    await dialog.getByText("Advanced: name, model, effort, instructions", { exact: true }).click();
     const helpers = dialog.getByRole("combobox", { name: "Helper agents use", exact: true });
     // The agent's own model isn't offered again: "the same model" already means it.
     await expect(helpers.locator("option")).toHaveText(["The same model as this agent", "Small model"]);
-    await helpers.selectOption("codex-small");
-    await noHorizontalOverflow(page);
-    await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
-    await expect(dialog.getByRole("alert")).toContainText("Discard changes?");
-    await dialog.getByRole("button", { name: "Keep editing", exact: true }).click();
-    await expect(helpers).toHaveValue("codex-small");
+    // Saved as it's picked: there's nothing to discard or to save.
     const saved = page.waitForRequest((req) => req.url().endsWith(`/api/members/${member.id}`) && req.method() === "PATCH");
-    await dialog.getByRole("button", { name: "Save", exact: true }).click();
+    await helpers.selectOption("codex-small");
     expect((await saved).postDataJSON().config.helperModel).toBe("codex-small");
-    await expect(dialog).toHaveCount(0);
+    await expect(helpers).toHaveValue("codex-small");
+    await noHorizontalOverflow(page);
   } finally { await request.delete(`http://127.0.0.1:8451/api/rooms/${room.id}`, { headers }); }
 });

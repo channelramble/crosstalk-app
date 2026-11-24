@@ -163,7 +163,7 @@ pub fn open_log_file(app: AppHandle) -> Result<()> {
     match s.hub.setup().log_file.filter(|f| f.exists()) {
         Some(f) if cfg!(target_os = "macos") => open_with("/usr/bin/open", &["-a", "Console", &f.display().to_string()]),
         Some(f) => open_with("xdg-open", &[&f.display().to_string()]),
-        None => Err(Problem::new(format!("The hub's log is in the journal: journalctl --user -u {}", s.hub.place.unit), None)),
+        None => Err(Problem::new(format!("Crosstalk's log is in the journal: journalctl --user -u {}", s.hub.place.unit), None)),
     }
 }
 

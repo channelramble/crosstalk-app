@@ -112,7 +112,7 @@ export function useAskCompose(roomId: string, enabled: boolean, member: Member |
     const list = await Promise.race([fetchList(), slow]);
     clearTimeout(timer);
     if (!list) {
-      setFailure((was) => was ?? "The hub is taking too long to answer.");
+      setFailure((was) => was ?? "The machine is taking too long to answer.");
       return null;
     }
     return list.filter((c) => !isOwnAgent(c.target, own));

@@ -142,6 +142,9 @@ function transcriptHead(path: string, mtime: number, size: number): TranscriptHe
 
 /** Claude Code session ids open in some other process right now (the desktop app keeps one per open session). */
 export function claudeSessionsInUse(): Set<string> {
+  // Listing every process stops the hub for the moment it takes, and each idle agent asks once a minute: those that
+  // ask within a few seconds of each other share one look.
+  if (inUseSeen && Date.now() - inUseSeen.at < IN_USE_FRESH_MS) return new Set(inUseSeen.ids);
   const out = new Set<string>();
   try {
     const ps = Bun.spawnSync(["ps", "-axo", "pid=,ppid=,command="], { stdout: "pipe", stderr: "ignore" });
@@ -153,8 +156,11 @@ export function claudeSessionsInUse(): Set<string> {
   } catch (e) {
     log.debug(`ps failed: ${e}`);
   }
-  return out;
+  inUseSeen = { at: Date.now(), ids: out };
+  return new Set(out);
 }
+const IN_USE_FRESH_MS = 3000;
+let inUseSeen: { at: number; ids: Set<string> } | null = null;
 
 /** Path of a Claude Code session's transcript, or null if it isn't on this machine. */
 export function claudeTranscriptPath(sessionId: string, projectsDir = claudeProjectsDir()): string | null {

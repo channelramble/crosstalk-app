@@ -57,7 +57,7 @@ test("checking a service: which addresses it has, and how Crosstalk can run it, 
   const chatOnly = cases[2].f;
   expect((await app.services.test({ baseUrl: chatOnly.url, provider: "claude" })).problems).toEqual(["Claude Code can't use this server, but Codex can. Add it under Codex instead."]);
   expect((await app.services.test({ baseUrl: chatOnly.url, provider: "codex" })).problems).toEqual([]);
-  await expect(app.services.test({ baseUrl: "" })).rejects.toThrow("Enter the model server's address");
+  await expect(app.services.test({ baseUrl: "" })).rejects.toThrow("Enter the address your model answers at");
 });
 
 test("checking a server tells what it is and reads each model's context where it says", async () => {
@@ -106,7 +106,7 @@ test("keys: a missing or refused key is said plainly, an account's saved key is 
   expect(await app.services.test({ baseUrl: "", accountId: account.id })).toMatchObject({ authOk: true, server: "llama.cpp" });
   expect(await app.services.test({ baseUrl: keyed.url, accountId: account.id, provider: "codex" })).toMatchObject({ authOk: true });
   expect((await app.services.test({ baseUrl: keyed.url, accountId: account.id, apiKey: "sk-typed-wrong" })).authOk).toBe(false); // a typed key wins
-  await expect(app.services.test({ baseUrl: keyed.url, accountId: "nothing" })).rejects.toThrow("No such custom model");
+  await expect(app.services.test({ baseUrl: keyed.url, accountId: "nothing" })).rejects.toThrow("That account isn't here any more");
   // The saved key goes only to the account's own server: an address somewhere else gets none.
   const elsewhere = keep(fakeService());
   await app.services.test({ baseUrl: elsewhere.url, accountId: account.id });

@@ -44,7 +44,7 @@ const EMIT_EVERY_MS = 5000;
 
 /** One reply's (or one ask's) usage and cost, as the ledger keeps it. `costUsd` null = no price known. */
 export interface SpendEntry {
-  source: "turn" | "ask";
+  source: "turn" | "ask" | "helper";
   provider: Provider;
   account: string;
   roomId: string | null;
@@ -379,7 +379,7 @@ export class Spend {
     if (!PROVIDER_INFO[provider]) throw new HttpError(404, "No such agent");
     const info = this.info(provider, account);
     if (!info.known) throw new HttpError(404, "No such account");
-    if (info.kind === "signin") throw new HttpError(400, "A limit works for API keys and online services. A plan sign-in isn't billed for each reply, so there's nothing to cap.");
+    if (info.kind === "signin") throw new HttpError(400, "A limit works for API keys and online services. An account on a plan isn't billed for each reply, so there's nothing to cap.");
     if (info.flat) throw new HttpError(400, `${info.label}'s key is on Featherless's Chat plan: one flat fee for the month, so there's nothing for a limit to count. That plan doesn't allow agents. On its Developer plan, paid per token, a limit counts each reply.`);
     const limit = input?.limitUsd;
     if (limit === undefined) throw new HttpError(400, "Say the limit, like { limitUsd: 100 }, or { limitUsd: null } to remove it.");

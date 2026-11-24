@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
-import type { Member, Turn } from "@crosstalk/shared";
-import { answersLine, groupMatches, groupNames, groupState, notAnswered, notAnsweredLine, queueLine, readersOf, retriedTurns, sendLabel, sendName, suggestHandles, whoAnswers, workQueue } from "./groupChat";
+import type { AgentAccount, Member, Turn } from "@crosstalk/shared";
+import { ANSWER_OPTIONS, answersLine, groupAgentOptions, hopsOf, leftOutLine, moreLine, roundsOf, groupMatches, groupNames, groupState, notAnswered, notAnsweredLine, queueLine, readersOf, retriedTurns, sendLabel, sendName, suggestHandles, whoAnswers, workQueue } from "./groupChat";
 
 const member = (handle: string, provider: Member["provider"], position: number, readSeq = 0): Member => ({ id: `mb_${handle}`, roomId: "r", handle, provider, model: null, role: "", permissionMode: "ask", status: "idle", statusDetail: null, config: {}, createdAt: position, position, readSeq });
 const claude = member("claude", "claude", 0);
@@ -27,8 +27,8 @@ test("an @mention means only who it names answers, in the order written; @all an
 test("the chip row says who answers and in what order; the send button names them when the draft does", () => {
   expect(answersLine(whoAnswers(lead(null), team, "hi"))).toBe("@claude answers. Type @ to pick who answers.");
   expect(answersLine(whoAnswers(lead(null, "roundrobin"), team, "hi"))).toBe("Everyone answers, in turn: @claude, then @codex, then @sonnet.");
-  expect(answersLine(whoAnswers(lead(null, "review"), team, "hi"))).toBe("@claude builds it, then @codex checks the work.");
-  expect(answersLine(whoAnswers(lead(null), team, "@codex @sonnet look"))).toBe("Only @codex and @sonnet will answer. The others read it on their next turn.");
+  expect(answersLine(whoAnswers(lead(null, "review"), team, "hi"))).toBe("@claude builds it, then @codex reviews it.");
+  expect(answersLine(whoAnswers(lead(null), team, "@codex @sonnet look"))).toBe("Only @codex and @sonnet will answer. The others read it when they next reply.");
   expect(answersLine(whoAnswers(lead(null), team, "@all look"))).toBe("Everyone answers, in turn: @claude, then @codex, then @sonnet.");
   expect(answersLine(whoAnswers(lead(null), [], "hi"))).toBe("No agents in this chat yet. Add one in the chat's settings.");
 
@@ -79,7 +79,7 @@ test("who has read a message, and who still has to answer your newest one", () =
   expect(notAnswered(lead(null), [{ ...read[0], readSeq: undefined }], { seq: 11, text: "go", mentions: [] }, false)).toEqual([]);
 });
 
-test("Answer now is for whoever hasn't answered: another agent's reply after your message doesn't count, theirs does", () => {
+test("Not answered, with Try again, is for whoever hasn't answered: another agent's reply after your message doesn't count, theirs does", () => {
   const read = [member("claude", "claude", 0, 12), member("codex", "codex", 1, 9)];
   const go = { seq: 11, text: "go", mentions: [] };
   // Everyone in turn: Claude Code answered, then Stop everything stopped Codex's turn before it started.
@@ -125,4 +125,62 @@ test("a group chat is as busy as its busiest agent", () => {
 test("a new group chat's agents get the @names the hub will give them", () => {
   expect(suggestHandles([{ provider: "claude", accountLabel: null, given: "" }, { provider: "codex", accountLabel: null, given: "" }, { provider: "claude", accountLabel: null, given: "" }])).toEqual(["claude", "codex", "claude-2"]);
   expect(suggestHandles([{ provider: "codex", accountLabel: "Team Work", given: "" }, { provider: "claude", accountLabel: null, given: "Second Opinion" }, { provider: "claude", accountLabel: null, given: "everyone" }])).toEqual(["team-work", "second-opinion", "everyone-agent"]);
+});
+
+const account = (provider: AgentAccount["provider"], id: string, label: string, more: Partial<AgentAccount> = {}): AgentAccount => ({ provider, id, label, kind: "signin", workspaceId: null, endpoint: null, signedIn: true, account: null, plan: null, authMethod: null, error: null, checkedAt: 0, ...more });
+const service = (provider: AgentAccount["provider"], id: string, label: string, baseUrl: string, models: string[]): AgentAccount => account(provider, id, label, { kind: "endpoint", endpoint: { baseUrl, models, contextWindow: null, hasKey: true } });
+
+test("Add an agent lists every account that can answer in a group chat, and says which can't right now", () => {
+  const both = { claude: { installed: true, signedIn: true }, codex: { installed: true, signedIn: true } };
+  const { options, left } = groupAgentOptions({
+    providers: both,
+    accounts: [
+      account("claude", "default", "Main", { account: "me@example.com" }),
+      account("claude", "k1", "Work key", { kind: "apikey" }),
+      account("codex", "default", "Main"),
+      account("codex", "second", "Team", { account: "team@example.com", signedIn: false }),
+      service("codex", "ds", "DeepSeek", "https://api.deepseek.com", ["deepseek-chat", "deepseek-reasoner"]),
+      service("claude", "local", "llama.cpp", "http://127.0.0.1:8080", ["qwen3"]),
+      service("opencode", "rf", "Refuseless", "https://api.refuseless.com", ["m"]),
+      service("builtin", "ng", "NanoGPT", "https://nano-gpt.com/api", ["m"]),
+    ],
+  });
+  expect(options.map((o) => [o.id, o.title, o.help, o.why])).toEqual([
+    ["claude:default", "Claude Code", "Your plan · me@example.com", null],
+    ["claude:k1", "Claude Code · Work key", "API key, billed per use", null],
+    ["codex:default", "Codex", "Your plan", null],
+    ["codex:second", "Codex · Team", "Another plan · team@example.com", "Not signed in"],
+    // Your own models and services after the agents' own accounts: this machine's first, then the online ones.
+    ["claude:local", "llama.cpp", "qwen3 · on this machine · with Claude Code", null],
+    ["codex:ds", "DeepSeek", "deepseek-chat · api.deepseek.com · with Codex", null],
+  ]);
+  expect(options.find((o) => o.id === "codex:ds")).toMatchObject({ provider: "codex", account: "ds", model: "deepseek-chat", where: "web" });
+  // The ones only Crosstalk's own agent or OpenCode run can't join, and one quiet line says so.
+  expect(left).toEqual(["NanoGPT", "Refuseless"]);
+  expect(leftOutLine(left)).toBe("NanoGPT and Refuseless can't join a group chat: their agents work in a chat of their own. To use one here, add it for Claude Code or Codex in Settings → Accounts.");
+  expect(leftOutLine(["NanoGPT"])).toBe("NanoGPT can't join a group chat: its agent works in a chat of its own. To use it here, add it for Claude Code or Codex in Settings → Accounts.");
+  expect(leftOutLine([])).toBeNull();
+});
+
+test("an agent that isn't installed or signed in keeps its own row, saying why, and none of its accounts", () => {
+  const { options } = groupAgentOptions({
+    providers: { claude: { installed: true, signedIn: false }, codex: { installed: false, signedIn: null } },
+    accounts: [service("claude", "local", "llama.cpp", "http://127.0.0.1:8080", ["qwen3"]), service("codex", "ds", "DeepSeek", "https://api.deepseek.com", ["deepseek-chat"]), service("claude", "empty", "Empty", "http://127.0.0.1:9090", [])],
+    machine: "the Mac mini",
+  });
+  expect(options.map((o) => [o.title, o.why ?? o.help])).toEqual([
+    ["Claude Code", "Not signed in"],
+    ["Codex", "Not installed"],
+    ["Empty", "No model yet"],
+    ["llama.cpp", "qwen3 · on the Mac mini · with Claude Code"],
+  ]);
+});
+
+test("the line beside More says what is behind it", () => {
+  expect(moreLine({ lead: "claude", answers: "lead", rounds: 3, parallel: false })).toBe("@claude leads");
+  expect(moreLine({ lead: "codex", answers: "review", rounds: 1, parallel: false })).toBe("@codex leads · up to 1 review round");
+  expect(moreLine({ lead: "codex", answers: "review", rounds: 3, parallel: true })).toBe("@codex leads · up to 3 review rounds · may work at the same time");
+  expect(moreLine({ lead: "a", answers: "turns", rounds: 3, parallel: true })).toBe("@a leads · may work at the same time");
+  expect([roundsOf(5), roundsOf(1), roundsOf(0), hopsOf(3)]).toEqual([3, 1, 1, 5]);
+  expect(ANSWER_OPTIONS.map((o) => o.label)).toEqual(["One leads, the others help when asked", "Everyone answers in turn", "One builds, another reviews"]);
 });

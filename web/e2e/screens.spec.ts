@@ -1,7 +1,7 @@
 import type { APIRequestContext, Page, WebSocketRoute } from "@playwright/test";
 import type { Member, Message, Room } from "@crosstalk/shared";
 import { join } from "node:path";
-import { test, expect, noHorizontalOverflow, settingsTab } from "./fixtures";
+import { test, expect, noHorizontalOverflow, settingsTab, chatSettingsAll } from "./fixtures";
 import { otherMachine, pong } from "./otherMachine";
 
 const HUB = "http://127.0.0.1:8451";
@@ -10,26 +10,28 @@ const shot = (name: string) => (process.env.CT_SHOTS ? { path: join(process.env.
 const phone = (page: Page) => page.setViewportSize({ width: 390, height: 844 });
 
 test("every screen renders without crashes or horizontal overflow", async ({ page }) => {
-  for (const [route, title] of [["settings", "Settings"], ["setup", "Settings"], ["usage", "Usage"], ["devices", "Settings"], ["", "Crosstalk"], ["terminal", "Terminal"]]) {
+  for (const [route, title] of [["settings", "Settings"], ["setup", "Machines"], ["usage", "Usage & costs"], ["devices", "This device"], ["", "Crosstalk"], ["terminal", "Terminal"]]) {
     await page.goto(`/#/${route}`);
     await expect(page.locator(".topbar h1")).toHaveText(title);
-    // 0.5.1: Settings is in tabs. Each one draws without crashing or overflowing sideways, and everything that was on
-    // the one long page is still there: AI services with its Add button, Teamwork, Local models, Costs.
+    // Settings is a list of pages. Each one draws without crashing or overflowing sideways, and everything that was on
+    // the one long page is still there: the accounts with their Add button, Teamwork, Local models, Costs.
     if (route === "settings") {
       for (const [tab, heading] of [
-        ["Agents", "Teamwork"],
-        ["Models", "Local models"],
-        ["Machines", "Machines"],
-        ["Devices", "Display"],
-        ["Usage", "Costs"],
+        ["New chats", "Templates"],
+        ["Your own models", "Local models"],
+        ["Machines", "Storage"],
+        ["This device", "Text size"],
+        ["Usage & costs", "Costs"],
       ]) {
         await settingsTab(page, tab);
         await expect(page.getByRole("heading", { name: heading, exact: true }).first()).toBeVisible();
         await noHorizontalOverflow(page);
       }
-      await settingsTab(page, "Agents");
-      await expect(page.getByRole("heading", { name: "AI services", exact: true })).toBeVisible();
-      await expect(page.getByRole("button", { name: "Add an AI service", exact: true })).toBeVisible();
+      await settingsTab(page, "Agents together");
+      await expect(page.getByRole("region", { name: "Let agents ask another agent a quick question", exact: true })).toBeVisible();
+      await noHorizontalOverflow(page);
+      await settingsTab(page, "Accounts");
+      await expect(page.getByRole("button", { name: "Add an account", exact: true })).toBeVisible();
     }
     await noHorizontalOverflow(page);
   }
@@ -170,8 +172,8 @@ test("a link to a missing chat explains instead of going Home", async ({ page })
   await noHorizontalOverflow(page);
   await page.screenshot({ ...shot("chat-not-found.png"), animations: "disabled" });
   await page.getByRole("button", { name: "Machines", exact: true }).click();
-  await expect(page.locator(".topbar h1")).toHaveText("Settings");
-  await expect(page.getByRole("heading", { name: "Machines", exact: true })).toBeVisible();
+  await expect(page.locator(".topbar h1")).toHaveText("Machines");
+  await expect(page.locator("#machines").getByRole("heading", { name: "Machines", exact: true })).toBeVisible();
   await page.goto("/#/room/r_gone_for_good");
   await page.getByRole("button", { name: "Go to chats", exact: true }).click();
   await expect(page.getByRole("heading", { name: "What agent do you want to use?", exact: true })).toBeVisible();
@@ -197,7 +199,7 @@ test("a chat deleted elsewhere says so", async ({ page, request, token }) => {
     // Deleted from this device: no such note, it goes on to the agent's page.
     await page.getByRole("complementary", { name: "Chats", exact: true }).locator(".csb-chat").filter({ hasText: "Deleted here" }).click();
     await expect(page.getByRole("heading", { name: "Deleted here", exact: true })).toBeVisible();
-    await page.getByRole("button", { name: "Chat settings", exact: true }).click();
+    await chatSettingsAll(page);
     await page.getByRole("button", { name: "Delete chat", exact: true }).click();
     await page.getByRole("button", { name: "Continue", exact: true }).click();
     await page.getByRole("button", { name: "Yes, delete", exact: true }).click();
@@ -215,28 +217,32 @@ test("rows show their folder, and Show all and the search survive closing the dr
   const chats = [];
   for (let i = 0; i < 14; i++) chats.push(await newChat(request, token, "codex", `Task ${tag} ${i}`));
   // A second apart, in the order they were made (chats made in the same millisecond would tie). The oldest has a reply
-  // you haven't read: it shows even though eight newer ones come first.
+  // you haven't read: it shows even though twelve newer ones come first. The newest lives in a folder of its own.
   const made = new Map(chats.map((c, i) => [c.room.id, i]));
   await page.route("**/api/state", async (route) => {
     const s = await (await route.fetch()).json();
     s.rooms = s.rooms.map((r: Room) => {
       const i = made.get(r.id);
       if (i === undefined) return r;
-      return { ...r, updatedAt: Date.now() - (14 - i) * 1000, ...(i === 0 ? { lastReplyAt: Date.now(), readAt: Date.now() - 60_000 } : {}) };
+      return { ...r, updatedAt: Date.now() - (14 - i) * 1000, ...(i === 0 ? { lastReplyAt: Date.now(), readAt: Date.now() - 60_000 } : {}), ...(i === 13 ? { cwd: "/Users/me/dev/my-app" } : {}) };
     });
     await route.fulfill({ json: s });
   });
   try {
     await page.goto("/");
     let side = await drawer(page);
-    const rows = side.locator(".csb-group").filter({ has: page.locator(".csb-agent-name", { hasText: "Codex" }) }).locator(".csb-chat");
-    await expect(rows).toHaveCount(9);
-    // Newest first, each with its folder and when.
+    // (All under Recent, or, while a search is on, in its one flat list.)
+    const rows = side.locator(".csb-chat").filter({ hasText: `Task ${tag} ` });
+    await expect(rows).toHaveCount(13);
+    // Newest first, each with its folder and when; a folder that only repeats the chat's name isn't said twice.
     await expect(rows.first().locator(".csb-chat-name")).toHaveText(`Task ${tag} 13`);
-    await expect(rows.first().locator(".csb-chat-sub")).toHaveText(new RegExp(`^task-${tag}-13(-\\d+)? · just now$`));
-    const unread = rows.filter({ hasText: `Task ${tag} 0` });
+    await expect(rows.first().locator(".csb-chat-sub")).toHaveText("my-app · just now");
+    await expect(rows.nth(1).locator(".csb-chat-name")).toHaveText(`Task ${tag} 12`);
+    await expect(rows.nth(1).locator(".csb-chat-sub")).toHaveText("just now");
+    const unread = rows.filter({ has: page.locator(".csb-chat-name", { hasText: new RegExp(`^Task ${tag} 0$`) }) });
     await expect(unread).toHaveClass(/unread/);
-    await expect(unread.getByLabel("New reply", { exact: true })).toBeVisible();
+    await expect(unread.locator(".reply-dot")).toBeVisible();
+    await expect(unread).toHaveAccessibleName(`Task ${tag} 0, new reply, just now`);
     await noHorizontalOverflow(page);
     await page.screenshot({ ...shot("drawer-rows.png"), animations: "disabled" });
     // Show all is a finger's height.
@@ -279,9 +285,9 @@ test("an unreachable machine gets a line with Try now, and the list says Loading
   await page.routeWebSocket("ws://127.0.0.1:5198/api/ws?**", pong);
   await page.goto("/");
   const side = await drawer(page);
-  const codex = side.locator(".csb-group").filter({ has: page.locator(".csb-agent-name", { hasText: "Codex" }) });
+  const codex = side.getByRole("region", { name: "Recent", exact: true });
   // Its chats aren't in yet: they're loading, not "No chats yet".
-  await expect(codex.locator(".csb-empty")).toHaveText("Loading chats…");
+  await expect(side.locator(".csb-scroll > .csb-empty")).toHaveText("Loading chats…");
   await page.screenshot({ ...shot("drawer-loading-chats.png"), animations: "disabled" });
   linux.release();
   await expect(codex.locator(".csb-chat").filter({ hasText: "Fix login" })).toBeVisible();

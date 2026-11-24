@@ -61,7 +61,7 @@ pub fn plan(place: &Place, setup: &Setup, bundle: &Bundle, state: State) -> Plan
     } else if bundle.installer.as_ref().is_none_or(|p| !p.exists()) {
         why_not = Some("This copy of the app has no installer in it.".into());
     } else if !service_only && bundle.hub.as_ref().is_none_or(|p| !p.exists()) {
-        why_not = Some("This copy of the app has no hub in it. Build it with scripts/build-macos.sh, which puts one in.".into());
+        why_not = Some("This copy of the app can't install Crosstalk: it was built without Crosstalk inside. Use the install line from Crosstalk's page instead.".into());
     } else if let Err(e) = place.may_change_service() {
         why_not = Some(e);
     } else if place.fake && setup.port == paths::DEFAULT_PORT {
@@ -71,13 +71,12 @@ pub fn plan(place: &Place, setup: &Setup, bundle: &Bundle, state: State) -> Plan
     let port = setup.port;
     let bin = tilde(place, &place.default_bin());
     let file = tilde(place, &place.service_file());
-    let copy = if service_only { format!("Keeps the hub that's at {bin}.") } else { format!("Copies the hub to {bin}.") };
+    let copy = if service_only { format!("Keeps the Crosstalk that's at {bin}.") } else { format!("Puts Crosstalk at {bin}.") };
     let (steps, choices) = match place.os {
         Os::Mac => (
             vec![
-                format!("{copy} It's signed with your Apple Development identity if you have one, so macOS remembers what it may open."),
-                format!("Adds a background service ({file}) that starts the hub when you log in and brings it back if it stops. It listens on this Mac only (port {port})."),
-                "Checks Xcode, the iOS Simulator, git, Homebrew and npm, and tells you what's missing. It installs none of them.".into(),
+                format!("{copy}"),
+                format!("Runs it in the background ({file}): it starts when you log in and comes back if it stops. It listens on this Mac only (port {port})."),
                 "Makes a one-time code to pair your phone. Your data stays in ~/.crosstalk.".into(),
             ],
             vec![
@@ -103,7 +102,7 @@ pub fn plan(place: &Place, setup: &Setup, bundle: &Bundle, state: State) -> Plan
         Os::Linux => (
             vec![
                 copy,
-                format!("Adds a systemd user service ({file}) that starts the hub when the computer starts and brings it back if it stops. It listens on this computer only (port {port})."),
+                format!("Runs it in the background ({file}): it starts with the computer and comes back if it stops. It listens on this computer only (port {port})."),
                 "Keeps it running when you're logged out (loginctl enable-linger, which may ask for your password).".into(),
                 "Publishes it to your own Tailscale devices over HTTPS (tailscale serve), if Tailscale is installed and connected.".into(),
                 "Makes a one-time code to pair your phone. Your data stays in ~/.crosstalk.".into(),

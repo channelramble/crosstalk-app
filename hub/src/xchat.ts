@@ -12,7 +12,7 @@ import { existsSync, lstatSync, readlinkSync, statSync, realpathSync } from "nod
 import { homedir } from "node:os";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { HOME } from "./config";
-import { DEFAULT_ACCOUNT, PROVIDER_INFO, type Member, type Message, type MessageVia, type PermissionMode, type Provider, type Room } from "@crosstalk/shared";
+import { settingsPath, DEFAULT_ACCOUNT, PROVIDER_INFO, type Member, type Message, type MessageVia, type PermissionMode, type Provider, type Room } from "@crosstalk/shared";
 import type { App } from "./app";
 import { HttpError } from "./engine/engine";
 import { hubCall } from "./machines";
@@ -326,14 +326,14 @@ export class CrossChat {
         .map((x) => x.text.trim());
       return parts.length ? parts.join("\n\n") : null;
     };
-    if (!turn) return { hub, state: "error", stateSince: null, approval: null, reply: null, error: "The turn that read it is gone." };
+    if (!turn) return { hub, state: "error", stateSince: null, approval: null, reply: null, error: "The reply that read it is gone." };
     if (turn.status === "queued") return { hub, state: "queued", stateSince: turn.createdAt, approval: null, reply: null, error: null };
     if (turn.status === "running" || running.some((t) => t.id === turnId)) {
       const a = approvalOf(turnId);
       return { hub, state: a ? "needs approval" : "working", stateSince: a?.createdAt ?? turn.startedAt ?? null, approval: a ? { title: a.title, since: a.createdAt } : null, reply: null, error: null };
     }
     if (turn.status === "done") {
-      // "Send now" handed it to that reply as it ended: the agent's next turn answers it (and is then the one recorded).
+      // It went into that reply as it ended: the agent's next turn answers it (and is then the one recorded).
       if (this.app.engine.answersLater(after)) return { hub, state: "working", stateSince: null, approval: null, reply: null, error: null };
       return { hub, state: "done", stateSince: turn.endedAt ?? null, approval: null, reply: replyText(), error: null };
     }
@@ -396,7 +396,7 @@ export class CrossChat {
         : "On another machine, use an existing shared chat's project folder, or leave folder out for a new workspace.", "folder_scope");
       cwd = f;
     } else if (inside(canonical(HOME), canonical(this.app.config.workspaceRoot))) {
-      throw new HttpError(403, "The workspace folder points into Crosstalk's private data. Ask the user to choose another workspace folder.", "folder_scope");
+      throw new HttpError(403, "That folder points into Crosstalk's private data. Ask the user to choose another folder.", "folder_scope");
     }
     const max: PermissionMode = (["ask", "edits", "auto", "full"] as const).includes(b.maxPermission as PermissionMode) ? (b.maxPermission as PermissionMode) : "ask";
     // Never more than the chat that starts it may do. In a group chat the sender is one of several: the strictest of them.
@@ -414,7 +414,7 @@ export class CrossChat {
     const model = inheritedModel || mainDefaults?.model;
     const effort = inheritedEffort || mainDefaults?.effort;
     if (!model || !effort) throw new HttpError(409,
-      `Choose a model and effort for ${PROVIDER_INFO[provider].name}'s main sign-in in Settings → Defaults on ${clean(this.app.machineName())}, or start this chat yourself. The current chat's model and effort couldn't both be inherited, so no chat was started.`, "model_choice");
+      `Choose a model and effort for ${PROVIDER_INFO[provider].name}'s main account in ${settingsPath("defaults")} on ${clean(this.app.machineName())}, or start this chat yourself. The current chat's model and effort couldn't both be inherited, so no chat was started.`, "model_choice");
     // Helpers come with the model: an inherited model brings the starting chat's helper model (none: they run on the
     // chat's own), and the main sign-in's defaults bring theirs. Never defaults made for another account.
     const inheritedHelper = typeof b.helperModel === "string" && /^[\w.:@/[\]-]{1,100}$/.test(b.helperModel) ? b.helperModel : null;
@@ -471,11 +471,11 @@ export class CrossChat {
       if (err.code === "unreachable" || err.status === 502) return "can't reach it right now";
       if (err.code === "off") return "agents turned off there";
       if (err.code === "not_linked" || err.code === "peer_scope") return "not connected for this yet";
-      if (err.status === 401) return "no longer accepts this machine's sign-in";
+      if (err.status === 401) return "no longer accepts this machine";
       if (err.status === 404) return "needs a Crosstalk update";
       return err.message;
     }
-    if (t.agents && t.agents !== "two-way") return t.agents === "needs-update" ? "needs a Crosstalk update" : t.agents === "signed-out" ? "no longer accepts this machine's sign-in" : "not connected for this yet";
+    if (t.agents && t.agents !== "two-way") return t.agents === "needs-update" ? "needs a Crosstalk update" : t.agents === "signed-out" ? "no longer accepts this machine" : "not connected for this yet";
     return null;
   }
 
@@ -822,9 +822,9 @@ export class CrossChat {
         return `Can't reach ${target.name} right now.`;
       case "not_linked":
       case "peer_scope":
-        return `${target.name} isn't connected for this yet: the user can connect it in Settings → Machines.`;
+        return `${target.name} isn't connected for this yet: the user can connect it in ${settingsPath("machines")}.`;
     }
-    if (err.status === 401) return `${target.name} no longer accepts this machine's sign-in. Ask the user to link it again in Settings → Machines.`;
+    if (err.status === 401) return `${target.name} no longer accepts this machine. Ask the user to link it again in ${settingsPath("machines")}.`;
     if (err.status === 404 && !target.local && err.code === "not_found" && /\/api\/machines\/chats/.test(err.message)) return `${target.name} runs an older Crosstalk without messages between chats. Ask the user to update it.`;
     return `Not sent: ${clean(err.message ?? String(e), 600)}${target.local ? "" : `\n${UNTRUSTED}`}`;
   }
@@ -878,7 +878,7 @@ export class CrossChat {
             }
         }
       }
-      if (!this.app.engine.runningTurns(member.roomId).some((t) => t.id === turnId)) return `Stopped waiting: your turn ended. The reply will be in ${name}.`;
+      if (!this.app.engine.runningTurns(member.roomId).some((t) => t.id === turnId)) return `Stopped waiting: your reply ended. The reply will be in ${name}.`;
       if (Date.now() >= deadline) {
         if (last?.state === "queued") return `${name} is busy with other work, so your message (message_id "${messageId}") waits there. Call wait_for_reply to keep waiting.`;
         return `${agent} is still working on it (${minutes(Date.now() - started)} so far). Call wait_for_reply with message_id "${messageId}" to keep waiting, or finish your reply and tell the user where to look: [${clean(chat.name)} on ${target.name}](#/room/${chat.id}).`;

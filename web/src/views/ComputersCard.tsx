@@ -116,9 +116,9 @@ export function ComputersCard() {
   };
 
   return (
-    <section aria-label="Computers agents can use" aria-busy={loading} style={{ marginTop: 28 }}>
+    <section aria-label="Remote computers" aria-busy={loading}>
       <div className="row wrap tip-line" style={{ marginBottom: 8 }}>
-        <h2 className="section-title" style={{ margin: 0 }}>Computers agents can use</h2>
+        <h2 className="settings-heading" style={{ margin: 0 }}>Remote computers</h2>
         <Tip topic="computers" />
         <button className="btn small primary tip-after" onClick={() => setConnecting(true)}>
           <Plus size={14} /> Connect a computer
@@ -278,7 +278,7 @@ function ConnectDialog({ onClose, onConnected }: { onClose: () => void; onConnec
           ) : (
             <li style={{ marginBottom: 14 }}>
               <div style={{ fontWeight: 600 }}>On the PC, open PowerShell as administrator</div>
-              <div className="help">Start menu → type PowerShell → right-click → Run as administrator. The PC needs Tailscale, signed in to the same tailnet as the hub.</div>
+              <div className="help">Start menu → type PowerShell → right-click → Run as administrator. The PC needs Tailscale, signed in to the same tailnet as this machine.</div>
             </li>
           )}
           <li style={{ marginBottom: 14 }}>

@@ -1,4 +1,4 @@
-import { test, expect, noHorizontalOverflow, openGroupAgent, openGroupSettings } from "./fixtures";
+import { test, expect, noHorizontalOverflow, openGroupAgent, openGroupSettings, effortSteps, modelInForce } from "./fixtures";
 
 const fixedModel = { id: "gemini-3.8-flash-high", label: "Gemini Flash (High)", description: null, efforts: [], defaultEffort: "high", isDefault: true };
 async function mockAgy(page: import("@playwright/test").Page) {
@@ -21,15 +21,15 @@ test("editing a fixed-effort agent clears a stale Max override rather than hidin
     await expect(page.getByRole("heading", { name: room.name, exact: true })).toBeVisible();
     // A room is a group chat now: an agent is changed from the chat's settings.
     const dialog = await openGroupAgent(page, "agytest");
-    await dialog.getByText("Advanced: name, model, effort, instructions", { exact: true }).click();
-    await expect(dialog).toContainText("Effort: High (included in this model)");
-    await expect(dialog.getByRole("combobox", { name: "Effort", exact: true })).toHaveCount(0);
-    await expect(dialog).toContainText("will be cleared when you save");
+    await expect(dialog).toContainText("High (included in this model).");
+    await expect(effortSteps(dialog)).toHaveCount(0);
+    // The stale level is said, with the way to clear it, rather than hidden and kept.
+    await expect(dialog).toContainText("The saved effort “Max” is not one this model takes.");
     await noHorizontalOverflow(page);
     const saved = page.waitForRequest((req) => req.url().endsWith(`/api/members/${member.id}`) && req.method() === "PATCH");
-    await dialog.getByRole("button", { name: "Save", exact: true }).click();
+    await dialog.getByRole("button", { name: "Clear it", exact: true }).click();
     expect((await saved).postDataJSON().config.effort).toBeUndefined();
-    await expect(dialog).toHaveCount(0);
+    await expect(dialog.getByText("is not one this model takes")).toHaveCount(0);
   } finally { await request.delete(`http://127.0.0.1:8451/api/rooms/${room.id}`, { headers }); }
 });
 
@@ -42,11 +42,11 @@ test("Defaults cannot save a hidden stale effort for a fixed-effort model", asyn
     saved = route.request().postDataJSON();
     return route.fulfill({ json: { ...defaults, agent: { codex: saved } } });
   });
-  await page.goto("/#/settings");
+  await page.goto("/#/settings/new-chats");
   const card = page.getByRole("group", { name: "New Codex chat defaults", exact: true });
   await card.locator("summary").click();
-  await expect(card.getByRole("combobox", { name: "Model", exact: true })).toHaveValue("fixed-model");
-  await expect(card.getByRole("combobox", { name: "Effort", exact: true })).toHaveCount(0);
+  await expect(modelInForce(card)).toHaveAttribute("data-value", "fixed-model");
+  await expect(effortSteps(card)).toHaveCount(0);
   await card.getByRole("button", { name: "Save", exact: true }).click();
   await expect.poll(() => saved?.effort).toBeNull();
   await noHorizontalOverflow(page);

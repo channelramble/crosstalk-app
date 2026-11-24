@@ -63,9 +63,12 @@ test("the review list: build output, uploads and big folders, never a project's 
     file(join(t.dir, "outside/secret/data.bin"), 40);
     symlinkSync(join(t.dir, "outside"), join(chat, "linked"));
     t.rooms.push(room("r1", chat), room("r2", chat, 3));
+    // The Trash where a Linux desktop keeps it (a Mac's is ~/.Trash): its size is told too.
+    file(join(t.home, ".local/share/Trash/files/old.bin"), 40);
 
     await t.storage.scan();
     const report = t.storage.report();
+    expect(report.trash).toBeGreaterThan(30 * 1024);
     const names = report.items.map((i) => `${i.kind}:${i.name}`).sort();
     expect(names).toEqual([
       "build:app/dist",
@@ -143,6 +146,9 @@ test("automatic cleanup: old cache entries, everything when space is low, depend
     file(join(derived, "New-def/info.plist"));
     file(join(t.home, ".npm/_cacache/content-v2/x"), 8, 3);
     age(join(t.home, ".npm/_cacache/content-v2"), 3);
+    // pip's downloads where Linux keeps them (a Mac's are under Library/Caches).
+    file(join(t.home, ".cache/pip/http/x"), 8, 3);
+    age(join(t.home, ".cache/pip/http"), 3);
 
     // Dependencies: only in hub-made chat folders unused for two weeks, with the file that reinstalls them beside.
     const idle = join(t.ws, "idle");
@@ -174,6 +180,7 @@ test("automatic cleanup: old cache entries, everything when space is low, depend
     expect(existsSync(join(derived, "Old-abc"))).toBe(false);
     expect(existsSync(join(derived, "New-def"))).toBe(true);
     expect(existsSync(join(t.home, ".npm/_cacache/content-v2"))).toBe(true); // only when space is low
+    expect(existsSync(join(t.home, ".cache/pip/http"))).toBe(true);
     expect(existsSync(join(idle, "web/node_modules"))).toBe(false);
     expect(existsSync(join(idle, "web/package.json"))).toBe(true);
     expect(existsSync(join(idle, "web/dist/app.zip"))).toBe(true);
@@ -192,6 +199,7 @@ test("automatic cleanup: old cache entries, everything when space is low, depend
     file(join(t.home, ".npm/_cacache/index-v5/fresh"));
     await storage.autoClean();
     expect(existsSync(join(t.home, ".npm/_cacache/content-v2"))).toBe(false);
+    expect(existsSync(join(t.home, ".cache/pip/http"))).toBe(false);
     expect(existsSync(join(t.home, ".npm/_cacache/index-v5/fresh"))).toBe(true);
     expect(existsSync(join(derived, "New-def"))).toBe(true);
 

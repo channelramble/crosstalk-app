@@ -52,7 +52,7 @@ test("a picker only where there's something to pick", () => {
   expect(pickableModels(row({ models: [] }))).toBeNull();
   expect(pickableModels(row({ models: undefined }))).toBeNull();
   expect(pickableModels(row({ available: false, why: "Not signed in" }))).toBeNull();
-  expect(pickableModels(row({ fixedModel: "pool" }))).toBeNull();
+  expect(pickableModels(row({ fixedModel: "update" }))).toBeNull();
 });
 
 test("the default pick stands for the model the hub's list marks, whatever the row was on", () => {
@@ -87,8 +87,8 @@ test("the row as it will be asked: the model and effort named, its name on that 
   // What the picker doesn't cover is asked exactly as the hub listed it.
   const old = row({ models: undefined });
   expect(withPick(old, { model: "gpt-chat", effort: "" })).toBe(old);
-  const pool = row({ models: undefined, fixedModel: "pool" });
-  expect(withPick(pool, { model: "", effort: "" })).toBe(pool);
+  const fixed = row({ models: undefined, fixedModel: "update" });
+  expect(withPick(fixed, { model: "", effort: "" })).toBe(fixed);
   expect(withPick(row(), undefined)).toEqual(row());
 });
 
@@ -97,7 +97,7 @@ test("what the hub is asked to keep: the pick as the sheet showed it, null for a
   expect(askMemo(row(), { model: "gpt-5.5-mini", effort: "low" }, true)).toEqual({ provider: "codex", account: "default", model: "gpt-5.5-mini", effort: "low" });
   expect(askMemo(REMOTE, { model: "sonnet", effort: "" }, true)).toEqual({ provider: "claude", account: "default", machine: "h_pc", model: "sonnet", effort: null });
   expect(askMemo(row({ models: undefined }), { model: "", effort: "" }, true)).toBeNull();
-  expect(askMemo(row({ fixedModel: "pool", models: undefined }), { model: "", effort: "" }, true)).toBeNull();
+  expect(askMemo(row({ fixedModel: "update", models: undefined }), { model: "", effort: "" }, true)).toBeNull();
 });
 
 test("a row asked as it opened is kept only when it opened on a kept pick: one on its default because its kept model is missing for now forgets nothing", () => {
@@ -111,12 +111,10 @@ test("a row asked as it opened is kept only when it opened on a kept pick: one o
   expect(askMemo(kept, initialPick(kept), false)).toEqual({ provider: "codex", account: "default", model: "gpt-5.5-mini", effort: "medium" });
 });
 
-test("who a picker is for, and why a row has none, in plain words with where to change it", () => {
+test("who a picker is for, and why a row has none, in plain words with what to do", () => {
   expect(askPickerFor(row())).toBe("Codex");
   expect(askPickerFor(KEY)).toBe("Claude Code (Work)");
   expect(askPickerFor(REMOTE)).toBe("Claude Code on the PC");
-  expect(fixedModelLine(row({ fixedModel: "pool" }))).toBe("The model pool runs one model at a time. To ask another, change it in Settings → Model pool.");
-  expect(fixedModelLine({ fixedModel: "pool", machine: PC })).toBe("The model pool runs one model at a time. To ask another, change it in Settings → Model pool on the PC.");
   expect(fixedModelLine({ fixedModel: "update", machine: PC })).toBe("To pick its model from here, update Crosstalk on the PC. Until then it answers with the model the PC uses.");
   expect(fixedModelLine(row())).toBeNull();
 });

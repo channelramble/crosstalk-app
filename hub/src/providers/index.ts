@@ -1,8 +1,9 @@
+import { ownNodeBin } from "./node";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { DEFAULT_ACCOUNT, MULTI_ACCOUNT_PROVIDERS, PROVIDER_INFO, isServiceOnlyAgent, noSignInWords, type AgentAccount, type EndpointInfo, type EndpointProbe, type LoginFlow, type ModelCatalog, type ModelOption, type Provider, type Protocol, type ProviderStatus } from "@crosstalk/shared";
+import { settingsPath, DEFAULT_ACCOUNT, MULTI_ACCOUNT_PROVIDERS, PROVIDER_INFO, isServiceOnlyAgent, noSignInWords, type AgentAccount, type EndpointInfo, type EndpointProbe, type LoginFlow, type ModelCatalog, type ModelOption, type Provider, type Protocol, type ProviderStatus } from "@crosstalk/shared";
 import type { App } from "../app";
 import { endpointOutputLimit } from "../agents/driver";
 import { HOME, HUB_VERSION, readSecrets, writeSecret } from "../config";
@@ -85,9 +86,23 @@ function defined<T extends object>(o: T | null | undefined): Partial<T> {
   return o ? (Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined)) as Partial<T>) : {};
 }
 
-/** How to get a missing tool with the hub's package manager, for hints (Homebrew on macOS, apt elsewhere). */
-export function installHint(brew: string, apt: string): string {
-  return process.platform === "darwin" ? `brew install ${brew}` : `sudo apt install -y ${apt}`;
+/** The package managers a Linux machine may have, with how each installs a package. The first one found is used. */
+const LINUX_INSTALLS: [string, string][] = [
+  ["apt-get", "sudo apt install -y"],
+  ["dnf", "sudo dnf install -y"],
+  ["pacman", "sudo pacman -S --noconfirm"],
+  ["zypper", "sudo zypper install -y"],
+  ["apk", "sudo apk add"],
+];
+
+/**
+ * How a missing tool is installed with the machine's package manager, as a hint to show: Homebrew on macOS, and on
+ * Linux whichever of apt, dnf, pacman, zypper or apk the machine has (apt when none is found). `has` is for tests.
+ */
+export function installHint(brew: string, pkg: string, platform: string = process.platform, has: (bin: string) => boolean = (bin) => !!Bun.which(bin)): string {
+  if (platform === "darwin") return `brew install ${brew}`;
+  const found = LINUX_INSTALLS.find(([bin]) => has(bin)) ?? LINUX_INSTALLS[0];
+  return `${found[1]} ${pkg}`;
 }
 
 const modules = new Map<Provider, ProviderModule>();
@@ -137,7 +152,7 @@ interface SavedAccount {
 /** "localhost:8080/v1/" → "http://localhost:8080": the server's root, which each agent adds its own path to. */
 export function endpointAddress(input: string): string {
   let raw = String(input ?? "").trim();
-  if (!raw) throw new HttpError(400, "Enter the model server's address");
+  if (!raw) throw new HttpError(400, "Enter the address your model answers at");
   if (!/^https?:\/\//i.test(raw)) raw = `http://${raw}`;
   let u: URL;
   try {
@@ -322,10 +337,10 @@ export class Providers {
     // A catalogue service's model list is every model on Hugging Face (Featherless: 22,406 of them, about 7 MB). It is
     // never read here, and its first 50 names would be no use as this account's models anyway: the model is found by
     // name in the Add sheet, which is where this says to go (hub/src/featherless.ts, GET /api/services/catalog).
-    if (this.app.services.catalog.serves(baseUrl)) throw new HttpError(400, "Featherless serves tens of thousands of models, too many to list here. Add it in Settings → AI services, where you can search them by name.");
+    if (this.app.services.catalog.serves(baseUrl)) throw new HttpError(400, `Featherless serves tens of thousands of models, too many to list here. Add it in ${settingsPath("ai-services")}, where you can search them by name.`);
     const found = await readServer(baseUrl, cleanKey(apiKey), { timeoutMs: this.app.services.timeoutMs });
     if (found.status === 401 || found.status === 403) throw new HttpError(400, "The server wants an API key (or a different one)");
-    if (!found.listed) throw new HttpError(502, `No model server answered at ${baseUrl} (${found.failed === "timeout" ? "no answer in time" : found.failed ? "couldn't connect" : `/v1/models: ${found.status}`}). Is it running?`);
+    if (!found.listed) throw new HttpError(502, `No model answered at ${baseUrl} (${found.failed === "timeout" ? "no answer in time" : found.failed ? "couldn't connect" : `/v1/models: ${found.status}`}). Is it running?`);
     const sized = found.models.find((m) => m.loaded && m.contextWindow) ?? found.models.find((m) => m.contextWindow);
     return { baseUrl, models: found.models.map((m) => m.id).slice(0, 50), contextWindow: sized?.contextWindow ?? null, server: found.kind ? SERVER_NAMES[found.kind] : null };
   }
@@ -333,7 +348,7 @@ export class Providers {
   /** Adds (or, given `id`, changes) an account that runs the agent on a model server of your own. */
   setEndpointAccount(p: Provider, input: { id?: string; label?: string; baseUrl: string; apiKey?: string | null; models: unknown; contextWindow?: unknown; protocol?: unknown; chatPath?: unknown; contexts?: unknown; extra?: unknown }): AgentAccount {
     // Crosstalk's own agent and OpenCode run only on AI services: they are their only accounts.
-    if (!API_KEY_PROVIDERS.includes(p) && !isServiceOnlyAgent(p)) throw new HttpError(400, `${PROVIDER_INFO[p]?.name ?? p} can't use a custom model here`);
+    if (!API_KEY_PROVIDERS.includes(p) && !isServiceOnlyAgent(p)) throw new HttpError(400, `${PROVIDER_INFO[p]?.name ?? p} can't use your own models here`);
     const baseUrl = endpointAddress(input.baseUrl);
     // protocol, chatPath, contexts and extra: not given keeps what the account has (an older app doesn't know them), null takes them away.
     const changed = endpointFields(p, input);
@@ -350,7 +365,7 @@ export class Providers {
     const fields = { baseUrl, models, ...(ctxRaw ? { contextWindow: ctxRaw } : {}) };
     if (id) {
       const cur = saved.find((a) => a.provider === p && a.id === id && a.kind === "endpoint");
-      if (!cur) throw new HttpError(404, "No such custom model");
+      if (!cur) throw new HttpError(404, "That account isn't here any more");
       const next: SavedAccount = { provider: p, id, label: cur.label, kind: "endpoint", ...fields, ...mergeEndpointFields(cur, changed) };
       this.saveAccounts(saved.map((a) => (a === cur ? next : a)));
     } else {
@@ -374,7 +389,7 @@ export class Providers {
   private endpointStatus(p: Provider, id: string): ProviderStatus {
     const a = this.saved().find((x) => x.provider === p && x.id === id);
     const bin = this.which(p);
-    return { ...this.blank(p), installed: !!bin, binPath: bin, version: this.statuses.get(p)?.version ?? null, signedIn: true, account: a?.baseUrl ?? null, plan: "Custom model", authMethod: "endpoint", checkedAt: Date.now() };
+    return { ...this.blank(p), installed: !!bin, binPath: bin, version: this.statuses.get(p)?.version ?? null, signedIn: true, account: a?.baseUrl ?? null, plan: "Your own model", authMethod: "endpoint", checkedAt: Date.now() };
   }
 
   private baseEnv(): Record<string, string> {
@@ -384,7 +399,8 @@ export class Providers {
       env[k] = v;
     }
     const home = homedir();
-    const extra = [join(home, ".local/bin"), join(home, ".claude/local"), join(home, ".bun/bin"), join(home, ".npm-global/bin"), join(home, ".muse/bin"), "/opt/homebrew/bin", "/usr/local/bin"];
+    // Last: Crosstalk's own Node.js (node.ts), for a machine that has none. One the machine has is found before it.
+    const extra = [join(home, ".local/bin"), join(home, ".claude/local"), join(home, ".bun/bin"), join(home, ".npm-global/bin"), join(home, ".muse/bin"), "/opt/homebrew/bin", "/usr/local/bin", ownNodeBin()];
     const parts = (env.PATH ?? "").split(":").filter(Boolean);
     for (const p of extra) if (!parts.includes(p)) parts.push(p);
     env.PATH = parts.join(":");
@@ -570,7 +586,7 @@ export class Providers {
 
   /** Removes an extra account and its sign-in folder. Refused for the agent's own sign-in or while an agent uses it. */
   removeAccount(p: Provider, id: string) {
-    if (id === DEFAULT_ACCOUNT) throw new HttpError(409, "This is the agent's own sign-in. Sign out instead of removing it.");
+    if (id === DEFAULT_ACCOUNT) throw new HttpError(409, "This is the agent's main account. Sign out instead of removing it.");
     if (!this.hasAccount(p, id)) throw new HttpError(404, "No such account");
     const users = this.app.store.listRooms().flatMap((r) => this.app.store.listMembers(r.id).filter((m) => m.provider === p && m.config?.account === id).map((m) => `@${m.handle} in ${r.name}`));
     if (users.length) throw new HttpError(409, `Switch these agents to another account first: ${users.join(", ")}`);
@@ -598,9 +614,9 @@ export class Providers {
    */
   switchServiceAgent(from: Provider, id: string, to: unknown): AgentAccount {
     const ep = this.endpointOf(from, id);
-    if (!ep) throw new HttpError(404, "No such AI service");
+    if (!ep) throw new HttpError(404, "That account isn't here any more");
     if (!isServiceOnlyAgent(from) || !isServiceOnlyAgent(to) || from === to) throw new HttpError(400, "A service can only be moved between Crosstalk's agent and OpenCode.");
-    if (to === "opencode" && !this.which(to)) throw new HttpError(400, "OpenCode isn't installed on this machine yet. Install it under Settings → AI services first.");
+    if (to === "opencode" && !this.which(to)) throw new HttpError(400, `OpenCode isn't installed on this machine yet. Install it under ${settingsPath("agent-opencode")} first.`);
     const there = this.saved().find((a) => a.provider === to && a.kind === "endpoint" && a.baseUrl === ep.baseUrl);
     const account = there
       ? this.account(to, there.id)
@@ -694,7 +710,7 @@ export class Providers {
 
   bin(p: Provider): string {
     const b = this.which(p);
-    if (!b) throw new Error(`${p} isn't installed on the hub`);
+    if (!b) throw new Error(`${p} isn't installed on the machine`);
     return b;
   }
 

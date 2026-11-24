@@ -753,7 +753,7 @@ test(
     expect((await b.api("DELETE", `/api/devices/${linkOn(a, b)!.deviceId}`)).status).toBe(200);
     expect((await a.api("POST", `/api/machines/${b.id}/connect`)).status).toBe(200);
     await until(() => linkOn(a, b)?.agents === "signed-out", "A's link to show signed out");
-    expect(linkOn(a, b)).toMatchObject({ retryAt: null, error: expect.stringContaining("no longer accepts this machine's sign-in") });
+    expect(linkOn(a, b)).toMatchObject({ retryAt: null, error: expect.stringContaining("no longer accepts this machine") });
     expireRetries(a);
     await a.app.machines.retryTick();
     await a.app.machines.complete();
@@ -832,7 +832,7 @@ test(
     expect((await a.api("DELETE", `/api/machines/${b.id}`)).status).toBe(200);
     b.start();
     // B's agents are told A no longer accepts B's sign-in...
-    expect(await b.app.xchat.toolList(member, {})).toContain("Mac mini (no longer accepts this machine's sign-in)");
+    expect(await b.app.xchat.toolList(member, {})).toContain("Mac mini (no longer accepts this machine)");
     // ...but Settings → Machines on B still says "Agents: two-way" (spec 1.10 and test 8: B shows signed-out).
     expect((await b.api<MachineInfo[]>("GET", "/api/machines")).data).toEqual([expect.objectContaining({ id: a.id, agents: "signed-out" })]);
   },

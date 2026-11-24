@@ -11,7 +11,7 @@
 // read which plan the key is on (GET /v1/plan, hub/src/featherless.ts), on its row in Settings → AI services, and by the
 // hub in a chat run on a key it read as on the Chat plan — never to someone on the Developer plan, whom the terms allow.
 
-import { planLabel, type ServicePlan } from "@crosstalk/shared";
+import { settingsPath, planLabel, type ServicePlan } from "@crosstalk/shared";
 import type { Site } from "./presets";
 
 /** Featherless's plans and what each allows: linked wherever the app says what they allow. */
@@ -31,7 +31,7 @@ export const FEATHERLESS_HELP = "Any open model from Hugging Face, uncensored on
 
 /** What everyone adding Featherless reads before a key is checked: the plan agents need, and the one they can't use. */
 export const FEATHERLESS_TERMS =
-  "Agents need Featherless's Developer plan. It's paid per token from monthly credits, so set a spending limit in Settings → Costs. The $25 Chat plan doesn't allow agents or API use: Featherless can cancel an account used that way without a refund.";
+  `Agents need Featherless's Developer plan. It's paid per token from monthly credits, so set a spending limit in ${settingsPath("costs")}. The $25 Chat plan doesn't allow agents or API use: Featherless can cancel an account used that way without a refund.`;
 
 /** Said on an account's row when which plan its key is on isn't known (the hub couldn't ask, or is older). */
 export const FEATHERLESS_REMINDER = "Agents need Featherless's Developer plan, paid per token. Its Chat plan doesn't allow them.";
@@ -52,6 +52,6 @@ export function planWords(plan: ServicePlan): { tone: PlanTone; text: string } {
     };
   }
   // Featherless's own list calls the Developer plan "Request Pricing": it's said as its pricing page says it (planLabel).
-  if (plan.kind === "credits") return { tone: "ok", text: `This key is on Featherless's ${planLabel(plan)} plan, which allows agents. Each reply is paid per token from your credits, so set a spending limit in Settings → Costs.` };
+  if (plan.kind === "credits") return { tone: "ok", text: `This key is on Featherless's ${planLabel(plan)} plan, which allows agents. Each reply is paid per token from your credits, so set a spending limit in ${settingsPath("costs")}.` };
   return { tone: "warn", text: `Featherless says this key is on “${plan.name}”, a plan Crosstalk doesn't know. Check that it allows agents: the Chat plan doesn't, the Developer plan does (paid per token).` };
 }

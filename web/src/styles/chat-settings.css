@@ -1,0 +1,463 @@
+/*
+ * A chat's settings: the sheet (views/ChatSettingsSheet.tsx), the building blocks its choices are drawn with
+ * (views/AgentChoices.tsx, also in New chat's More options and Settings → New chats), and the summary row under the
+ * message box (views/ChatControls.tsx). Colours are the theme's variables; nothing here moves (motion.css owns that).
+ */
+
+/* ------------------------------------------------------------ the row under the message box */
+
+.cs-row {
+  gap: 4px;
+}
+.cs-chip {
+  min-width: 0;
+  gap: 5px;
+}
+.cs-chip .ellipsis {
+  min-width: 0;
+}
+.cs-row .ctl-model {
+  flex-shrink: 1;
+}
+.cs-row .ctl-model .ellipsis {
+  max-width: none;
+}
+.cs-row .ctl-may {
+  flex-shrink: 0;
+  max-width: 46%;
+}
+.cs-others {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+/* The chips keep the row's look and its finger-sized tap area (styles.css grows it to 44 px upward and downward); a chip
+   that is only an icon is still wide enough for a thumb. */
+.cs-row .ctl-may {
+  min-width: 44px;
+  justify-content: center;
+}
+
+/* ------------------------------------------------------------ the sheet: a row per section */
+
+.cs-sheet {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-bottom: 12px;
+}
+.cs-fold {
+  border: 1px solid var(--sep-strong);
+  border-radius: 14px;
+  background: var(--surface);
+  min-width: 0;
+  /* Opened from a chip, the section lands under the sheet's title, not behind it. */
+  scroll-margin-top: 4px;
+}
+.cs-fold.open {
+  background: var(--surface-2);
+}
+.cs-fold-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 60px;
+  padding: 10px 14px;
+  border: 0;
+  border-radius: 14px;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.cs-fold-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: var(--text-2);
+}
+.cs-fold-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+.cs-fold-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 650;
+}
+.cs-fold-sum {
+  font-size: 13px;
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cs-fold.open > .cs-fold-head .cs-fold-sum {
+  white-space: normal;
+}
+.cs-fold-chevron {
+  flex-shrink: 0;
+  color: var(--text-3);
+}
+.cs-fold.open > .cs-fold-head .cs-fold-chevron {
+  transform: rotate(180deg);
+}
+.cs-fold-body {
+  padding: 2px 14px 14px;
+  min-width: 0;
+}
+.cs-fold-body > :last-child {
+  margin-bottom: 0;
+}
+.cs-danger {
+  color: var(--red);
+  font-weight: 600;
+}
+/* A group chat's agent: its own sections sit inside its block, a step in. */
+.cs-agent-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 8px 8px;
+}
+.cs-fold.inner {
+  border-radius: 12px;
+  background: var(--surface);
+}
+.cs-fold.inner.open {
+  background: var(--surface);
+}
+.cs-fold.inner > .cs-fold-head {
+  min-height: 52px;
+  padding: 8px 12px;
+}
+.cs-add {
+  align-self: flex-start;
+  min-height: 44px;
+}
+@media (hover: hover) {
+  .cs-fold-head:hover {
+    background: var(--surface-2);
+  }
+  .cs-fold.open > .cs-fold-head:hover {
+    background: var(--surface-3);
+  }
+}
+
+/* ------------------------------------------------------------ inside a section */
+
+.cs-part {
+  margin-bottom: 16px;
+  min-width: 0;
+}
+.cs-part-title {
+  margin-bottom: 6px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+.cs-note {
+  margin: 6px 0 0;
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+/* What will happen, said beside the choice. */
+.cs-when {
+  margin: 0 0 12px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--surface-3);
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--text-2);
+}
+.cs-fold.inner .cs-when,
+.cs-fold:not(.inner).open .cs-when {
+  background: var(--surface-3);
+}
+/* A change that's still waiting to apply. */
+.cs-held {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--orange-2);
+  color: var(--orange);
+  font-size: 13px;
+  font-weight: 600;
+}
+.cs-newchats {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  margin: 0 0 12px;
+}
+.cs-newchats .btn {
+  min-height: 44px;
+}
+.cs-newchats .cs-note {
+  margin: 0;
+  flex: 1 1 180px;
+}
+.cs-usage {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 12px;
+  border-top: 0.5px solid var(--sep);
+}
+.cs-usage .cs-part-title {
+  margin: 0;
+}
+.cs-switch {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin: 0 0 14px;
+  min-height: 44px;
+}
+.cs-switch > svg {
+  margin-top: 3px;
+  flex-shrink: 0;
+}
+.cs-switch-text {
+  flex: 1;
+  min-width: 0;
+}
+.cs-switch-title {
+  font-weight: 600;
+}
+.cs-switch .cs-note {
+  margin-top: 2px;
+}
+.cs-part > .cs-switch:last-child {
+  margin-bottom: 0;
+}
+.cs-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 6px;
+}
+.cs-actions .btn {
+  min-height: 44px;
+}
+.cs-actions .btn.danger {
+  margin-left: auto;
+}
+.cs-name {
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+}
+.cs-name .input {
+  flex: 1;
+  min-width: 0;
+}
+.cs-problem {
+  color: var(--orange);
+}
+.cs-summarize {
+  margin-top: 14px;
+}
+.cs-fresh {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  padding-top: 12px;
+  border-top: 0.5px solid var(--sep);
+}
+.cs-fresh .btn {
+  min-height: 44px;
+}
+.cs-fresh .cs-note {
+  margin: 0;
+  flex: 1 1 180px;
+}
+
+/* ------------------------------------------------------------ the building blocks: cards and steps */
+
+.cs-cards,
+.cs-models {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.cs-card,
+.cs-models .pop-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 52px;
+  padding: 9px 12px;
+  border: 1px solid var(--sep-strong);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.cs-card.on,
+.cs-models .pop-item.on {
+  border-color: var(--accent);
+  background: var(--accent-2);
+}
+.cs-card > svg,
+.cs-models .pop-item > svg {
+  flex-shrink: 0;
+  color: var(--accent);
+}
+.cs-card:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.cs-card-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+.cs-card-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+}
+.cs-card-help {
+  font-size: 12.5px;
+  line-height: 1.35;
+  color: var(--text-2);
+}
+.cs-card.danger .cs-card-title {
+  color: var(--red);
+}
+.cs-card.danger.on {
+  border-color: var(--red);
+  background: var(--red-2);
+}
+.cs-card.danger.on > svg {
+  color: var(--red);
+}
+.cs-models [role="group"] {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.cs-models .pop-note {
+  margin: 0;
+  padding: 0;
+}
+.cs-models .pop-more .pop-item-title {
+  font-weight: 550;
+  color: var(--text-2);
+}
+.cs-other {
+  align-self: flex-start;
+  min-height: 44px;
+  margin: 0;
+  font-size: 13px;
+}
+.cs-typed {
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+}
+.cs-typed .input {
+  flex: 1;
+  min-width: 0;
+}
+.cs-steps {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(64px, 1fr));
+  gap: 4px;
+  padding: 4px;
+  border-radius: 12px;
+  background: var(--surface-3);
+}
+.cs-step {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  min-height: 44px;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text-2);
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.cs-step.on {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow);
+}
+.cs-step:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.cs-step-default {
+  font-size: 10.5px;
+  font-weight: 550;
+  color: var(--text-2);
+}
+@media (hover: hover) {
+  .cs-card:not(.on):not(:disabled):hover,
+  .cs-models .pop-item:not(.on):hover {
+    background: var(--surface-2);
+  }
+  .cs-step:not(.on):not(:disabled):hover {
+    color: var(--text);
+  }
+}
+
+/* The same blocks in a form (New chat's More options, Settings → New chats): a heading per group of choices. */
+.cs-form {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.cs-form-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0 8px;
+  font-weight: 650;
+}
+.cs-form-title:first-child {
+  margin-top: 0;
+}
+
+/* ------------------------------------------------------------ the "?" beside a heading */
+
+/*
+ * A "?" is drawn small and takes taps around itself (help.css). In a chat's settings and in the forms drawn with the
+ * same blocks, its line is as tall as that tap area, so nothing above or below the line can lie over part of it.
+ */
+.cs-sheet .tip-line,
+.cs-form .tip-line {
+  min-height: 44px;
+  align-items: center;
+}
+.cs-sheet .help-tip-btn,
+.cs-form .help-tip-btn {
+  z-index: 1;
+}

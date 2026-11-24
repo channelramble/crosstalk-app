@@ -251,7 +251,8 @@ test("open takes only its own pages, not what every object has", async () => {
   expect(s.ran).toEqual([]);
 });
 
-test("the program asking can be stopped from the phone: only that process, only while it's still that program, never macOS's own", async () => {
+// Only on a Mac: it runs the Mac's own ps (whose `comm` is the program's whole path) and pmset, against a real process.
+test.skipIf(process.platform !== "darwin")("the program asking can be stopped from the phone: only that process, only while it's still that program, never macOS's own", async () => {
   // A real process standing in for the program asking.
   const proc = Bun.spawn(["/bin/sleep", "30"], { stdout: "ignore", stderr: "ignore" });
   const run = async (args: string[]) => {
@@ -492,7 +493,7 @@ test("after a crash the phone is told once, This Mac shows it for a week, and Di
   });
   expect(crash.detail!.length).toBeLessThanOrEqual(160);
   expect(crash.waitedMs).toBeGreaterThan(MAC_LOGIN_WAIT_MS);
-  expect(s.notes).toEqual([{ title: "Mac mini crashed and restarted", body: `At ${clock(at)} (a fault on a USB port). Crosstalk was off until ${clock(crash.backAt)}: it waited at the login screen. Turn on automatic login in Settings → This Mac.`, tag: "mac-crash" }]);
+  expect(s.notes).toEqual([{ title: "Mac mini crashed and restarted", body: `At ${clock(at)} (a fault on a USB port). Crosstalk was off until ${clock(crash.backAt)}: it waited at the login screen. Turn on automatic login in Settings → Machines → This Mac.`, tag: "mac-crash" }]);
   // Only the panic report was read, and only reading commands ran: the boot, the USB devices, automatic login, FileVault.
   expect(read).toEqual([`${REPORTS}/${PANIC_FILE}`]);
   expect(ran.slice(0, 4).map((a) => a.join(" "))).toEqual(["/usr/sbin/sysctl -n kern.boottime kern.bootsessionuuid", "/usr/sbin/system_profiler SPUSBHostDataType -json", "/usr/bin/defaults read /Library/Preferences/com.apple.loginwindow autoLoginUser", "/usr/bin/fdesetup status"]);
@@ -643,9 +644,9 @@ test("the crash notification says when, why, and how long Crosstalk was off", ()
   const back = new Date(2026, 4, 14, 9, 21).getTime();
   const crash = { at: new Date(2026, 4, 14, 2, 41, 7).getTime(), kind: "crash" as const, cause: "a fault on a USB port", detail: "dart-usb1", devices: [], backAt: back, waitedMs: 6 * HOUR + 40 * MINUTE };
   const manual = { autoLogin: null, fileVault: false };
-  expect(crashNote(crash, NAME, manual, back)).toEqual({ title: "Mac mini crashed and restarted", body: "At 2:41 AM (a fault on a USB port). Crosstalk was off until 9:21 AM: it waited at the login screen. Turn on automatic login in Settings → This Mac." });
+  expect(crashNote(crash, NAME, manual, back)).toEqual({ title: "Mac mini crashed and restarted", body: "At 2:41 AM (a fault on a USB port). Crosstalk was off until 9:21 AM: it waited at the login screen. Turn on automatic login in Settings → Machines → This Mac." });
   // FileVault not known: as This Mac says it, automatic login is what to turn on.
-  expect(crashNote(crash, NAME, { autoLogin: null, fileVault: null }, back).body).toEndWith(" Turn on automatic login in Settings → This Mac.");
+  expect(crashNote(crash, NAME, { autoLogin: null, fileVault: null }, back).body).toEndWith(" Turn on automatic login in Settings → Machines → This Mac.");
   // Automatic login is on now: nothing to turn on.
   expect(crashNote(crash, NAME, { autoLogin: "jane", fileVault: false }, back).body).toBe("At 2:41 AM (a fault on a USB port). Crosstalk was off until 9:21 AM: it waited at the login screen.");
   // With FileVault on it can't log in by itself (there's no automatic login to turn on): it waited for the password.
@@ -655,7 +656,7 @@ test("the crash notification says when, why, and how long Crosstalk was off", ()
   expect(crashNote({ ...crash, backAt: crash.at + 2 * MINUTE, waitedMs: MINUTE }, NAME, { autoLogin: null, fileVault: true }, back).body).toBe("At 2:41 AM (a fault on a USB port). Crosstalk was off until 2:43 AM.");
   expect(crashNote({ ...crash, kind: "power", cause: null, detail: null, at: new Date(2026, 4, 13, 23, 50).getTime() }, NAME, manual, back)).toEqual({
     title: "Mac mini restarted without shutting down",
-    body: "Around 11:50 PM yesterday: it may have lost power or frozen. Crosstalk was off until 9:21 AM: it waited at the login screen. Turn on automatic login in Settings → This Mac.",
+    body: "Around 11:50 PM yesterday: it may have lost power or frozen. Crosstalk was off until 9:21 AM: it waited at the login screen. Turn on automatic login in Settings → Machines → This Mac.",
   });
 });
 

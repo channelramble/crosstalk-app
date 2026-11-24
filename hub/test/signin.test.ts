@@ -318,6 +318,54 @@ describe("signing Gemini CLI in from the phone", () => {
   });
 });
 
+describe("signing in a Gemini CLI that has never run on the machine", () => {
+  // Its first screen isn't the link: it asks whether to trust the folder, then how to sign in. Nobody is at that
+  // terminal, so the sheet used to wait there for good (a person couldn't get Gemini set up).
+  const firstRun = async (trustEnv: boolean) => {
+    const h = hub();
+    const keys = join(mkdtempSync(join(tmpdir(), "ct-gemini-keys-")), "keys.log");
+    process.env.FAKE_GEMINI_CODE = "4/0AVG7fiQ-fake-google-code-1234567890";
+    process.env.FAKE_GEMINI_FIRST_RUN = "1";
+    process.env.FAKE_GEMINI_KEYS_OUT = keys;
+    // An older Gemini CLI doesn't read GEMINI_CLI_TRUST_WORKSPACE: the stand-in can be told to ignore it too.
+    if (!trustEnv) process.env.FAKE_GEMINI_IGNORE_TRUST_ENV = "1";
+    h.app.providers.which = (p) => (p === "gemini" ? join(FIX, "fake-gemini-login") : null);
+    const work = h.app.providers.addAccount("gemini", "Work");
+    const refresh = h.app.providers.refreshAccount.bind(h.app.providers);
+    h.app.providers.refreshAccount = async (p, id) => (p === "gemini" ? { provider: "gemini", id, label: "Work", kind: "signin", workspaceId: null, endpoint: null, signedIn: true, account: "person@example.com", plan: null, authMethod: "Google sign-in", error: null, checkedAt: Date.now() } : refresh(p, id));
+    const phone = await h.pair();
+    const { body } = await h.call(phone.token, "POST", "/api/signin", { provider: "gemini", account: work.id });
+    await until(() => !!h.session(body.id)?.wantsCode, "the paste box");
+    expect(new URL(h.session(body.id)!.url!).hostname).toBe("accounts.google.com");
+    const sent = readFileSync(keys, "utf8").trim().split("\n");
+    await h.call(phone.token, "POST", `/api/signin/${body.id}/code`, { code: process.env.FAKE_GEMINI_CODE });
+    await until(() => h.session(body.id)?.state === "done", "the sign-in");
+    return sent;
+  };
+  afterEach(() => {
+    for (const k of ["FAKE_GEMINI_FIRST_RUN", "FAKE_GEMINI_KEYS_OUT", "FAKE_GEMINI_IGNORE_TRUST_ENV"]) delete process.env[k];
+  });
+
+  test("it's told the folder is trusted, and Google's sign-in is picked for it by its number: the link shows up by itself", async () => {
+    expect(await firstRun(true)).toEqual(['auth:"1"']);
+  });
+
+  test("one that doesn't take the folder's trust from its environment is answered on screen, once", async () => {
+    expect(await firstRun(false)).toEqual(['trust:"\\r"', 'auth:"1"']);
+  });
+
+  test("what its screen says, read: the two questions get their answers, anything else gets none", () => {
+    const picker = "╭──╮\r\n│ How would you like to authenticate for this project?\r\n│\r\n│ ● 1. Sign in with Google\r\n│   2. Use Gemini API Key\r\n│   3. Vertex AI\r\n╰──╯\r\n";
+    expect(readGeminiScreen(picker, null)).toEqual({ url: null, wantsCode: false, press: { id: "auth", keys: "1" } });
+    // Wherever Google's is in the list, and whatever it's called.
+    expect(readGeminiScreen(picker.replace("● 1. Sign in with Google\r\n│   2. Use Gemini API Key", "● 1. Use Gemini API Key\r\n│   2. Login with Google"), null).press).toEqual({ id: "auth", keys: "2" });
+    expect(readGeminiScreen("│ Do you trust the files in this folder?\r\n│ ● 1. Trust folder (gemini-signin)\r\n│   2. Trust parent folder (run)\r\n│   3. Don't trust\r\n", null).press).toEqual({ id: "trust", keys: "\r" });
+    expect(readGeminiScreen("Loading…\r\n", null).press).toBeUndefined();
+    // Once the link is up, nothing is pressed whatever is still on the screen above it.
+    expect(readGeminiScreen(`${picker}Please visit the following URL to authorize the application:\r\n\r\nhttps://accounts.google.com/x?state=s1\r\n\r\nEnter the authorization code: `, null).press).toBeUndefined();
+  });
+});
+
 describe("signing Codex in from the phone", () => {
   test("its device code: the link and the code to enter, and done once Codex says so", async () => {
     process.env.FAKE_COMPLETE_MS = "500";

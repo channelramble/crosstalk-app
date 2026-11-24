@@ -1,4 +1,4 @@
-import { test, expect, noHorizontalOverflow, openGroupSettings } from "./fixtures";
+import { test, expect, noHorizontalOverflow, openGroupSettings, reachable, chatSettings, closeChatSettings, openFold } from "./fixtures";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -41,7 +41,7 @@ test("folder picker uploads whole folders, lists them, downloads and removes uns
   }
 });
 
-test("a group chat's settings keep dirty edits, save exact review limits and open an agent by keyboard", async ({ page, request, token }, testInfo) => {
+test("a group chat's settings save a rename and exact review limits as they're made, and open an agent by keyboard", async ({ page, request, token }, testInfo) => {
   const auth = { authorization: `Bearer ${token}` };
   const room = await (await request.post("http://127.0.0.1:8451/api/rooms", { headers: auth, data: { name: "Settings browser test", mode: "review" } })).json();
   await request.post(`http://127.0.0.1:8451/api/rooms/${room.id}/members`, { headers: auth, data: { provider: "mock", handle: "tester" } });
@@ -51,24 +51,30 @@ test("a group chat's settings keep dirty edits, save exact review limits and ope
     const dialog = await openGroupSettings(page);
     await expect(dialog).toHaveCSS("opacity", "1");
     await dialog.screenshot({ path: testInfo.outputPath("group-settings.png") });
-    await dialog.getByRole("textbox", { name: "Name", exact: true }).fill("Renamed browser room");
-    await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
-    await dialog.getByRole("button", { name: "Keep editing", exact: true }).click();
-    await expect(dialog.getByRole("textbox", { name: "Name", exact: true })).toHaveValue("Renamed browser room");
-    await expect(dialog.getByRole("radio", { name: /^Build & review/ })).toHaveAttribute("aria-checked", "true");
-    await dialog.getByRole("button", { name: "Increase review rounds", exact: true }).click();
-    await dialog.getByRole("button", { name: "Save", exact: true }).click();
+    // The chat's own name (each agent has a Name of its own in its block).
+    const own = dialog.getByRole("region", { name: "This chat", exact: true });
+    await own.getByRole("textbox", { name: "Name", exact: true }).fill("Renamed browser room");
+    await own.getByRole("button", { name: "Save name", exact: true }).click();
     await expect(page.locator(".topbar h1")).toHaveText("Renamed browser room");
-    const history = await (await request.get(`http://127.0.0.1:8451/api/rooms/${room.id}/history`, { headers: auth })).json();
-    expect(history.room.maxHops).toBe((Math.ceil(room.maxHops / 2) + 1) * 2 - 1);
+    await expect(dialog.getByRole("radio", { name: /^One builds, another reviews/ })).toHaveAttribute("aria-checked", "true");
+    // The review rounds are behind "More", whose line says how many there are now.
+    const more = dialog.getByRole("region", { name: "Working together", exact: true }).getByRole("button", { name: /^More/ });
+    await expect(more).toContainText(`@tester leads · up to ${Math.ceil(room.maxHops / 2)} review rounds`);
+    await more.click();
+    // Saved as it's tapped: the line says the new number once the machine has it.
+    await dialog.getByRole("button", { name: "Increase review rounds", exact: true }).click();
+    await expect(more).toContainText(`up to ${Math.ceil(room.maxHops / 2) + 1} review rounds`);
+    await expect.poll(async () => (await (await request.get(`http://127.0.0.1:8451/api/rooms/${room.id}/history`, { headers: auth })).json()).room.maxHops).toBe((Math.ceil(room.maxHops / 2) + 1) * 2 - 1);
+    await closeChatSettings(page);
     // Its agents are in its settings, the lead marked; one opens with the keyboard.
-    const settings = await openGroupSettings(page);
-    const row = settings.getByRole("listitem").filter({ hasText: "@tester" });
-    await expect(row).toContainText("Lead");
-    await row.getByRole("button", { name: "Change @tester", exact: true }).focus();
+    const settings = await chatSettings(page);
+    const row = settings.getByRole("region", { name: "@tester", exact: true });
+    await expect(row.locator("> .cs-fold-head")).toContainText("Lead");
+    await row.locator("> .cs-fold-head").focus();
     await page.keyboard.press("Space");
-    await expect(page.getByRole("dialog", { name: "@tester", exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Already the lead", exact: true })).toBeDisabled();
+    await expect(row.locator("> .cs-fold-head")).toHaveAttribute("aria-expanded", "true");
+    await openFold(row, "Name and role");
+    await expect(row.getByRole("button", { name: "Leads this chat", exact: true })).toBeDisabled();
     await noHorizontalOverflow(page);
   } finally { await request.delete(`http://127.0.0.1:8451/api/rooms/${room.id}`, { headers: auth }); }
 });
@@ -80,10 +86,10 @@ test("a group chat (an older group room too) always has a way back to the other 
     await page.goto(`/#/room/${room.id}`);
     await expect(page.locator(".topbar h1")).toHaveText("Way back");
     if (page.viewportSize()!.width <= 760) {
-      // The chats drawer, where it's listed with the group chats, and Home from there.
+      // The chats drawer, where it's listed among the other chats with its group's mark, and Home from there.
       await page.getByRole("button", { name: /^Show chats/ }).click();
       const drawer = page.getByRole("complementary", { name: "Chats", exact: true });
-      await expect(drawer.getByRole("region", { name: "Group chats", exact: true })).toContainText("Way back");
+      await expect(drawer.locator(".csb-chat").filter({ hasText: "Way back" }).locator(".group-avatar")).toHaveCount(1);
       await drawer.getByRole("button", { name: "Home", exact: true }).click();
       await expect(page.locator(".topbar h1")).toHaveText("Crosstalk");
     } else {
@@ -122,6 +128,7 @@ test("device pairing failures can be retried without leaving the dialog", async 
   let fail = true;
   await page.route("**/api/pairing-codes", (route) => route.fulfill(fail ? { status: 503, json: { error: "Pairing is temporarily unavailable" } } : { json: { code: "ABCD-EFGH", expiresAt: Date.now() + 60_000, url: null } }));
   await page.goto("/#/devices");
+  await reachable(page);
   await page.getByRole("button", { name: "Pair a new device", exact: true }).click();
   await expect(page.getByRole("dialog")).toContainText("Pairing is temporarily unavailable");
   fail = false;
@@ -210,14 +217,20 @@ test("the lead a group chat's settings pick answers, parallel work is kept, and 
   const chosen = await (await request.post(`http://127.0.0.1:8451/api/rooms/${room.id}/members`, { headers: auth, data: { provider: "mock", handle: "chosen", config: { delayMs: 20, reply: "Default agent handled it. @first please review." } } })).json();
   try {
     await page.goto(`/#/room/${room.id}`);
-    const dialog = await openGroupSettings(page);
+    const dialog = (await openGroupSettings(page)).getByRole("region", { name: "Working together", exact: true });
     await expect(dialog.getByRole("radio")).toHaveCount(3);
-    await expect(dialog.getByRole("radio", { name: /^The lead answers/ })).toHaveAttribute("aria-checked", "true");
+    await expect(dialog.getByRole("radio", { name: /^One leads, the others help when asked/ })).toHaveAttribute("aria-checked", "true");
+    // Who leads and working at the same time are behind "More"; review rounds only when one builds and another reviews.
+    const more = dialog.getByRole("button", { name: /^More/ });
+    await expect(more).toHaveText("More@first leads");
+    await more.click();
     await expect(dialog.getByRole("group", { name: "review rounds", exact: true })).toHaveCount(0);
     await dialog.getByRole("combobox", { name: "Lead", exact: true }).selectOption(chosen.id);
+    await expect(more).toHaveText("More@chosen leads");
     await dialog.getByRole("checkbox", { name: "Let agents work at the same time", exact: true }).check();
     await expect(dialog).toContainText("divide file ownership");
-    await dialog.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(more).toHaveText("More@chosen leads · may work at the same time");
+    await closeChatSettings(page);
     // Who answers is said above the message box, and the header names the agents.
     await expect(page.locator(".group-answers")).toHaveText("@chosen answers. Type @ to pick who answers.");
     await expect(page.locator(".topbar .sub")).toContainText("@first and @chosen");

@@ -162,7 +162,7 @@ pub fn start(place: &Place, setup: &Setup, runner: &dyn Runner) -> Result<String
                 return if out.ok() { Ok("Starting…".into()) } else { Err(refused("Starting", &out)) };
             }
             if !setup.service_defined {
-                return Err(Problem::new("No background service is set up for the hub. Install it first.", None));
+                return Err(Problem::new("Crosstalk isn't set up to run in the background yet. Install it first.", None));
             }
             // A `launchctl disable` (or an older Stop) would make bootstrap fail, so undo it first.
             let _ = change(place, runner, launchd::enable(place.uid, &place.label), Duration::from_secs(10));
@@ -176,7 +176,7 @@ pub fn start(place: &Place, setup: &Setup, runner: &dyn Runner) -> Result<String
             }
             if out.said().contains(": 5") || out.said().contains("Input/output error") {
                 return Err(Problem::new(
-                    "macOS didn't let the hub start. If Crosstalk is switched off under Login Items & Extensions (Allow in the Background), switch it on, then tap Start again.",
+                    "macOS didn't let Crosstalk start. If Crosstalk is switched off under Login Items & Extensions (Allow in the Background), switch it on, then tap Start again.",
                     Some(Fix::LoginItems),
                 ));
             }
@@ -185,7 +185,7 @@ pub fn start(place: &Place, setup: &Setup, runner: &dyn Runner) -> Result<String
         Os::Linux => {
             if !now.loaded {
                 if !setup.service_defined {
-                    return Err(Problem::new("No background service is set up for the hub. Install it first.", None));
+                    return Err(Problem::new("Crosstalk isn't set up to run in the background yet. Install it first.", None));
                 }
                 // The unit file is there but systemd hasn't read it yet.
                 let _ = change(place, runner, systemd::daemon_reload(), Duration::from_secs(30));

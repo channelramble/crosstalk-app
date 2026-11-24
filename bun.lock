@@ -7,13 +7,15 @@
     },
     "hub": {
       "name": "@crosstalk/hub",
-      "version": "0.4.0",
+      "version": "0.9.0",
       "dependencies": {
         "@crosstalk/shared": "workspace:*",
         "@muse-code/sdk": "1.4.2",
+        "qrcode": "^1.5.4",
       },
       "devDependencies": {
-        "@types/bun": "latest",
+        "@types/bun": "1.4.2",
+        "@types/qrcode": "^1.5.5",
         "typescript": "^5.9.0",
       },
     },
@@ -26,13 +28,14 @@
     },
     "shared": {
       "name": "@crosstalk/shared",
-      "version": "0.4.0",
+      "version": "0.9.0",
     },
     "web": {
       "name": "@crosstalk/web",
-      "version": "0.4.0",
+      "version": "0.9.0",
       "dependencies": {
         "@crosstalk/shared": "workspace:*",
+        "@novnc/novnc": "1.7.0",
         "@tauri-apps/api": "^2",
         "@tauri-apps/plugin-notification": "^2",
         "@tauri-apps/plugin-opener": "^2",
@@ -169,6 +172,8 @@
     "@muse-code/sdk": ["@muse-code/sdk@1.4.2", "", { "peerDependencies": { "@types/node": ">=20" }, "optionalPeers": ["@types/node"] }, "sha512-2gl6EMq0pOoqokQxlfaKciyrkhvfd17UwtRui9rEUULmJZ4wwr3h/eW1HO88iGbU7X8QvTjwPa1WXcOl/HN/mA=="],
 
     "@napi-rs/lzma-linux-x64-gnu": ["@napi-rs/lzma-linux-x64-gnu@1.5.1", "", { "os": "linux", "cpu": "x64" }, "sha512-oTXEIha4SsuXdTA4Iyskj0kpdx2yVXdhd75c2v3xGrHFfVMsbhTPZU/nMPL4sWKo4pBHm3aucLaqGlF696dTyQ=="],
+
+    "@novnc/novnc": ["@novnc/novnc@1.7.0", "", {}, "sha512-ucEJOx4T2avIRCleodk7YobZj5O2Ga2AeLfQ69A/yjG9HHba2+PDgwSkN3FttrmG+70ZGx21sElNFouK13RzyA=="],
 
     "@playwright/test": ["@playwright/test@1.63.0", "", { "dependencies": { "playwright": "1.63.0" }, "bin": { "playwright": "cli.js" } }, "sha512-oxMK4vllB9RK5NQ2l1pq1IfOf2AvnEuj/vYGDj0H2nMtmtZpKtCwt/l00GEO6xjGfpBNAvjovvYdCm50dRQkpQ=="],
 

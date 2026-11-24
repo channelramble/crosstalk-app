@@ -1,5 +1,6 @@
 import {
   CHAT_PROVIDERS,
+  MEMORY_WAIT,
   PERMISSION_MODES,
   codexAnswerTo,
   codexQuestionReply,
@@ -46,6 +47,7 @@ import { lstatSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { newId } from "../util/ids";
 import { processesEnding } from "../util/process";
+import type { AgentProcess } from "../memory";
 import { logger } from "../util/log";
 import { buildChatPrompt, buildGroupSteer, buildSystemNote, buildTurnPrompt, reviewPair, rosterHash } from "./prompt";
 
@@ -106,16 +108,6 @@ export interface EngineDeps {
    * null. Refuses the same way a missing folder does: an error reply, the message handed back, Try again.
    */
   checkBudget?: (room: Room, member: Member) => string | null;
-  /**
-   * A plain sentence when the model server this chat runs on can't answer now (the model pool is stopped or still
-   * starting), else null. Refuses the way a missing folder does: an error reply, the message handed back, Try again.
-   */
-  checkEndpoint?: (room: Room, member: Member) => string | null;
-  /**
-   * Plain words for a reply that failed because its model server went away mid-reply (the model pool stopped), in place
-   * of the agent's own "connection refused". Null leaves the agent's words alone.
-   */
-  replyFailed?: (member: Member) => string | null;
   /** A finished reply's usage, for the spend ledger (spend.ts). Called after the turn is saved; a throw never reaches the turn. */
   recordUsage?: (room: Room, member: Member, turn: Turn, usage: LedgerUsage) => void;
   /** A turn is about to run (chats note where a shared session's transcript ends, see Chats.turnStarting). */
@@ -133,11 +125,11 @@ export interface EngineDeps {
    */
   carryOnAfterLimit?: () => boolean;
   /**
-   * "Keep going while helpers work" (absent: on): while an agent's helpers work, your messages go straight to it, around new
-   * settings that wait for those helpers (flowIn, heldForSettings). Off: such a message waits for the helpers, and only a
-   * tap sends it sooner (the older behaviour).
+   * The machine is nearly out of memory and agents are what fills it (memory.ts): no new reply starts while this says
+   * true, and what waits says "Waiting for memory". Replies that are running go on. `memoryHoldChanged` is called when
+   * it changes.
    */
-  messagesFlow?: () => boolean;
+  memoryHold?: () => boolean;
   /** What to call a member's account in those words ("Work"); null for the agent's own sign-in. */
   accountLabel?: (member: Member) => string | null;
   /**
@@ -149,6 +141,13 @@ export interface EngineDeps {
   now?: () => number;
   /** A reply whose agent's sign-in stopped working (see staleSignIn); absent: such a reply just fails, as before. */
   signIn?: SignInHooks;
+  /**
+   * Helpers Crosstalk runs for an agent on another account (helpers.ts): Stop and Stop helpers end them with the
+   * agent's own. Returns how many it ended.
+   */
+  stopHelpers?: (roomId: string, memberId?: string) => number;
+  /** A member's reply ended (done, stopped or failed): a helper's report nobody read during it is handed over now. */
+  replyOver?: (room: Room, member: Member, status: string) => void;
 }
 
 /**
@@ -185,9 +184,16 @@ const MAX_LIMIT_TRIES = 5;
 const MAX_WAIT_MS = 24 * 3600_000;
 /** How many of one account's waiting chats start per round, so one reset never starts a dozen replies at once. */
 const WAKE_AT_ONCE = 2;
-/** How long a message "Send now" handed to a reply as it ended waits for the agent's next turn to read it. */
+/** How long a message handed to a reply as it ended waits for the agent's next turn to read it. */
 const HANDED_OVER_MS = 60_000;
-/** How soon a reply that can't take a message yet (it's still starting) is asked again, while its helpers work (flowIn). */
+/**
+ * A tool step's title that says its reply is using a browser, as the drivers write a call to a browser's tools:
+ * "Use mcp__browseros-neo__navigate" (Claude Code), "browseros-neo: navigate" (Codex), "BrowserOS neo: navigate"
+ * (Crosstalk's own agent). Only the tool's name counts, never what was searched for or typed: a web search for
+ * "best browser", or a command that greps for the word, is not browsing.
+ */
+const BROWSER_STEP = /^Use mcp__\S*(browser|playwright|puppeteer|chrome)|^[^:]*(browser|playwright|puppeteer|chrome)[^:]*: /i;
+/** How soon a reply that can't take a message yet (it's still starting) is asked again (flowIn). */
 const FLOW_RETRY_MS = 500;
 /**
  * New settings can wait a long time for an agent's helpers (a dev server left running, a new helper with every reply): the
@@ -215,7 +221,7 @@ const ORIGIN_RANK: Record<TurnOrigin, number> = { mention: 0, human: 1, loop: 2 
  * they're in the agent's conversation from that earlier turn, so a rewind to one of them still goes back to before it
  * (the drivers keep each message's first rewind point), and the agent forgets the failed try as well.
  */
-type QueuedTurn = Turn & { note?: string | null; merged?: { origin: TurnOrigin; triggerId: string | null }[]; had?: number };
+type QueuedTurn = Turn & { note?: string | null; merged?: { origin: TurnOrigin; triggerId: string | null }[]; had?: number; steps?: { title: string; detail: string }[] };
 
 interface Running {
   turn: Turn;
@@ -242,14 +248,21 @@ interface Running {
   /** What the driver said about the cost beyond `usage`: for the spend ledger only, never stored with the turn. */
   ledger?: Pick<LedgerUsage, "costTotalUsd" | "costFromBaseline">;
   stopping: boolean;
+  /**
+   * Crosstalk is stopping this reply itself, for this reason (stopForMemory): it ends as a failed reply that says so
+   * and offers Try again, not as one the person stopped.
+   */
+  failAs?: string;
   /** The reply was split around a message the human sent mid-turn (see sink.newReply). */
   split?: boolean;
-  /** Messages "Send now" handed to this reply that it hasn't read yet: it reads them where it splits (sink.newReply). */
+  /** Messages handed to this reply (handToReply) that it hasn't read yet: it reads them where it splits (sink.newReply). */
   steered?: Message[];
   /** "Read it now" is stopping the step the agent is on, so it reads the messages in `steered` now. */
   readingNow?: boolean;
   /** "Stop and answer my message": what this reply was handed and will never read is answered next (finishRunning). */
   answerHanded?: boolean;
+  /** The chat has said this reply answers a message with the settings it started with, new ones waiting for it alone (handToReply). */
+  saidAround?: boolean;
   /** A duplicated chat's note of the conversation it was copied from went with this turn, with these messages. */
   handoff?: string[];
   /** The agent has the turn's message in its conversation (sink.taken), even if the turn is stopped or fails later. */
@@ -358,27 +371,6 @@ export class Engine {
   private waitCheck: ReturnType<typeof setInterval>;
   /** When each member's agent process last did anything (a turn, background work), for ending idle ones. */
   private lastUsed = new Map<string, number>();
-  /** Interrupted turns resumeAfterRestart held back until their model server runs (resumeHeld picks them up). */
-  private held: { roomId: string; memberId: string; trigger: string | null; chainId: string; hop: number; note: string | null; origin: TurnOrigin; had: number }[] = [];
-
-  /** Picks up the held turns of the members `which` names (their model server runs now); the others wait on. */
-  resumeHeld(which: (member: Member) => boolean) {
-    const rooms = new Set<string>();
-    this.held = this.held.filter((h) => {
-      const room = this.store.getRoom(h.roomId);
-      const member = this.store.getMember(h.memberId);
-      if (!room || room.archived || !member) return false;
-      if (!which(member)) return true;
-      // Answered meanwhile (Answer now or Try again ran it once the server was up): nothing left to pick up.
-      const from = h.trigger ? this.store.messageSeq(h.trigger) : 0;
-      if (from > 0 && this.store.getLastSeen(member.id).seq >= from) return false;
-      this.redelivers(this.enqueue(room, member, h.trigger, h.chainId, h.hop, h.note, h.origin), h.had);
-      rooms.add(room.id);
-      return false;
-    });
-    for (const id of rooms) this.schedule(id);
-  }
-
   /** Turns the last hub process left queued or running, picked up again by resumeAfterRestart. */
   private interrupted: Turn[] = [];
   private shuttingDown = false;
@@ -400,11 +392,6 @@ export class Engine {
    * reads them, not the notes said about what waits up to then (forPerson).
    */
   private notesPassed = new Map<string, number>();
-  /**
-   * With "Keep going while helpers work" off: members whose next turn starts although their new settings still wait for
-   * their helpers, because the person tapped Answer now (answerNow). Used up when that turn starts.
-   */
-  private answerAnyway = new Set<string>();
   /** What's being handed to each member's running reply right now (sendNowWhy): one hand-over at a time per agent. */
   private steering = new Map<string, Promise<SendNowResult>>();
   /** Members whose running reply is asked again in a moment to take a waiting message (flowIn). */
@@ -416,8 +403,8 @@ export class Engine {
   /** Turns that answered only other chats' messages (see isRelayTurn). */
   private relayOnly = new Set<string>();
   /**
-   * Messages "Send now" handed to a reply that ended before reading them, by member: the agent answers them next (Claude
-   * Code starts a turn of its own for it), so its next turn, if it starts within a minute, is the one that read them.
+   * Messages handed to a reply that ended before reading them, by member: the agent answers them next (Claude Code
+   * starts a turn of its own for it), so its next turn, if it starts within a minute, is the one that read them.
    */
   private handedOver = new Map<string, { messages: Message[]; at: number }>();
   private idleWaiters: (() => void)[] = [];
@@ -483,7 +470,7 @@ export class Engine {
     // Every device's list moves the chat to the top, with the new time.
     this.emitRoom(roomId);
     if (!members.length) {
-      this.systemMessage(roomId, room.chat?.group ? "There are no agents in this chat yet. Add one in the chat's settings." : "There are no agents in this room yet. Add one from the Agents panel.");
+      this.systemMessage(roomId, "There are no agents in this chat yet. Add one in the chat's settings.");
       return msg;
     }
     this.pausedLoops.delete(roomId); // the human's reply is the answer the loop was waiting for
@@ -554,7 +541,7 @@ export class Engine {
     return null;
   }
 
-  /** A turn as clients see it: a running chat reply says which messages "Send now" handed to it it hasn't read yet. */
+  /** A turn as clients see it: a running chat reply says which messages that went into it it hasn't read yet. */
   liveTurn(turn: Turn): Turn {
     const r = this.running.get(turn.id);
     if (!r?.steered?.length) return turn;
@@ -564,6 +551,111 @@ export class Engine {
   private emitLiveTurn(r: Running) {
     const turn = this.store.getTurn(r.turn.id);
     if (turn) this.bus.emit({ t: "turn", turn: this.liveTurn(turn) });
+  }
+
+  // ---- For the memory guard (memory.ts) ----
+
+  /**
+   * Every agent process the hub runs now, with its chat, whether a reply of its is running, and whether that reply has
+   * used a browser (one of its steps is a call to a browser's tools, BROWSER_STEP). A browser it started itself is
+   * found among its processes instead. The guard counts what these processes and everything they started hold.
+   */
+  agentProcesses(): AgentProcess[] {
+    const out: AgentProcess[] = [];
+    for (const [memberId, d] of this.drivers) {
+      const member = this.store.getMember(memberId);
+      const room = member ? this.store.getRoom(member.roomId) : null;
+      if (!member || !room) continue;
+      let pids: number[] = [];
+      try {
+        pids = d.pids?.() ?? [];
+      } catch {
+        // A driver in the middle of replacing its process: nothing to count this time.
+      }
+      const r = [...this.running.values()].find((x) => x.turn.memberId === memberId && !x.stopping);
+      const browsing = !!r && [...r.steps.values()].some((s) => s.act.kind === "tool" && BROWSER_STEP.test(s.act.title));
+      const agent = room.chat?.group ? `@${member.handle}` : PROVIDER_INFO[member.provider]?.name ?? `@${member.handle}`;
+      out.push({ memberId, roomId: room.id, agent, chat: room.name, pids, replying: !!r, browsing });
+    }
+    return out;
+  }
+
+  /**
+   * The machine is nearly out of memory: agent processes with nothing to do for `idleMs` are ended now, by the same
+   * rule that ends them after 20 minutes (endIdle), so none that works, owes a turn or waits on the person goes.
+   * Returns how many were ended.
+   */
+  endIdleNow(idleMs: number): number {
+    return this.endIdle(idleMs);
+  }
+
+  /**
+   * Whether new replies wait for memory changed (EngineDeps.memoryHold). Waiting: what is queued says so. Over: it
+   * says "queued" again and every chat with something waiting looks at its queue.
+   */
+  memoryHoldChanged() {
+    const held = this.memoryHeld();
+    for (const [roomId, q] of [...this.queue]) {
+      if (!q.length) continue;
+      if (held) {
+        this.sayMemoryWait(q);
+        continue;
+      }
+      for (const id of new Set(q.map((t) => t.memberId))) {
+        const m = this.store.getMember(id);
+        if (m?.status === "queued" && m.statusDetail === MEMORY_WAIT) this.setMemberStatus(id, "queued", null);
+      }
+      this.schedule(roomId);
+    }
+  }
+
+  private memoryHeld(): boolean {
+    try {
+      return this.deps.memoryHold?.() === true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** The agents these turns wait for say they wait for memory (one that is replying keeps its own status). */
+  private sayMemoryWait(q: Turn[]) {
+    for (const id of new Set(q.map((t) => t.memberId))) if (this.store.getMember(id)?.status === "queued") this.setMemberStatus(id, "queued", MEMORY_WAIT);
+  }
+
+  /**
+   * Puts a note from Crosstalk into the member's running reply, which the agent reads at its next step (the way Send
+   * now hands it a message, AgentDriver.steer). False when no reply of its is running, it is being stopped or is
+   * making a summary, or its agent has no way to take a message in the middle of a reply (the ACP agents, Muse,
+   * Antigravity): nothing is queued for later then, because the note is only true now.
+   */
+  async noteToReply(memberId: string, text: string): Promise<boolean> {
+    const r = [...this.running.values()].find((x) => x.turn.memberId === memberId);
+    if (!r || r.stopping || r.compact || !r.driver.steer) return false;
+    // One hand-over at a time per agent (sendNowWhy): this waits for a message of the person's that is going in.
+    const going = this.steering.get(memberId);
+    if (going) await going.catch(() => {});
+    if (!this.running.has(r.turn.id) || r.stopping) return false;
+    try {
+      const sent = await r.driver.steer(text);
+      if (sent) r.lastSignalAt = Date.now();
+      return sent;
+    } catch (e) {
+      log.warn(`couldn't put a note into @${memberId}'s running reply: ${e instanceof Error ? e.message : e}`);
+      return false;
+    }
+  }
+
+  /**
+   * Stops the member's running reply because the machine was about to freeze. Unlike Stop, the reply ends as failed
+   * with `error`, so the chat offers Try again under it; what waits for the agent stays (it waits for memory). False
+   * when no reply of its was running.
+   */
+  async stopForMemory(roomId: string, memberId: string, error: string): Promise<boolean> {
+    const replies = [...this.running.values()].filter((r) => r.turn.roomId === roomId && r.turn.memberId === memberId && !r.stopping);
+    if (!replies.length) return false;
+    log.info(`stopping @${this.store.getMember(memberId)?.handle ?? memberId}'s reply: the machine is out of memory`);
+    await Promise.all(replies.map((r) => this.stopRunning(r, error)));
+    return true;
   }
 
   /** Whether a member has a turn running or waiting. */
@@ -578,7 +670,7 @@ export class Engine {
 
   /**
    * A turn that answered only other chats' messages (no "finished" notification for it: their senders get the reply).
-   * One that also answered the user (their message went in with a relay, or by "Send now") isn't.
+   * One that also answered the user (their message went into its reply too) isn't.
    */
   isRelayTurn(turn: Turn): boolean {
     return this.relayOnly.has(turn.id);
@@ -595,12 +687,12 @@ export class Engine {
     if (this.relayOnly.size > 500) this.relayOnly.delete(this.relayOnly.values().next().value!);
   }
 
-  /** Whether "Send now" handed this message to a reply as it ended, so the agent's next turn is still to answer it. */
+  /** Whether this message went into a reply as it ended, so the agent's next turn is still to answer it. */
   answersLater(messageId: string): boolean {
     return [...this.handedOver.values()].some((h) => Date.now() - h.at < HANDED_OVER_MS && h.messages.some((m) => m.id === messageId));
   }
 
-  /** What "Send now" handed to this member's last reply as it ended: the turn starting now reads it. */
+  /** What went into this member's last reply as it ended: the turn starting now reads it. */
   private takeHandedOver(memberId: string): Message[] {
     const h = this.handedOver.get(memberId);
     this.handedOver.delete(memberId);
@@ -651,16 +743,33 @@ export class Engine {
    * Picks up work a restart (or crash) interrupted, so restarting Crosstalk doesn't silently drop what agents were
    * doing: each agent that was working or waiting gets its turn again, resuming its session. Recent turns only (6 h),
    * and a turn resumed in the last 10 minutes isn't resumed again, so a crash it causes can't loop.
+   *
+   * `leave`: why a member's work must not start again by itself, as a line for its chat, or null. The machine went
+   * down out of memory while that reply was filling it (memory.ts `wentDown`): starting it again would freeze the
+   * machine again, so the chat says what happened and the reply waits for Try again.
    */
-  resumeAfterRestart(hold?: (member: Member) => boolean) {
+  resumeAfterRestart(leave?: (member: Member) => string | null) {
     const now = Date.now();
     const rooms = new Set<string>();
-    const waiting = new Set<string>();
+    const left = new Map<string, string>();
     for (const t of this.interrupted) {
       if (t.createdAt < now - 6 * 3600_000) continue;
       const room = this.store.getRoom(t.roomId);
       const member = this.store.getMember(t.memberId);
       if (!room || room.archived || !member) continue;
+      const why = leave?.(member) ?? null;
+      if (why) {
+        // It ends as a failed reply, which is what offers Try again under it and lets Try again run it (retryMember).
+        const ended = this.store.updateTurn(t.id, { status: "error", error: why });
+        if (ended) this.bus.emit({ t: "turn", turn: ended });
+        const reply = t.replyMessageId ? this.store.getMessage(t.replyMessageId) : null;
+        if (reply) {
+          this.store.updateMessage(reply.id, { status: "error", ...(reply.text.trim() ? {} : { text: `⚠️ ${why}` }) });
+          this.emitMessage(reply.id);
+        }
+        left.set(room.id, why);
+        continue;
+      }
       const key = `resumed:${t.chainId}:${t.memberId}`;
       if (now - Number(this.store.kvGet(key) ?? 0) < 10 * 60_000) continue;
       this.store.kvSet(key, String(now));
@@ -680,19 +789,13 @@ export class Engine {
           : t.origin === "loop"
             ? this.loopNote(room, member)
             : null;
-      if (hold?.(member)) {
-        // Its agent's model server isn't up yet (the model pool starts after the hub): it picks up once that runs.
-        this.held.push({ roomId: room.id, memberId: member.id, trigger: t.triggerMessageId, chainId: t.chainId, hop: t.hop, note, origin: t.origin ?? "human", had });
-        waiting.add(room.id);
-        continue;
-      }
       this.redelivers(this.enqueue(room, member, t.triggerMessageId, t.chainId, t.hop, note, t.origin ?? "human"), had);
       rooms.add(room.id);
     }
     this.interrupted = [];
     // A limit that reset while the hub was down: those chats carry on now, not at the next round.
     this.checkWaits();
-    for (const id of waiting) if (!rooms.has(id)) this.systemMessage(id, "Crosstalk restarted. This chat picks up where it left off once the model pool runs again.");
+    for (const [id, why] of left) this.systemMessage(id, why);
     for (const id of rooms) {
       this.systemMessage(id, "Crosstalk restarted. Agents that were working are picking up where they left off.");
       this.schedule(id);
@@ -700,10 +803,10 @@ export class Engine {
   }
 
   /**
-   * Stop queued and running turns in a room (optionally for one member). With `keepWaiting` ("Stop and answer my
-   * message"), turns the user's own messages queued stay: once the reply that's running has stopped, if one is, those
-   * messages are answered, and so are any handed to that reply that it never read. Without it ("Stop everything"), they're
-   * left unread (Member.readSeq), for "Answer now".
+   * Stop queued and running turns in a room (optionally for one member). With `keepWaiting` (the app's Interrupt under a
+   * message that waits for the reply's end; "Stop and answer my message" in older apps), turns the user's own messages
+   * queued stay: once the reply that's running has stopped, if one is, those messages are answered, and so are any handed
+   * to that reply that it never read. Without it (Stop), they're left unread (Member.readSeq), for "Try again".
    */
   async stop(roomId: string, memberId?: string, opts: { keepWaiting?: boolean } = {}): Promise<void> {
     if (!memberId) this.pausedLoops.delete(roomId);
@@ -714,18 +817,12 @@ export class Engine {
     const yours = (t: Turn) => (t.origin ?? "human") === "human" && !!t.triggerMessageId && this.store.getMessage(t.triggerMessageId)?.authorKind === "human";
     for (const t of q) {
       if ((!memberId || t.memberId === memberId) && !(opts.keepWaiting && yours(t))) dropped.push(t);
-      else {
-        keep.push(t);
-        // "Stop and answer my message" says it answers next, and it's a tap like Answer now (answerNow).
-        if (opts.keepWaiting && (!memberId || t.memberId === memberId)) this.answerNow(t.memberId);
-      }
+      else keep.push(t);
     }
     this.queue.set(roomId, keep);
     for (const t of dropped) this.finishTurnRecord(t, "stopped", null);
     // Nothing left for them to do. A reply that's still stopping says so itself once it has (finishRunning).
     for (const id of new Set(dropped.map((t) => t.memberId))) {
-      // An Answer now that hadn't started goes with its turn: the next message waits again until it's tapped.
-      if (!keep.some((t) => t.memberId === id)) this.answerAnyway.delete(id);
       if (!keep.some((t) => t.memberId === id) && ![...this.running.values()].some((r) => r.turn.memberId === id)) this.setMemberStatus(id, "idle", null);
     }
     const stops: Promise<void>[] = [];
@@ -735,9 +832,67 @@ export class Engine {
       if (opts.keepWaiting) r.answerHanded = true;
       stops.push(this.stopRunning(r));
     }
+    // Helpers Crosstalk runs for it on another account stop with it (not for "stop and answer my message": that only
+    // makes room for the message).
+    if (!opts.keepWaiting) this.deps.stopHelpers?.(roomId, memberId);
     await Promise.all(stops);
-    // What it kept goes next. With no reply to stop (a message held for the agent's helpers) nothing else looks again.
+    // What it kept goes next. With no reply to stop nothing else looks again.
     if (opts.keepWaiting) this.schedule(roomId);
+  }
+
+  /**
+   * Ends what an agent still runs after its reply ended: its helpers, workflows and background commands. Its process is
+   * let go and they go with it (they stay listed, as stopped, for half an hour); the chat picks up where it was with its
+   * next message, and one that waited for the helpers goes now. An agent with a reply running is left alone (Stop is
+   * for that, and its helpers can be stopped once it has), and so is one about to answer a message by itself. Returns
+   * how many things were ended.
+   */
+  async stopHelpers(roomId: string, memberId?: string): Promise<number> {
+    let ended = 0;
+    const gone: Promise<void>[] = [];
+    for (const m of this.store.listMembers(roomId)) {
+      if (memberId && m.id !== memberId) continue;
+      if ([...this.running.values()].some((r) => r.turn.memberId === m.id)) continue;
+      // The ones Crosstalk runs for it on another account (helpers.ts) aren't in its process: they're ended themselves.
+      ended += this.deps.stopHelpers?.(roomId, m.id) ?? 0;
+      const cur = this.tasks.get(m.id);
+      const running = cur?.tasks.filter((t) => t.status === "running") ?? [];
+      const owed = this.owedTurn(m.id);
+      if (owed === "message" || (!running.length && owed !== "report")) continue;
+      const d = this.drivers.get(m.id);
+      const letGo = () => {
+        if (d) this.keepCarried(m.id, d);
+        this.drivers.delete(m.id);
+        this.handedOver.delete(m.id);
+        if (d) gone.push(d.dispose().catch(() => {}));
+      };
+      // New settings waiting for these helpers: they apply as the helpers are listed as stopped (memberChanged lets the
+      // process go itself, and says what applied). Otherwise the process goes first, so nothing is handed to it meanwhile.
+      const held = this.replaceAfterTurn.has(m.id);
+      if (!held) letGo();
+      ended += running.length || 1;
+      log.info(`@${m.handle}: its helpers were stopped by the person (${running.length} running${owed ? ", a report on its way" : ""})`);
+      if (cur && running.length) {
+        const now = Date.now();
+        const list = cur.tasks.map((t): BackgroundTask => (t.status === "running" ? { ...t, status: "stopped", endedAt: now, error: "You stopped it." } : t));
+        this.setTasks(cur.roomId, m.id, list);
+        setTimeout(() => {
+          if (this.tasks.get(m.id)?.tasks === list) this.setTasks(cur.roomId, m.id, []);
+        }, 30 * 60_000).unref?.();
+      }
+      if (held && d && this.drivers.get(m.id) === d) {
+        // Still held (a report it owes was on its way): that goes with the process too, and the settings apply.
+        const note = this.appliedNotes.get(m.id);
+        letGo();
+        this.dropHold(m.id);
+        if (note) this.systemMessage(roomId, note);
+        const now = this.store.getMember(m.id);
+        if (now?.status === "working") this.setMemberStatus(m.id, (this.queue.get(roomId) ?? []).some((t) => t.memberId === m.id) ? "queued" : "idle", null);
+      }
+    }
+    await Promise.all(gone);
+    if (ended) this.schedule(roomId);
+    return ended;
   }
 
   decideApproval(approvalId: string, decision: ApprovalDecision, by: string, answers?: Record<string, string[]>): Approval | null {
@@ -793,7 +948,7 @@ export class Engine {
     this.emitRoom(room.id);
     this.enqueue(room, member, msg.id, newId("ch"), 0, null);
     this.schedule(room.id);
-    // Its reply is still running: the answer goes into it now ("Send now"), as Codex expects; failing that, the reply
+    // Its reply is still running: the answer goes into it now (handToReply), as Codex expects; failing that, the reply
     // that's queued for it brings it once this one ends.
     if (room.chat && [...this.running.values()].some((r) => r.turn.roomId === room.id && r.turn.memberId === member.id)) {
       void this.sendNow(room.id).catch((e) => log.warn(`couldn't hand an answer to the running reply: ${e instanceof Error ? e.message : e}`));
@@ -859,24 +1014,23 @@ export class Engine {
   }
 
   /**
-   * "Send now": the human's messages waiting behind a chat's running reply go into that reply instead of waiting for it
-   * to end. The waiting turn is dropped (the agent has the messages now), unless more came in while they were being
-   * handed over. False when nothing waits or it can't be done (sendNowWhy says why). `memberId`: a group chat's agent
-   * whose reply it is (two can work at once).
+   * The human's messages waiting behind a chat's running reply go into that reply instead of waiting for it to end. The
+   * waiting turn is dropped (the agent has the messages now), unless more came in while they were being handed over.
+   * False when nothing waits or it can't be done (sendNowWhy says why). `memberId`: a group chat's agent whose reply it is
+   * (two can work at once). The hub does this by itself as a message comes in (flowIn); "Send now" was the button for it,
+   * and an older app can still ask.
    */
   async sendNow(roomId: string, memberId: string | null = null): Promise<boolean> {
     return (await this.sendNowWhy(roomId, memberId)).sent;
   }
 
   /**
-   * Send now, saying why when it didn't (SendNowResult): the app tells the person what is really holding their message
-   * instead of guessing. Only while what waits is a new model, effort, fast mode or looser permissions (mayAnswerAround),
-   * and the chat says it was answered with the settings the agent started with: an account switch or tighter permissions
-   * are never answered around. While the agent's helpers work it happens by itself (flowIn), unless "Keep going while
-   * helpers work" is off. `currentSettings`: with it off, no reply runs because settings the person changed wait for the
-   * agent's helpers (heldForSettings), and they tapped Answer now: answered now, by the agent as it is (answerNow).
+   * The same, saying why when it didn't (SendNowResult): flowIn goes by it, and an older app tells the person what is
+   * really holding their message instead of guessing. Only while what waits is a new model, effort, fast mode or looser
+   * permissions (mayAnswerAround), and the chat says it was answered with the settings the agent started with: an account
+   * switch, tighter permissions or a new folder are never answered around.
    */
-  async sendNowWhy(roomId: string, memberId: string | null = null, opts: { currentSettings?: boolean } = {}): Promise<SendNowResult> {
+  async sendNowWhy(roomId: string, memberId: string | null = null): Promise<SendNowResult> {
     const room = this.store.getRoom(roomId);
     if (!room?.chat) throw new HttpError(400, "Send now works in chats");
     const q = this.queue.get(roomId) ?? [];
@@ -884,13 +1038,13 @@ export class Engine {
     // a message for another agent waits for its turn).
     const replies = [...this.running.values()].filter((x) => x.turn.roomId === roomId && (!memberId || x.turn.memberId === memberId));
     const r = replies.find((x) => q.some((t) => t.memberId === x.turn.memberId)) ?? replies[0];
-    if (!r) return this.sendWithoutReply(room, q, memberId, !!opts.currentSettings);
+    if (!r) return this.sendWithoutReply(room, q, memberId);
     // One at a time per agent. A hand-over can be a call to the agent's server (Codex's steer), and what the next one
     // sees as unread only changes once it's done: two together, from two quick messages, would hand the first one twice.
     const going = this.steering.get(r.turn.memberId);
     if (going) {
       await going.catch(() => {});
-      return this.sendNowWhy(roomId, memberId, opts);
+      return this.sendNowWhy(roomId, memberId);
     }
     const work = this.handToReply(room, r, q);
     this.steering.set(r.turn.memberId, work);
@@ -901,7 +1055,7 @@ export class Engine {
     }
   }
 
-  /** Send now into this running reply (sendNowWhy). */
+  /** Hands what waits behind this running reply to it (sendNowWhy). */
   private async handToReply(room: Room, r: Running, q: Turn[]): Promise<SendNowResult> {
     const roomId = room.id;
     const waiting = q.filter((t) => t.memberId === r.turn.memberId);
@@ -953,39 +1107,39 @@ export class Engine {
     if (handed.some((m) => !m.via)) this.relayOnly.delete(r.turn.id);
     r.steered = [...(r.steered ?? []), ...handed];
     r.lastSignalAt = Date.now();
-    // The app shows under these messages that they're read after the current step, with "Read it now".
+    // The app shows under these messages that they're read after the current step, with Interrupt (readNow).
     this.emitLiveTurn(r);
-    // Answered by a process whose new settings wait: never silently. While its helpers work that's said once per hold,
-    // since messages go in by themselves then (flowIn); anything else is someone's tap, said each time.
+    // Answered by a process whose new settings wait: never silently, and not once per message either, since messages go in
+    // by themselves (flowIn). While its helpers work that's said once per hold; with only this reply in the way, once for
+    // the reply.
     if (around) {
-      if (this.helpersAtWork(member.id) && this.flows()) this.noteAround(room, member);
-      else this.answeringAround(room, member);
+      if (this.helpersAtWork(member.id)) this.noteAround(room, member);
+      else if (!r.saidAround) {
+        r.saidAround = true;
+        this.answeringAround(room, member);
+      }
     }
-    // Messages that came in meanwhile weren't handed over: the waiting turn stays, to deliver them.
-    if (!all || this.store.messagesAfter(roomId, upTo).some((m) => m.authorKind === "human" && m.text.trim())) return { sent: true };
+    // Messages that came in meanwhile weren't handed over: the waiting turn stays, to deliver them. In a group chat, only
+    // for one that's this agent's to answer: another agent's has its own turn, and this one would start with nothing to do.
+    const since = this.store.messagesAfter(roomId, upTo).filter((m) => m.authorKind === "human" && m.text.trim());
+    if (!all || since.some((m) => !room.chat?.group || this.targetsOf(room, members, m).some((x) => x.id === member.id))) return { sent: true };
     this.queue.set(roomId, (this.queue.get(roomId) ?? []).filter((t) => !waiting.some((w) => w.id === t.id)));
     for (const t of waiting) this.finishTurnRecord(t, "stopped", null);
     return { sent: true };
   }
 
   /**
-   * Send now when no reply of that agent's is running, so there's none to put the message into. Waiting for a usage
-   * limit: nothing can send it sooner (the account has no quota), and the reply that carries on reads it first. Held
-   * until the agent's helpers finish: says what holds it (heldForSettings). Under a new model or the like nothing does by
-   * then, unless a reply the agent owes by itself comes first, or "Keep going while helpers work" is off: then
-   * `currentSettings` (the person chose Answer now) answers it now, by the agent as it is, and the settings apply once the
-   * helpers are done.
+   * Asked to hand a message over when no reply of that agent's is running, so there's none to put it into. Waiting for
+   * a usage limit: nothing can send it sooner (the account has no quota), and the reply that carries on reads it first.
+   * Held until the agent's helpers finish: says what holds it (heldForSettings). Under a new model or the like nothing
+   * does by then, unless a reply the agent owes by itself comes first.
    */
-  private sendWithoutReply(room: Room, q: Turn[], memberId: string | null, currentSettings: boolean): SendNowResult {
+  private sendWithoutReply(room: Room, q: Turn[], memberId: string | null): SendNowResult {
     const waiting = this.limitWaiting(room.id, memberId);
     if (waiting) return { sent: false, why: "limit", wait: waiting.wait };
     const held = q.find((t) => (!memberId || t.memberId === memberId) && this.heldForSettings(t.memberId));
     if (held) {
       const hold = this.heldOf(held.memberId) ?? { change: "other", helpers: true };
-      if (currentSettings && this.answerNow(held.memberId)) {
-        this.schedule(room.id);
-        return { sent: true };
-      }
       // Under an account switch or tighter permissions, "helpers": the old process never answers a message meant for the
       // new ones (it would run under the old account or permissions, and its session's records would be dropped). Said
       // first, so nobody is told to try again only to be told no. Otherwise "ownTurn": it's about to answer by itself what
@@ -1004,50 +1158,12 @@ export class Engine {
    * don't. The person works on while helpers run, for hours at a time, and the process as it is may answer around those
    * (mayAnswerAround), so their message starts at once, the chat says so once (noteAround), and the process is replaced
    * the first moment no helper and no reply runs (setTasks, finishRunning: memberChanged) however many messages keep coming.
-   *
-   * With "Keep going while helpers work" off those hold it too, so the new settings apply first, unless the person tapped
-   * Answer now (answerNow). An account switch or tighter permissions since take that tap back.
    */
   private heldForSettings(memberId: string): boolean {
     if (!this.replaceAfterTurn.has(memberId)) return false;
     // What it owes by itself comes first; so does what a new process carries on from (ownTurn stopped a reply for it).
     if (this.owedTurn(memberId) || this.handOvers.has(memberId)) return true;
-    if (!this.helpersRunning(memberId)) return false;
-    return !this.mayAnswerAround(memberId) || (!this.flows() && !this.answerAnyway.has(memberId));
-  }
-
-  /**
-   * The person tapped Answer now: a message held only because "Keep going while helpers work" is off goes now, by the agent
-   * as it is, and the new settings still apply once the helpers are done (startTurn says so in the chat). False for anything
-   * else that holds it: an account switch, tighter permissions, a new folder, what the process owes by itself (nobody is
-   * told it went only to be told no), or nothing at all.
-   */
-  private answerNow(memberId: string): boolean {
-    if (!this.heldForSettings(memberId) || !this.mayAnswerAround(memberId) || this.owedTurn(memberId) || this.handOvers.has(memberId)) return false;
-    this.answerAnyway.add(memberId);
-    log.info(`@${this.store.getMember(memberId)?.handle ?? memberId} answers now, before its new settings apply (asked to)`);
-    return true;
-  }
-
-  /** "Keep going while helpers work" (EngineDeps.messagesFlow): anything but off is on. */
-  private flows(): boolean {
-    return this.deps.messagesFlow?.() !== false;
-  }
-
-  /**
-   * "Keep going while helpers work" was just changed (App.setHubSettings). Turned on: what it was holding for settings the
-   * process may answer around goes now, each once, the way any message does: it starts a turn, or goes into the reply that's
-   * running, and the chat says so once per hold (noteAround). What must still wait goes on waiting. Turned off: nothing is
-   * taken back from anyone; it applies from the next look on, so a message still waiting falls under it, and one that was
-   * only waiting its turn says what holds it from now on (sayHeld).
-   */
-  flowChanged() {
-    if (!this.flows()) {
-      for (const q of this.queue.values()) for (const memberId of new Set(q.map((t) => t.memberId))) if (this.store.getMember(memberId)?.status === "queued") this.sayHeld(memberId);
-      return;
-    }
-    this.answerAnyway.clear();
-    for (const [roomId, q] of this.queue) for (const memberId of new Set(q.map((t) => t.memberId))) this.lookAgain(roomId, memberId);
+    return this.helpersRunning(memberId) && !this.mayAnswerAround(memberId);
   }
 
   /**
@@ -1055,10 +1171,10 @@ export class Engine {
    * heldForSettings): the process is replaced first if nothing it runs or owes keeps it any more (memberChanged), so the
    * turn never runs on what the person changed — even in the moment between its helpers' last word (or Claude Code saying
    * it's idle) and the hub hearing so. Where helpers still keep it, the turn runs on it as it is, and the chat says so
-   * (startTurn). Not when the person asked for an answer with the settings it started with (answerNow).
+   * (startTurn).
    */
   private applyHeld(memberId: string) {
-    if (this.replaceAfterTurn.has(memberId) && !this.answerAnyway.has(memberId)) void this.memberChanged(memberId, null);
+    if (this.replaceAfterTurn.has(memberId)) void this.memberChanged(memberId, null);
   }
 
   /** Its helpers are at work: running, or reported back with the report not taken up yet (their work isn't done till it is). */
@@ -1077,23 +1193,24 @@ export class Engine {
   }
 
   /**
-   * A message of yours waits behind this agent's reply while its helpers work: it goes into that reply as Send now would,
-   * with no tap, no bar and no button (helpers often work in the background while the person keeps iterating). A reply
-   * still starting can't take it yet ("notYet"), so it's asked again in a moment.
+   * A message of yours sent while this agent's reply runs goes into that reply (handToReply), to be read at its next
+   * step: no tap, no bar, no setting, whether or not its helpers are at work. (Until 0.8 only while helpers worked, and
+   * not with "Keep going while helpers work" off: anything else waited behind the reply for Send now.) Interrupt is the
+   * way to be read sooner (readNow). A reply still starting can't take it yet ("notYet"), so it's asked again in a moment.
    *
    * Where it can't go in, it goes by itself as the reply ends, never later: an agent with no mid-reply form, a summary
-   * being made, a reply being stopped, a command (it goes as typed, on its own). So does anything that Send now's hand-over
-   * would lose, which a tap can weigh up and this can't: it drops the waiting turn and counts everything so far as read, so
-   * a turn that also carries another agent's request, a review step or a note, or another agent's reply it hasn't read yet,
-   * goes as a turn. So does a message to a reply that isn't yours: a review step's reply is judged as a review and a reply to
-   * another agent goes to that agent, here or in another chat (xchat.ts sends back all that turn wrote after its message), so
-   * what's said to you there would go with it. On an account past its spending limit it goes as a turn too, which refuses it
-   * in the usual plain words: going in would only spend more. What may not be answered around (an account switch…) holds it,
-   * in plain words (handToReply's "settings"). Only your own message sets this off: another chat's agent's waits for the
-   * reply's end, or goes in with yours. With "Keep going while helpers work" off nothing goes in without a tap (Send now).
+   * being made, a reply being stopped, a command (it goes as typed, on its own). So does anything that the hand-over would
+   * lose: it drops the waiting turn and counts everything so far as read, so a turn that also carries another agent's
+   * request, a review step or a note, or another agent's reply it hasn't read yet, goes as a turn. So does a message to a
+   * reply that isn't yours: a review step's reply is judged as a review and a reply to another agent goes to that agent,
+   * here or in another chat (xchat.ts sends back all that turn wrote after its message), so what's said to you there would
+   * go with it. On an account past its spending limit it goes as a turn too, which refuses it in the usual plain words:
+   * going in would only spend more. What may not be answered around (an account switch, tighter permissions, a new
+   * folder) holds it, in plain words (handToReply's "settings"). Only your own message sets this off: another chat's
+   * agent's waits for the reply's end, or goes in with yours.
    */
   private flowIn(roomId: string, memberId: string) {
-    if (this.shuttingDown || !this.helpersAtWork(memberId) || !this.flows()) return;
+    if (this.shuttingDown) return;
     const waiting = (this.queue.get(roomId) ?? []).filter((t) => t.memberId === memberId) as QueuedTurn[];
     const r = [...this.running.values()].find((x) => x.turn.memberId === memberId);
     const room = this.store.getRoom(roomId);
@@ -1111,7 +1228,7 @@ export class Engine {
     if (member && this.deps.checkBudget?.(room, member)) return;
     void this.sendNowWhy(roomId, memberId)
       .then((sent) => {
-        if (sent.sent) log.info(`a message went into the running reply in ${room.name} by itself: its agent's helpers are at work`);
+        if (sent.sent) log.info(`a message went into the running reply in ${room.name} by itself`);
         if (sent.why === "notYet") this.flowLater(roomId, memberId);
       })
       .catch((e) => log.warn(`couldn't hand a message to @${memberId}'s running reply: ${e instanceof Error ? e.message : e}`));
@@ -1218,7 +1335,7 @@ export class Engine {
     return (this.heldOf(memberId)?.change ?? "settings") === "settings";
   }
 
-  /** The chat says a message is being answered by the agent as it is, while its new settings wait (Send now, Answer now). */
+  /** The chat says a message is being answered by the agent as it is, while its new settings wait for the reply it went into. */
   private answeringAround(room: Room, member: Member) {
     const name = room.chat?.group ? `@${member.handle}` : PROVIDER_INFO[member.provider]?.name ?? `@${member.handle}`;
     const replying = [...this.running.values()].some((r) => r.turn.memberId === member.id);
@@ -1243,7 +1360,7 @@ export class Engine {
   }
 
   /**
-   * "Read it now": the messages "Send now" handed to a chat's running reply wait for the step the agent is on (a long
+   * "Read it now" (the app's Interrupt): the messages that went into a chat's running reply wait for the step the agent is on (a long
    * command, say). This stops that step, so the agent reads them now and answers them in the same reply, once. False
    * when nothing handed over is waiting (it has read them), or the agent can't do it. `memberId`: as for sendNow.
    */
@@ -1345,7 +1462,7 @@ export class Engine {
       // One started fresh since (no conversation) has nothing to go back in, and nothing to forget: the message just goes.
       // Otherwise the way out is a fresh session, which the app offers.
       if (Object.keys(this.store.getMemberSession(member.id)).length > 0) {
-        throw new HttpError(409, `${e instanceof Error ? e.message : String(e)} Start fresh to unsend it: the agent starts a new conversation, and the messages here stay.`, "rewind_failed");
+        throw new HttpError(409, `${e instanceof Error ? e.message : String(e)} Start fresh to unsend it: the agent starts over without what it remembers, and the messages here stay.`, "rewind_failed");
       }
     }
     // The turn that brought a duplicated chat's agent the copied conversation was taken back: the next one brings it.
@@ -1419,8 +1536,8 @@ export class Engine {
     const going = readers.filter((x) => Object.keys(this.store.getMemberSession(x.id)).length > 0);
     for (const x of going) {
       // Starting it fresh gives it nothing to forget, so the others can go back.
-      if (!this.getDriver(room, x).rewind) throw new HttpError(409, `@${x.handle} can't go back to an earlier message. Start a fresh session for @${x.handle} in the chat's settings, then try again.`);
-      if (typeof refsOf(x)?.[m.id] !== "string") throw new HttpError(409, `@${x.handle} can't go back to before this message: it read it before this chat could go back. Start a fresh session for @${x.handle} in the chat's settings, then try again.`);
+      if (!this.getDriver(room, x).rewind) throw new HttpError(409, `@${x.handle} can't go back to an earlier message. Start @${x.handle} fresh in the chat's settings, then try again.`);
+      if (typeof refsOf(x)?.[m.id] !== "string") throw new HttpError(409, `@${x.handle} can't go back to before this message: it read it before this chat could go back. Start @${x.handle} fresh in the chat's settings, then try again.`);
     }
     const rewound = new Set<string>();
     for (const x of going) {
@@ -1430,7 +1547,7 @@ export class Engine {
       } catch (e) {
         // Agents that went back already did: the chat goes back with them, and says which one couldn't.
         // The way out is a fresh session: then it has nothing to forget, and the message can go (the app offers it).
-        if (!rewound.size) throw new HttpError(409, `@${x.handle} couldn't go back: ${e instanceof Error ? e.message : String(e)} Start fresh to unsend it: the agent starts a new conversation, and the messages here stay.`, "rewind_failed");
+        if (!rewound.size) throw new HttpError(409, `@${x.handle} couldn't go back: ${e instanceof Error ? e.message : String(e)} Start fresh to unsend it: the agent starts over without what it remembers, and the messages here stay.`, "rewind_failed");
         this.systemMessage(room.id, `@${x.handle} couldn't go back to before your message, so it still remembers it.`);
         continue;
       }
@@ -1480,34 +1597,32 @@ export class Engine {
   }
 
   /**
-   * "Try again" on a chat's failed reply, and "Answer now" on a message nothing answered. Messages of the user's the
-   * agent hasn't read get a turn. Otherwise its newest reply, when that failed, is tried again: the agent gets the
-   * messages it was answering once more, with a note to carry on from where it got to. Refused (409) while the agent
-   * works, and when its newest reply didn't fail (a later one answered). `currentSettings`: it's Answer now, so with "Keep
-   * going while helpers work" off it goes now on the agent as it is (answerNow); Try again waits like any message then, and
-   * the bar offers Answer now.
+   * "Try again" on a chat's failed reply, and on a message nothing answered ("Answer now" in older apps). Messages of
+   * the user's the agent hasn't read get a turn. Otherwise its newest reply, when that failed, is tried again: the agent
+   * gets the messages it was answering once more, with a note to carry on from where it got to. Refused (409) while the
+   * agent works, and when its newest reply didn't fail (a later one answered).
    */
-  retry(roomId: string, memberId: string | null = null, opts: { currentSettings?: boolean } = {}): Turn {
+  retry(roomId: string, memberId: string | null = null): Turn {
     const room = this.store.getRoom(roomId);
     if (!room?.chat) throw new HttpError(400, "Try again works in chats");
-    if (room.chat.group) return this.retryGroup(room, memberId, !!opts.currentSettings);
+    if (room.chat.group) return this.retryGroup(room, memberId);
     const member = this.store.listMembers(roomId)[0];
     if (!member) throw new HttpError(400, "This chat has no agent");
-    return this.retryMember(room, member, !!opts.currentSettings);
+    return this.retryMember(room, member);
   }
 
   /**
-   * Try again and Answer now in a group chat. For one agent (Try again under its failed reply): as in a chat with one
-   * agent. Otherwise (Answer now under your message): your newest message goes to whoever it's for that hasn't read it,
-   * and failing that, the agent whose reply failed last tries again.
+   * Try again in a group chat. For one agent (under its failed reply): as in a chat with one agent. Otherwise (under
+   * your message): your newest message goes to whoever it's for that hasn't read it, and failing that, the agent whose
+   * reply failed last tries again.
    */
-  private retryGroup(room: Room, memberId: string | null, currentSettings: boolean): Turn {
+  private retryGroup(room: Room, memberId: string | null): Turn {
     const members = this.store.listMembers(room.id);
     if (!members.length) throw new HttpError(400, "This chat has no agents");
     if (memberId) {
       const member = members.find((x) => x.id === memberId);
       if (!member) throw new HttpError(404, "That agent isn't in this chat any more.");
-      return this.retryMember(room, member, currentSettings);
+      return this.retryMember(room, member);
     }
     const yours = this.store.listMessages(room.id, { limit: 200 }).findLast((m) => m.authorKind === "human" && !m.via && m.text.trim());
     const who = yours ? this.targetsOf(room, members, yours).filter((x) => this.store.getLastSeen(x.id).seq < yours.seq) : [];
@@ -1519,9 +1634,7 @@ export class Engine {
       // would run straight into the same limit, and the wait would then answer the same message again later.
       const turns = who.map((x) => {
         const waiting = this.limitWaiting(room.id, x.id);
-        const turn = (waiting && this.carryOn(waiting, waiting.wait, "now")) || this.enqueue(room, x, yours.id, chainId, 0, null);
-        if (currentSettings) this.answerNow(x.id);
-        return turn;
+        return (waiting && this.carryOn(waiting, waiting.wait, "now")) || this.enqueue(room, x, yours.id, chainId, 0, null);
       });
       this.schedule(room.id);
       return turns[0];
@@ -1531,11 +1644,11 @@ export class Engine {
       .filter((e) => e.t?.status === "error")
       .sort((a, b) => (b.t!.startedAt ?? 0) - (a.t!.startedAt ?? 0))[0];
     if (!failed) throw new HttpError(409, "There's nothing to try again. Send a message to carry on.", "nothing");
-    return this.retryMember(room, failed.x, currentSettings);
+    return this.retryMember(room, failed.x);
   }
 
-  /** One agent's Try again (or Answer now): what of yours it hasn't read, else its newest reply if that failed. */
-  private retryMember(room: Room, member: Member, currentSettings: boolean): Turn {
+  /** One agent's Try again: what of yours it hasn't read, else its newest reply if that failed. */
+  private retryMember(room: Room, member: Member): Turn {
     const roomId = room.id;
     const name = room.chat?.group ? `@${member.handle}` : PROVIDER_INFO[member.provider]?.name ?? `@${member.handle}`;
     if (this.memberBusy(member.id)) throw new HttpError(409, `${name} is working on it already.`, "busy");
@@ -1543,11 +1656,7 @@ export class Engine {
     const waiting = this.limitWaiting(roomId, member.id);
     if (waiting) {
       const now = this.carryOn(waiting, waiting.wait, "now");
-      if (now) {
-        // It's Answer now under a message that waited with that reply: the same tap as below, where a hold kept it (carryOn).
-        if (currentSettings && this.answerNow(member.id)) this.schedule(roomId);
-        return now;
-      }
+      if (now) return now;
     }
     const seen = this.store.getLastSeen(member.id);
     const unread = this.store.messagesAfter(roomId, seen.seq).filter((m) => m.authorKind === "human" && m.text.trim());
@@ -1565,9 +1674,9 @@ export class Engine {
       // its conversation from that try, so taking one back later rewinds to before it, and the failed try goes too.
       turn = this.runAgain(room, member, last, `${REASON}Your last reply ended with an error, and the user asked you to try again. The messages it was answering are above again: finish what was asked, continuing from wherever you'd got to.`, newId("ch"));
     }
-    if (currentSettings) this.answerNow(member.id);
     this.schedule(roomId);
-    // Still held: what it had read may have just gone back (runAgain), and the app's bar goes by that (Member.readSeq).
+    // Still held (an account switch waits for its helpers, say): what it had read may have just gone back (runAgain), and
+    // the app goes by that (Member.readSeq).
     this.memberRead(member.id);
     return turn;
   }
@@ -1725,14 +1834,34 @@ export class Engine {
   /** Background work per agent (helpers it summoned, workflows), as its driver last reported it. */
   private tasks = new Map<string, { roomId: string; tasks: BackgroundTask[] }>();
 
+  /**
+   * Helpers Crosstalk itself runs for an agent on another account (helpers.ts), by the agent that started them. Listed
+   * with its own background work everywhere that is shown or counted (the Helpers panel, busy.json, what an update waits
+   * for), but never taken for work of its process: a settings change or an idle end doesn't wait for them.
+   */
+  private helperTasks = new Map<string, { roomId: string; tasks: BackgroundTask[] }>();
+
+  setHelperTasks(roomId: string, memberId: string, tasks: BackgroundTask[]) {
+    if (!tasks.length && !this.helperTasks.has(memberId)) return;
+    if (tasks.length) this.helperTasks.set(memberId, { roomId, tasks });
+    else this.helperTasks.delete(memberId);
+    this.bus.emit({ t: "tasks", roomId, memberId, tasks: this.allTasks(memberId) });
+  }
+
+  private allTasks(memberId: string): BackgroundTask[] {
+    const helpers = this.helperTasks.get(memberId)?.tasks;
+    const own = this.tasks.get(memberId)?.tasks ?? [];
+    return helpers?.length ? [...own, ...helpers] : own;
+  }
+
   private setTasks(roomId: string, memberId: string, tasks: BackgroundTask[]) {
     if (tasks.length || this.tasks.has(memberId)) {
       this.lastUsed.set(memberId, Date.now());
       if (tasks.length) this.tasks.set(memberId, { roomId, tasks });
       else this.tasks.delete(memberId);
-      this.bus.emit({ t: "tasks", roomId, memberId, tasks });
+      this.bus.emit({ t: "tasks", roomId, memberId, tasks: this.allTasks(memberId) });
     }
-    // A helper started with a message of yours waiting behind the reply: it goes on by itself from here.
+    // A message of yours still behind its reply (it couldn't take one a moment ago) gets another look.
     this.flowIn(roomId, memberId);
     if (!this.replaceAfterTurn.has(memberId)) return;
     // Its helpers finished, reported back or started, or a reply of its own was stopped (ownTurn): memberChanged looks
@@ -1759,6 +1888,7 @@ export class Engine {
   busyWork(): { roomId: string; memberId: string; why: "background" | "owed" }[] {
     const out: { roomId: string; memberId: string; why: "background" | "owed" }[] = [];
     for (const [memberId, v] of this.tasks) if (v.tasks.some((t) => t.status === "running")) out.push({ roomId: v.roomId, memberId, why: "background" });
+    for (const [memberId, v] of this.helperTasks) if (!out.some((o) => o.memberId === memberId) && v.tasks.some((t) => t.status === "running")) out.push({ roomId: v.roomId, memberId, why: "background" });
     for (const memberId of this.drivers.keys()) {
       // Owed: a wake-up its process will answer, or a reply of its own being stopped for new settings.
       if (!this.owedTurn(memberId) && !this.handOvers.has(memberId)) continue;
@@ -1771,8 +1901,85 @@ export class Engine {
   /** Each agent's background work in a room, for a client loading it. */
   tasksIn(roomId: string): Record<string, BackgroundTask[]> {
     const out: Record<string, BackgroundTask[]> = {};
-    for (const [memberId, v] of this.tasks) if (v.roomId === roomId) out[memberId] = v.tasks;
+    for (const [memberId, v] of this.tasks) if (v.roomId === roomId) out[memberId] = this.allTasks(memberId);
+    for (const [memberId, v] of this.helperTasks) if (v.roomId === roomId) out[memberId] ??= this.allTasks(memberId);
     return out;
+  }
+
+  // ---- For helpers on another account (helpers.ts) ----
+
+  /** The member's reply that is running now, if one is. */
+  runningTurnOf(memberId: string): Turn | null {
+    return [...this.running.values()].find((r) => r.turn.memberId === memberId && !r.stopping)?.turn ?? null;
+  }
+
+  /**
+   * A helper wants to do something above what its chat allows without asking: a card in that chat, as the agent's own
+   * requests are. On the agent's running reply when there is one (its status says it waits for you, and Stop closes the
+   * card); otherwise on the reply that started the helper (`turnId`), where the chat shows it. `signal`: the helper is
+   * over, and the card closes.
+   */
+  helperApproval(memberId: string, turnId: string | null, req: { kind: Approval["kind"]; title: string; detail: string }, signal: AbortSignal): Promise<ApprovalDecision> {
+    const member = this.store.getMember(memberId);
+    const room = member ? this.store.getRoom(member.roomId) : null;
+    if (!member || !room || signal.aborted || this.shuttingDown) return Promise.resolve("deny");
+    // Its own card, not the running reply's: a reply that ends while the helper works on doesn't take the card with it
+    // (Stop does, by ending the helper). "Always allow" would be a rule for the chat's own agent: it's allowed once.
+    const replying = () => [...this.running.values()].find((x) => x.turn.memberId === memberId && !x.stopping);
+    const r = replying();
+    const approval: Approval = { id: newId("ap"), roomId: room.id, memberId, turnId: r?.turn.id ?? turnId, kind: req.kind, title: req.title, detail: req.detail, status: "pending", decision: null, decidedBy: null, createdAt: Date.now(), decidedAt: null, questions: null, answers: null, always: null };
+    this.store.insertApproval(approval);
+    this.bus.emit({ t: "approval", approval });
+    if (r) {
+      r.lastSignalAt = Date.now();
+      this.setMemberStatus(memberId, "approval", req.title.slice(0, 120));
+    }
+    return new Promise<ApprovalDecision>((resolve) => {
+      const settle = (d: ApprovalDecision) => {
+        // The agent's reply that waits for this helper is working again, unless another card of its is open.
+        const now = replying();
+        if (now && this.store.getMember(memberId)?.status === "approval" && ![...this.pending.values()].some((p) => p.approval.memberId === memberId)) {
+          now.lastSignalAt = Date.now();
+          this.setMemberStatus(memberId, "working", null);
+        }
+        resolve(d);
+      };
+      const pending: PendingApproval = { approval, resolve: settle, turnId: null };
+      this.pending.set(approval.id, pending);
+      const expire = () => {
+        if (this.pending.get(approval.id) !== pending) return;
+        this.pending.delete(approval.id);
+        const a = this.store.updateApproval(approval.id, { status: "expired", decidedAt: Date.now() });
+        if (a) this.bus.emit({ t: "approval", approval: a });
+        settle("deny");
+      };
+      pending.expire = expire;
+      signal.addEventListener("abort", expire, { once: true });
+    });
+  }
+
+  /**
+   * Something the agent must be told that it isn't waiting for in a reply (a helper on another account reported back
+   * after the reply ended): a line in the chat saying why (`say`), then a reply of its own whose prompt is `note`, with
+   * `steps` shown under that reply (the report itself, folded). An ordinary queued turn: it waits its place, goes through
+   * the same limits and holds, and joins a turn already waiting for this agent. False when the agent or its chat is gone.
+   */
+  wake(memberId: string, note: string, say: string | null, steps: { title: string; detail: string }[] = []): boolean {
+    const member = this.store.getMember(memberId);
+    const room = member ? this.store.getRoom(member.roomId) : null;
+    if (!member || !room || room.archived || this.shuttingDown) return false;
+    if (say) this.systemMessage(room.id, say);
+    const turn = this.enqueue(room, member, null, newId("ch"), 0, `${REASON}${note}`, "human", true) as QueuedTurn;
+    if (steps.length) turn.steps = [...(turn.steps ?? []), ...steps];
+    this.schedule(room.id);
+    return true;
+  }
+
+  /** The same for the agent's next turn, whenever that is: nothing starts by itself (after a Stop, say). Kept across restarts. */
+  carry(memberId: string, note: string) {
+    if (!this.store.getMember(memberId)) return;
+    const had = this.carryNotes.get(memberId);
+    this.setCarried(memberId, had ? `${had}\n\n${note}` : note);
   }
 
   /**
@@ -1811,7 +2018,7 @@ export class Engine {
     const now = Date.now();
     const turn: Turn = { id: newId("t"), roomId: room.id, memberId: member.id, triggerMessageId: null, replyMessageId: null, hop: 0, chainId: newId("ch"), origin: "human", status: "running", error: null, usage: null, createdAt: now, startedAt: now, endedAt: null };
     this.store.insertTurn(turn);
-    // What "Send now" handed to its last reply as that ended is answered here: this turn read it.
+    // What went into its last reply as that ended is answered here: this turn read it.
     const handed = this.takeHandedOver(member.id);
     if (handed.length) {
       this.markRelaysRead(handed, turn.id);
@@ -1846,7 +2053,7 @@ export class Engine {
       // Its sign-in stopped working: there's nothing to send again, so the check says what to do (staleOwnTurn).
       .then((result) => (!result.ok && result.auth ? this.staleOwnTurn(room, member, state, sink, result) : result))
       .then((result) => this.finishRunning(room.id, member, state, result));
-    // A message of yours that waited for this reply goes into it, if other helpers still work (once the driver has it).
+    // A message of yours that waited for this reply goes into it (once the driver has it).
     setTimeout(() => this.flowIn(room.id, member.id), 0);
     return true;
   }
@@ -1930,19 +2137,19 @@ export class Engine {
 
   /**
    * Replies of its own a process was stopped from, or what it owed, when it went for settings it may not answer on
-   * (ownTurn, memberChanged), by member: "report" (its helpers reported back), "message" (one Send now handed its last
-   * reply), "other" (it started on something by itself).
+   * (ownTurn, memberChanged), by member: "report" (its helpers reported back), "message" (one that went into its last
+   * reply as it ended), "other" (it started on something by itself).
    */
   private handOvers = new Map<string, Set<"report" | "message" | "other">>();
 
   /**
-   * What the agent's last process owed (its helpers' report, a message Send now handed its last reply), or had started
+   * What the agent's last process owed (its helpers' report, a message that went into its last reply), or had started
    * on by itself, goes on after that process went for settings it may not answer on. It took that into the session as
    * its reply started (ownTurn stopped the reply before it did anything), so the new process resumes the session and is
    * told to carry on from there, and the chat says so. `replaced`: a new process with the new settings, as against the
    * same one when the change was undone meanwhile. An account switch starts a fresh session without the conversation:
    * nothing carries over, and the chat says what wasn't answered; a message handed over is the person's again (unread,
-   * with Answer now under it), for the new account.
+   * with Try again under it), for the new account.
    */
   private carryOver(member: Member, change: HeldChange, carried: Set<"report" | "message" | "other">, handed: { messages: Message[]; at: number } | undefined, replaced: boolean) {
     const room = this.store.getRoom(member.roomId);
@@ -1953,8 +2160,8 @@ export class Engine {
     if (change === "account") {
       if (handed?.messages.length) this.giveBack(member, handed.messages);
       const what = report ? `${name}'s helpers reported back` : message ? `${name} was about to answer the message you sent` : `${name} had started on something by itself`;
-      const lost = report ? "their report wasn't answered: ask again if you still need it" : message ? "that message wasn't answered: tap Answer now under it to send it to the new account" : "it didn't carry on: ask again if you still need it";
-      this.systemMessage(room.id, `${what} after you switched accounts. The new account starts a fresh session without that conversation, so ${lost}.`);
+      const lost = report ? "their report wasn't answered: ask again if you still need it" : message ? "that message wasn't answered: tap Try again under it to send it to the new account" : "it didn't carry on: ask again if you still need it";
+      this.systemMessage(room.id, `${what} after you switched accounts. The new account starts fresh, without what was said before, so ${lost}.`);
       log.info(`@${member.handle} in ${room.name}: what its old account's process owed doesn't carry over to the fresh session (${[...carried].join(", ")})`);
       return;
     }
@@ -1968,7 +2175,7 @@ export class Engine {
           : message
             ? `The user's message above came in as your last reply ended, and ${why}. Answer it now.`
             : `You had started on something by yourself (above), and ${why}. Carry on with it, ${redo}.`;
-    // What Send now handed the old process is read by the reply below (it's in the conversation already: it isn't sent again).
+    // What went into the old process's reply is read by the reply below (it's in the conversation already: it isn't sent again).
     if (handed?.messages.length) this.handedOver.set(member.id, { messages: handed.messages, at: Date.now() });
     this.enqueue(room, member, null, newId("ch"), 0, `${REASON}${note}`, "human", true);
     const goesOn = report && message ? "answers the message you sent and carries on from their report" : report ? "carries on from their report" : message ? "answers the message you sent" : "carries on with it";
@@ -1987,7 +2194,6 @@ export class Engine {
   private dropHold(memberId: string) {
     const was = this.replaceAfterTurn.delete(memberId);
     this.aroundSaid.delete(memberId);
-    this.answerAnyway.delete(memberId);
     this.outsideChanges.delete(memberId);
     this.appliedNotes.delete(memberId);
     this.handOvers.delete(memberId);
@@ -2033,7 +2239,7 @@ export class Engine {
 
   /**
    * Forget a member's provider session so its next turn starts fresh. It stops what the agent was doing. In a chat, a
-   * message of the user's it hadn't read yet stays unread: nothing answers it until they ask (Answer now), and then the
+   * message of the user's it hadn't read yet stays unread: nothing answers it until they ask (Try again), and then the
    * fresh session gets it.
    */
   async resetSession(member: Member) {
@@ -2054,7 +2260,7 @@ export class Engine {
         const updated = this.store.getMember(member.id);
         if (updated) this.bus.emit({ t: "member", member: updated });
       }
-      this.systemMessage(member.roomId, `@${member.handle} will start a fresh session on its next turn.`);
+      this.systemMessage(member.roomId, `@${member.handle} starts fresh with its next reply.`);
     } finally {
       this.resetting.delete(member.id);
       this.schedule(member.roomId);
@@ -2232,20 +2438,15 @@ export class Engine {
     q.push(turn);
     this.queue.set(room.id, q);
     this.bus.emit({ t: "turn", turn });
-    if ((member.status === "idle" || member.status === "error" || member.status === "waiting") && !this.sayHeld(member.id)) this.setMemberStatus(member.id, "queued", null);
+    if (member.status === "idle" || member.status === "error" || member.status === "waiting") {
+      // A turn that waits for the agent's helpers so a change applies first (an account switch, tighter permissions, a new
+      // folder) says so however it got here (Stop, then Try again; an unsend; a refusal), as it does when a reply ends
+      // under the hold (memberChanged): "queued" alone would leave nothing on screen but whose turn is next.
+      const held = this.heldForSettings(member.id) && this.helpersRunning(member.id) ? this.heldOf(member.id) : null;
+      if (held) this.setMemberStatus(member.id, "working", `Finishing helpers before ${heldWords(held.change)}`);
+      else this.setMemberStatus(member.id, "queued", this.memoryHeld() ? MEMORY_WAIT : null);
+    }
     return turn;
-  }
-
-  /**
-   * With "Keep going while helpers work" off, a turn held for the agent's helpers says so in its status however it got there
-   * (Stop everything, an unsend, a usage limit's wait, a refusal), as it does when a reply ends under the hold (memberChanged):
-   * the app's bar and its Answer now go by that (sendNow.ts), and "queued" leaves nothing but "Next: @tester". False when
-   * nothing holds it that way.
-   */
-  private sayHeld(memberId: string): boolean {
-    const held = !this.flows() && this.heldForSettings(memberId) && this.helpersRunning(memberId) ? this.heldOf(memberId) : null;
-    if (held) this.setMemberStatus(memberId, "working", `Finishing helpers before ${heldWords(held.change)}`);
-    return !!held;
   }
 
   private schedule(roomId: string) {
@@ -2256,6 +2457,9 @@ export class Engine {
       this.queue.delete(roomId);
       return;
     }
+    // The machine is nearly out of memory and agents are what fills it: nothing new starts until there is room again
+    // (memoryHoldChanged looks at every queue then). What is running goes on; what waits says so.
+    if (q.length && this.memoryHeld()) return this.sayMemoryWait(q);
     const runningHere = [...this.running.values()].filter((r) => r.turn.roomId === roomId);
     if (!room.parallel) {
       if (runningHere.length || !q.length) return this.checkIdle();
@@ -2331,11 +2535,10 @@ export class Engine {
 
   /**
    * Why a turn is refused before it starts, in plain words with a way out: a chat's folder that's gone (made again when
-   * Crosstalk can, with a note), a spending limit that's used up, or a model server of the user's own that isn't running
-   * (the model pool), instead of letting the agent fail on a refused connection. Null when it may start.
+   * Crosstalk can, with a note) or a spending limit that's used up. Null when it may start.
    */
   private startProblem(room: Room, member: Member): string | null {
-    return this.deps.checkFolder?.(room) ?? this.deps.checkBudget?.(room, member) ?? this.deps.checkEndpoint?.(room, member) ?? null;
+    return this.deps.checkFolder?.(room) ?? this.deps.checkBudget?.(room, member) ?? null;
   }
 
   private async startTurn(room: Room, queued: Turn) {
@@ -2362,17 +2565,9 @@ export class Engine {
     const notesPassed = this.notesPassed.get(member.id) ?? 0;
     const newMessages = fetched.filter((m) => m.seq > notesPassed || !this.forPerson.has(m.id));
     // Answered by a process whose new settings wait for its helpers: the chat says so, under the message and above the
-    // reply. Only now, after what this turn reads: it's for the person, and in a group chat's digest it would be the newest
-    // thing this agent reads, after the message it's to answer. Once per hold when it went by itself; a tap (answerNow) is
-    // said each time, unless the turn is refused (below): then nothing is answering.
-    let startProblem: string | null = null;
-    if (this.replaceAfterTurn.has(member.id)) {
-      if (this.answerAnyway.has(member.id)) {
-        startProblem = this.startProblem(room, member);
-        if (!startProblem) this.answeringAround(room, member);
-      } else this.noteAround(room, member);
-    }
-    this.answerAnyway.delete(member.id);
+    // reply, once per hold. Only now, after what this turn reads: it's for the person, and in a group chat's digest it would
+    // be the newest thing this agent reads, after the message it's to answer.
+    if (this.replaceAfterTurn.has(member.id)) this.noteAround(room, member);
     const extra = this.deps.briefing?.(room, member) ?? null;
     const roster = rosterHash(room, members, extra);
     const session = this.store.getMemberSession(member.id);
@@ -2427,7 +2622,7 @@ export class Engine {
     }
 
     // Checked (and made again when Crosstalk can) before the reply starts, so a note about it comes first.
-    startProblem ??= this.startProblem(room, member);
+    const startProblem = this.startProblem(room, member);
     const reply = this.insertMessage({
       roomId: room.id,
       authorKind: "agent",
@@ -2485,6 +2680,8 @@ export class Engine {
     this.lastUsed.set(member.id, Date.now());
 
     const sink = this.makeSink(room, member, state);
+    // What this turn was woken with (a helper's report): shown under the reply, folded like any step.
+    for (const step of (queued as QueuedTurn).steps ?? []) sink.activity({ kind: "tool", title: step.title, detail: step.detail, status: "done" });
     let result: TurnResult;
     try {
       // What a rewind to each message goes back to before: this turn, except for those the agent took in before (and, in a
@@ -2812,7 +3009,7 @@ export class Engine {
     if (!this.running.has(state.turn.id)) return; // already finalized (e.g. forced stop)
     this.running.delete(state.turn.id);
     this.lastUsed.set(member.id, Date.now());
-    // What Send now (or a message going in by itself) handed this reply and its agent will never read: Crosstalk's own
+    // What went into this reply (handToReply) and its agent will never read: Crosstalk's own
     // agent's reply failed, was stopped or ran out of steps, Codex's stopped or failed turn dropped it, a Stop took it back out
     // of Claude Code's queue or it went with its process (AgentDriver.takeUnread). Taken out of the driver now, whatever
     // happens next, so no later reply of the same process reads it as well as the one that delivers it again. Given back
@@ -2833,7 +3030,9 @@ export class Engine {
       }
     }
 
-    const stopped = state.stopping || state.abort.signal.aborted;
+    // Stopped by Crosstalk itself, with a reason (stopForMemory): a failed reply that says why, with Try again.
+    if (state.failAs) result = { ok: false, error: state.failAs };
+    const stopped = !state.failAs && (state.stopping || state.abort.signal.aborted);
     // A usage or rate limit stopped it: the reply waits for the reset and carries on by itself instead of failing. Once
     // Crosstalk has waited as long as it will, it fails here, in plain words, with Try again.
     const askedNow = this.carriedOn.get(state.turn.id)?.why === "now";
@@ -2855,13 +3054,7 @@ export class Engine {
     if (stopped) status = "stopped";
     else if (!result.ok) {
       status = "error";
-      // Its model server went away under it (the model pool stopped): the chat says that, with a way out, instead of
-      // the agent's own connection error. Anything the agent had already written stays, with the note after it. A reply
-      // that gave up on a usage limit keeps the limit's own words: that's what happened to it.
-      const gone = limited ? null : this.deps.replyFailed?.(member) ?? null;
-      if (gone) result = { ...result, error: gone };
-      if (gone && text) text = `${text}\n\n⚠️ ${gone}`;
-      else if (!text) text = result.error ? `⚠️ ${result.error}` : "⚠️ The agent stopped with an error.";
+      if (!text) text = result.error ? `⚠️ ${result.error}` : "⚠️ The agent stopped with an error.";
     }
     if (where) text = this.finishReply(where, text);
     const members = this.store.listMembers(roomId);
@@ -2900,7 +3093,7 @@ export class Engine {
     }
     this.bus.emit({ t: "turn", turn });
     // Handed to it and never read, by an agent that won't read them by itself (unread, above): the person's again, unread,
-    // so Try again, Answer now or their next message brings them along. Such a message, sent while Crosstalk's own agent's
+    // so Try again or their next message brings them along. Such a message, sent while Crosstalk's own agent's
     // request was in flight, used to stay only in its driver when the service refused the model: counted read, and gone
     // with the driver once the person picked another model, as the words told them to. Asked to stop and answer it, it's
     // answered next. (By id: a driver can find one out late, that the reply has split below already.)
@@ -2910,13 +3103,10 @@ export class Engine {
       if (back.length) {
         this.giveBack(member, back);
         const yours = where?.chat?.group ? back.filter((m) => this.targetsOf(where, members, m).some((x) => x.id === member.id)) : back;
-        if (where && state.answerHanded && yours.length) {
-          this.enqueue(where, member, yours[yours.length - 1].id, newId("ch"), 0, null);
-          this.answerNow(member.id);
-        }
+        if (where && state.answerHanded && yours.length) this.enqueue(where, member, yours[yours.length - 1].id, newId("ch"), 0, null);
       }
     }
-    // "Send now" handed it messages as it ended, too late to read them: the agent answers them in its next turn.
+    // Messages went into it as it ended, too late to read them: the agent answers them in its next turn.
     if (status === "done" && state.steered?.length) this.handedOver.set(member.id, { messages: state.steered, at: Date.now() });
     // It failed before the agent got the messages (a Claude Code session open in the Claude app, a CLI that couldn't
     // start): they're the user's again, unread. Take back and Edit just change them, the next message brings them
@@ -2936,6 +3126,13 @@ export class Engine {
       else this.setMemberStatus(member.id, stillQueued ? "queued" : "idle", null);
     }
     this.replyEnded(roomId, stopped);
+    if (where) {
+      try {
+        this.deps.replyOver?.(where, member, status);
+      } catch (e) {
+        log.warn(`helpers after @${member.handle}'s reply: ${e instanceof Error ? e.message : e}`);
+      }
+    }
 
     // Driver settings may have changed mid-turn.
     const changed =
@@ -3028,7 +3225,7 @@ export class Engine {
     if (!mentionIds.every(fits)) {
       if (!this.noticedChains.has(chainId)) {
         this.noticedChains.add(chainId);
-        this.systemMessage(room.id, `Hand-off limit reached (${room.maxHops}). Reply to keep the agents going, or raise the limit in room settings.`);
+        this.systemMessage(room.id, `Hand-off limit reached (${room.maxHops}). Reply to keep the agents going, or raise the limit in the chat's settings.`);
       }
       mentionIds = mentionIds.filter(fits);
       if (!mentionIds.length) return;
@@ -3074,7 +3271,7 @@ export class Engine {
     if (nextHop + (toReviewer ? 0 : 1) > room.maxHops) {
       if (!this.noticedChains.has(turn.chainId)) {
         this.noticedChains.add(turn.chainId);
-        this.systemMessage(room.id, `Review loop paused after ${turn.hop} hand-offs without approval. Reply to keep going, or raise the limit in room settings.`);
+        this.systemMessage(room.id, `Review loop paused after ${turn.hop} hand-offs without approval. Reply to keep going, or raise the limit in the chat's settings.`);
       }
       return;
     }
@@ -3270,7 +3467,7 @@ export class Engine {
     const room = this.store.getRoom(roomId);
     // Chats only: a room's automatic hand-offs have "Pause near usage limits" for this, and no one waits on them.
     if (!room?.chat || room.archived) return null;
-    // Already waiting with another reply (a turn that was queued behind it, a message from another chat, Answer now):
+    // Already waiting with another reply (a turn that was queued behind it, a message from another chat, Try again):
     // that wait carries these messages on as well, and a second one would answer them twice over.
     const already = this.waitOf(member.id);
     if (already && already.id !== state.turn.id) return { wait: already.wait, folded: true };
@@ -3489,7 +3686,7 @@ export class Engine {
    * is said, not dropped (stoppedWork). What the fresh process is given depends on what the old one got done
    * (staleRetry): the same input when it had done nothing yet, else a note to carry on from where it got to, because
    * the conversation it resumes holds that work and the same request again could do it twice (a push, a message sent).
-   * Messages "Send now" handed the old process go with it too, never with the old process. Never twice: when the fresh
+   * Messages that had gone into the old process's reply go with it too, never with the old process. Never twice: when the fresh
    * process fails the same way, the agent's own sign-in check is asked; signed out, every chat and device hears so
    * (SignInHooks.needed) and the reply says how to sign in from the phone. An agent with no sign-in at all, or an
    * account already known to be signed out, is checked first: a fresh process only helps once it's signed in again.
@@ -3508,7 +3705,7 @@ export class Engine {
       if (gone()) return { ok: false, error: "stopped" };
       if (signedIn === false) return { ok: false, error: hooks.needed(room, member), auth: hit };
     }
-    // The old process goes, and with it what it ran in the background (said in the note). What Send now handed it goes
+    // The old process goes, and with it what it ran in the background (said in the note). What had gone into its reply goes
     // to the fresh one instead; until that has it, it's the person's again (giveBack).
     const old = state.driver;
     const lost = this.stoppedWork(member, old);
@@ -3551,7 +3748,7 @@ export class Engine {
       giveBack();
       return { ok: false, error: `Couldn't start ${agent} again: ${e instanceof Error ? e.message : e}` };
     }
-    log.info(`@${member.handle} in ${room.name}: started ${agent} again so it reads its sign-in afresh${retry.worked ? ", to carry on from where it got to" : ""}${handed.length ? `, with ${handed.length} message(s) Send now had handed it` : ""}`);
+    log.info(`@${member.handle} in ${room.name}: started ${agent} again so it reads its sign-in afresh${retry.worked ? ", to carry on from where it got to" : ""}${handed.length ? `, with ${handed.length} message(s) that had gone into its reply` : ""}`);
     state.driver = fresh;
     state.lastSignalAt = Date.now();
     // The note says it carried on as soon as the fresh process writes or does anything.
@@ -3570,7 +3767,7 @@ export class Engine {
         return sink.activity(a);
       },
     };
-    // Send now's messages are read with this input: what the agent writes from here answers them, below them in the chat,
+    // Those messages are read with this input: what the agent writes from here answers them, below them in the chat,
     // as when it reads one mid-reply.
     const next = handed.length ? this.withHanded(room, member, retry.input, handed) : retry.input;
     if (handed.length) {
@@ -3624,7 +3821,7 @@ export class Engine {
     };
   }
 
-  /** `input` with the messages Send now had handed the old process, as Send now words them (sendNowWhy). */
+  /** `input` with the messages that had gone into the old process's reply, worded as they were then (handToReply). */
   private withHanded(room: Room, member: Member, input: TurnInput, handed: Message[]): TurnInput {
     const members = room.chat?.group ? this.store.listMembers(room.id) : [];
     const labelled = handed.map((m) => ({ ...m, seq: m.seq ?? this.store.messageSeq(m.id) }));
@@ -3633,7 +3830,7 @@ export class Engine {
   }
 
   /**
-   * Messages Send now handed a process that ended before it read them, and that no other process got: they're the
+   * Messages that went into the reply of a process that ended before it read them, and that no other process got: they're the
    * person's again, unread, so the next message or Try again brings them along.
    */
   private giveBack(member: Member, handed: Message[]) {
@@ -3644,7 +3841,7 @@ export class Engine {
     this.store.setLastSeen(member.id, first - 1, seen.rosterVersion, seen.pending);
     this.notesPassed.set(member.id, this.store.maxSeq(member.roomId));
     this.memberRead(member.id);
-    log.info(`@${member.handle}: ${handed.length} message(s) Send now had handed a process that ended are unread again`);
+    log.info(`@${member.handle}: ${handed.length} message(s) that went into the reply of a process that ended are unread again`);
   }
 
   /**
@@ -3811,8 +4008,9 @@ export class Engine {
    * approval, or holds a message handed to its last reply; the driver can also refuse (a Claude Code session that's open
    * in the Claude app too).
    */
-  private endIdle(idleMs: number) {
-    if (this.shuttingDown) return;
+  private endIdle(idleMs: number): number {
+    if (this.shuttingDown) return 0;
+    let ended = 0;
     const now = Date.now();
     for (const [memberId, d] of [...this.drivers]) {
       const idleFor = now - (this.lastUsed.get(memberId) ?? 0);
@@ -3833,19 +4031,22 @@ export class Engine {
       const m = this.store.getMember(memberId);
       log.info(`ended ${m ? `@${m.handle}'s` : "an"} agent process after ${duration(idleFor)} with nothing to do: its next message resumes the session`);
       void d.dispose().catch(() => {});
+      ended++;
     }
+    return ended;
   }
 
-  private async stopRunning(r: Running) {
+  private async stopRunning(r: Running, failAs?: string) {
     if (r.stopping) return;
     r.stopping = true;
+    if (failAs) r.failAs = failAs;
     r.abort.abort();
     const graceful = r.driver.interrupt().catch(() => {});
     // Give the agent a moment to wind down, then finalize regardless.
     await Promise.race([graceful, Bun.sleep(4000)]);
     const member = this.store.getMember(r.turn.memberId);
     if (this.running.has(r.turn.id) && member) {
-      this.finishRunning(r.turn.roomId, member, r, { ok: false, error: "stopped" });
+      this.finishRunning(r.turn.roomId, member, r, { ok: false, error: failAs ?? "stopped" });
     }
   }
 
@@ -3869,6 +4070,11 @@ export class Engine {
 
   private finishTurnRecord(t: Turn, status: Turn["status"], error: string | null) {
     const turn = this.store.updateTurn(t.id, { status, error, endedAt: Date.now() });
+    // Why a reply failed is in the log too: the chat shows it once, the log is what's read afterwards.
+    if (status === "error") {
+      const m = this.store.getMember(t.memberId);
+      log.warn(`a reply of ${m ? `@${m.handle} (${PROVIDER_INFO[m.provider]?.name ?? m.provider})` : t.memberId} failed: ${(error ?? "it didn't say why").replace(/\s+/g, " ").slice(0, 300)}`);
+    }
     if (turn) this.bus.emit({ t: "turn", turn });
   }
 
@@ -3950,7 +4156,7 @@ export class Engine {
 
   private mustRoom(id: string): Room {
     const r = this.store.getRoom(id);
-    if (!r) throw new HttpError(404, "room not found");
+    if (!r) throw new HttpError(404, "That chat isn't here any more.");
     return r;
   }
 }

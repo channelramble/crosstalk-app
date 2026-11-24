@@ -7,6 +7,7 @@
 // The port and the tokens are kept in the database, so a restarted hub answers the address a still-loaded Codex thread remembers.
 // The translation itself (translate.ts) is plain functions; this file is the server, the upstream call and the plain-words errors.
 
+import { settingsPath } from "@crosstalk/shared";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import type { Provider } from "@crosstalk/shared";
 import type { App } from "../app";
@@ -211,9 +212,9 @@ function upstreamProblem(status: number, raw: string, label: string, model: stri
   // still says so.
   const refused = status === 403 ? saidByService(raw) : "";
   if (/gated|licen[cs]e/i.test(refused)) return stop(`${label} won't run ${model} until you agree to that model's licence on ${label}'s own website. Open the model there, agree, then try again.`);
-  if (/\bplan\b|not available/i.test(refused)) return stop(`${label} says ${model} isn't included in your plan. Pick another model in Settings → AI services, or change your plan with ${label}.`);
-  if (status === 401 || status === 403) return stop(`${label} refused this key. Paste a working key in Settings → AI services, then try again.`);
-  if (status === 404) return stop(`${label} has no model called "${model}" at that address. Check the model name and address in Settings → AI services.`);
+  if (/\bplan\b|not available/i.test(refused)) return stop(`${label} says ${model} isn't included in your plan. Pick another model in ${settingsPath("ai-services")}, or change your plan with ${label}.`);
+  if (status === 401 || status === 403) return stop(`${label} refused this key. Paste a working key in ${settingsPath("ai-services")}, then try again.`);
+  if (status === 404) return stop(`${label} has no model called "${model}" at that address. Check the model name and address in ${settingsPath("ai-services")}.`);
   if (status === 429) {
     if (/quota|billing|credit|exceeded your/i.test(raw)) return stop(`${label} says you're out of quota or credit. Add credit with ${label}, then try again.`);
     // The wait goes into the words: Codex retries this itself, and if it gives up the hub reads the time back out
@@ -246,7 +247,7 @@ function upstreamProblem(status: number, raw: string, label: string, model: stri
   // Not `server_error`: Codex answers that by re-sending the whole prompt six times (NO_RETRY). The adapter has already tried
   // the server a second time by now (callUpstream), which is the retry that doesn't cost a second copy of the request.
   if (status >= 500) return stop(`${label} had a problem (error ${status}). Try again in a moment.`);
-  return stop(`${label} refused the request${why ? `: ${why}` : ""}. Check the model and settings in Settings → AI services.`);
+  return stop(`${label} refused the request${why ? `: ${why}` : ""}. Check the model and settings in ${settingsPath("ai-services")}.`);
 }
 
 export class ChatAdapter {
@@ -381,7 +382,7 @@ export class ChatAdapter {
       if (req.method !== "POST") return httpError(405, "method_not_allowed", "Use POST.");
       carriesPrompt = true;
       const ep = this.app.providers.endpointOf("codex", id);
-      if (ep?.protocol !== "chat") return refusePrompt("This AI service isn't set up for the chat adapter any more. Start the chat again, or check it in Settings → AI services.");
+      if (ep?.protocol !== "chat") return refusePrompt(`This account isn't set up for the chat adapter any more. Start the chat again, or check it in ${settingsPath("ai-services")}.`);
       let body: unknown;
       try {
         body = await req.json();
@@ -547,7 +548,7 @@ export class ChatAdapter {
       // A 200 with nothing in it that was an event: a server that ignored `stream: true` and answered in one piece, or
       // something in between answering for it. Saying it "dropped the connection" would send the person after a network
       // fault, and these are the two shapes that had Codex re-sending one identical request 92 times.
-      if (!events && !sawDone) return fail(stop(`${ep.label} didn't answer as a stream, so Crosstalk couldn't read its reply. Check the address and the model in Settings → AI services.`));
+      if (!events && !sawDone) return fail(stop(`${ep.label} didn't answer as a stream, so Crosstalk couldn't read its reply. Check the address and the model in ${settingsPath("ai-services")}.`));
       for (const e of map.end(sawDone)) send(e);
     } catch (e) {
       const why = up.signal.reason;
@@ -557,7 +558,7 @@ export class ChatAdapter {
       else if (why === SHUTTING_DOWN) fail(stop(`Crosstalk restarted while ${ep.label} was answering, so this reply stopped part way. Try again.`));
       else if (e instanceof UpstreamError) fail(stop(`${ep.label} stopped with an error: ${e.message.replace(/[.!?\s]+$/, "")}. Try again.`));
       else if (connected) fail(stop(`${ep.label} dropped the connection before it finished. Try again.`));
-      else fail(stop(`Couldn't reach ${ep.label} at ${new URL(ep.baseUrl).host}. Check that it's running and that the address in Settings → AI services is right.`));
+      else fail(stop(`Couldn't reach ${ep.label} at ${new URL(ep.baseUrl).host}. Check that it's running and that the address in ${settingsPath("ai-services")} is right.`));
       log.warn(`${ep.label}: ${String(e instanceof Error ? e.message : e).slice(0, 200)}`);
     } finally {
       clearTimeout(timer);

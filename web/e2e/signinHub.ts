@@ -27,7 +27,6 @@ for (const key of Object.keys(process.env)) if (key.startsWith("CROSSTALK_") || 
 process.env.CROSSTALK_TAILSCALE_BIN = join(dir, "no-tailscale");
 process.env.CROSSTALK_TAILSCALE_APP_DIR = join(dir, "no-tailscale-app");
 process.env.CROSSTALK_GITHUB_API = "http://127.0.0.1:9";
-process.env.CROSSTALK_LLAMA_RELEASES = "http://127.0.0.1:9";
 process.env.CROSSTALK_HF_URL = "http://127.0.0.1:9";
 process.env.CROSSTALK_LOCAL_SERVER_PORTS = "";
 process.env.CROSSTALK_LOCAL_PROGRAMS = "";

@@ -57,7 +57,7 @@ export const SETUP_TOOLS = [
   {
     name: "test_ai_service",
     description:
-      "Check an AI service's address with free requests only (no model runs): whether it answers, its models, and whether Claude Code or Codex can use it. Never pass a key: for a saved account's key, give that account's id and the hub uses it inside.",
+      "Check a service's address with free requests only (no model runs): whether it answers, its models, and whether Claude Code or Codex can use it. Never pass a key: for a saved account's key, give that account's id and the hub uses it inside.",
     inputSchema: {
       type: "object",
       properties: {
@@ -68,7 +68,7 @@ export const SETUP_TOOLS = [
       required: ["address"],
       additionalProperties: false,
     },
-    annotations: { title: "Test an AI service", readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    annotations: { title: "Test an account", readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   },
   {
     name: "hub_log",
@@ -172,7 +172,7 @@ function failed(r: Exclude<HubAnswer<unknown>, { kind: "ok" }>, self: string[]):
     // Never "use these tools": this is these tools. Only someone at the machine can get past what's in the way.
     blocked: `Crosstalk can't be reached from here: ${triedWords(r.offline)}. Ask the person to run ${selfSetupCommand(self)} in a terminal on this machine and say what it prints.`,
     older: `The Crosstalk running here${r.offline.version ? ` (${r.offline.version})` : ""} is older than this program and has no setup tools. They work after its next restart: setup_status says how.`,
-    key: "Crosstalk didn't accept this program's setup key: is CROSSTALK_HOME the hub's?",
+    key: "Crosstalk didn't accept this program's setup key: is CROSSTALK_HOME the one Crosstalk's service has?",
     error: `Crosstalk didn't answer${r.offline.detail ? ` (${clean(r.offline.detail, 160)})` : ""}. Try again in a minute.`,
   }[r.offline.code];
   return { text: why, isError: true };

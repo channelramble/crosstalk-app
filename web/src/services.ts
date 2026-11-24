@@ -1,7 +1,7 @@
-// What Settings → AI services shows and sends, as plain functions (the screens in views/AiServices.tsx and
-// views/AddServiceSheet.tsx only draw it): reading a service check, choosing the agent and models, the body that saves
-// the account, and the words under each row.
-import { CHAT_PROVIDERS, OPENCODE_VERSION, PROVIDER_INFO, SERVICE_AGENTS, SERVICE_MAX_MODELS, isServiceAgent, isServiceOnlyAgent, serviceAgentFor, serviceModelPick, serviceModelsKept, type AccountSpend, type AgentAccount, type Allowance, type ServiceAgent, type CatalogFilter, type CatalogModel, type CatalogName, type CatalogSearch, type ChatProvider, type LocalServer, type ModelCatalog, type Protocol, type Provider, type ProviderStatus, type ServiceFunds, type ServiceOnlyAgent, type ServiceTestResult, type TokenPrice } from "@crosstalk/shared";
+// What Settings → Accounts shows and sends for a service or a model of your own, as plain functions (the screens in
+// views/AccountsList.tsx and views/AddServiceSheet.tsx only draw it): reading a check, choosing the agent and models,
+// the body that saves the account, and the words under each row. accountsList.ts is the list itself.
+import { OPENCODE_VERSION, PROVIDER_INFO, SERVICE_MAX_MODELS, isServiceAgent, isServiceOnlyAgent, serviceAgentFor, serviceModelPick, serviceModelsKept, type AccountSpend, type AgentAccount, type Allowance, type ServiceAgent, type CatalogFilter, type CatalogModel, type CatalogName, type CatalogSearch, type ChatProvider, type LocalServer, type ModelCatalog, type Protocol, type Provider, type ProviderStatus, type ServiceFunds, type ServiceOnlyAgent, type ServiceTestResult, type TokenPrice } from "@crosstalk/shared";
 import { costLabel } from "./money";
 import type { ServicePreset } from "./presets";
 
@@ -409,9 +409,9 @@ export function typedModelNames(text: string): { names: string[]; problem: strin
   const spaced = given.find((m) => /\s/.test(m));
   const long = given.find((m) => m.length > 200);
   const problem = spaced
-    ? `A model name is one word, as the agent passes it: "${quoted(spaced)}" has a space in it. Use the name the server itself uses, like qwen3-8b.`
+    ? `A model name is one word, as the agent passes it: "${quoted(spaced)}" has a space in it. Use the name the model itself goes by, like qwen3-8b.`
     : long
-      ? `"${quoted(long)}" is too long for a model name. Use the short name the server itself uses.`
+      ? `"${quoted(long)}" is too long for a model name. Use the short name the model itself goes by.`
       : given.length > MAX_MODELS
         ? `That's ${given.length} names. ${MAX_MODELS} is the most one service keeps: only the first ${MAX_MODELS} are added.`
         : null;
@@ -470,30 +470,6 @@ export function saveBody(i: SaveInput): Record<string, unknown> {
   };
 }
 
-/** Every Claude Code and Codex account, each agent's own sign-in first, then the services Crosstalk's own agent and OpenCode run on. */
-export function serviceList(accounts: Record<string, AgentAccount>): AgentAccount[] {
-  const rank = (a: AgentAccount) => SERVICE_AGENTS.indexOf(a.provider as ServiceAgent) * 2 + (a.id === "default" ? 0 : 1);
-  return Object.values(accounts)
-    .filter((a) => (CHAT_PROVIDERS as readonly string[]).includes(a.provider) || (isServiceOnlyAgent(a.provider) && a.kind === "endpoint"))
-    .sort((a, b) => rank(a) - rank(b) || a.label.localeCompare(b.label));
-}
-
-/**
- * The line under Agents in Settings → AI services (`list`: serviceList's): which agent runs which service, because Claude
- * Code and Codex no longer run them all, and what the Claude Code and Codex cards below it are for. Crosstalk's own agent
- * and OpenCode run their services with those services' keys and have no sign-in, so "sign in to your plan" is only ever
- * about Claude Code and Codex, never about them.
- */
-export function agentsLine(list: readonly Pick<AgentAccount, "provider" | "label">[]): string {
-  const names = (p: ServiceOnlyAgent) => list.filter((a) => a.provider === p).map((a) => a.label).join(" and ");
-  const said = [names("opencode") && `OpenCode runs ${names("opencode")}`, names("builtin") && `Crosstalk's own agent runs ${names("builtin")} itself`].filter(Boolean);
-  if (!said.length) return "Claude Code and Codex run every service above. Install them, sign in to your plan or add accounts here.";
-  const runs = `${said.join(" and ")}, with ${list.filter((a) => isServiceOnlyAgent(a.provider)).length === 1 ? "the key" : "the keys"} above`;
-  return list.some((a) => !isServiceOnlyAgent(a.provider))
-    ? `Claude Code and Codex run the other services above. ${runs}, and ${said.length === 1 ? "needs" : "need"} no sign-in. Install Claude Code or Codex, sign in to your plan or add accounts here.`
-    : `${runs}: no sign-in, and no Claude Code or Codex needed. To use those too, install them, sign in to your plan or add accounts here.`;
-}
-
 /**
  * The body of POST /api/services/test for a custom model: its saved key, at its saved address. That route knows only
  * custom models (it finds an account among them), so a plan sign-in or an API key gets null: its Test is the account's own
@@ -512,7 +488,7 @@ export const routeMissing = (message: string, status?: number): boolean => statu
 /** Why a check couldn't run, with what to do. Only a hub without the route is "too old"; any other answer is reported as it came. */
 export function testFailure(message: string, status?: number): string {
   return routeMissing(message, status)
-    ? "This machine's hub is too old to check services. Update it, or use Add a custom model under Claude Code or Codex below."
+    ? "This machine runs an older Crosstalk that can't check an account this way. Update Crosstalk on it, then press Test again."
     : `The check didn't run: ${noDot(message)}. Press Test to try again.`;
 }
 
@@ -524,43 +500,6 @@ const hostOf = (url: string | undefined) => {
     return url;
   }
 };
-
-/** Under a row's name: the agent, then the plan or key kind. */
-export function kindLine(a: AgentAccount): string {
-  const agent = PROVIDER_INFO[a.provider].name;
-  if (a.kind === "apikey") return `${agent} · API key, billed per use`;
-  if (a.kind === "endpoint") return [agent, "Custom model", hostOf(a.endpoint?.baseUrl), a.endpoint?.protocol === "chat" && a.provider === "codex" ? "chat adapter" : ""].filter(Boolean).join(" · ");
-  return [agent, a.plan, a.account].filter(Boolean).join(" · ");
-}
-
-/**
- * Where a service's own settings are, said on its row: a plan sign-in is signed in and an API key replaced under the
- * agent's card below, and a service you added here is changed with the row's own Change button (its address, key and
- * models) and removed under that card. Null when there's nothing to say. Without this line a custom model could be
- * tested on its row and changed nowhere: the key a check says was refused has no field anywhere near it.
- */
-export function serviceFixLine(a: AgentAccount): string | null {
-  const agent = PROVIDER_INFO[a.provider].name;
-  // Crosstalk's own agent and OpenCode have no Accounts below: their services are removed on their own rows.
-  if (a.kind === "endpoint") return isServiceOnlyAgent(a.provider) ? "Change its address, key or models with Change, or take it away with Remove." : `Change its address, key or models with Change. Remove it under ${agent} → Accounts below.`;
-  if (a.signedIn !== false) return null;
-  if (a.kind === "apikey") return `Replace the key under ${agent} below.`;
-  return `Press Sign in under ${agent} below.`;
-}
-
-/**
- * The dot and word on a row. A custom model shows its last check's answer; a plan sign-in or an API key always shows the
- * agent's own live state (Test asks the agent again, and the row shows what it said).
- */
-export function statusOf(a: AgentAccount, outcome: Outcome | null, catalog: ModelCatalog | null): { tone: Tone; text: string } {
-  if (a.kind === "apikey") return a.signedIn === true ? { tone: "ok", text: "Key accepted" } : a.signedIn === false ? { tone: "warn", text: "Key not accepted" } : { tone: "idle", text: "Key not confirmed" };
-  if (a.kind === "endpoint") {
-    if (outcome) return { tone: outcome.tone, text: outcome.text };
-    if (catalog?.live === false) return { tone: "bad", text: "Can't reach it" };
-    return { tone: "idle", text: "Not tested yet" };
-  }
-  return a.signedIn === true ? { tone: "ok", text: "Signed in" } : a.signedIn === false ? { tone: "warn", text: "Not signed in" } : { tone: "idle", text: "Sign-in not confirmed" };
-}
 
 /** The names a row lists: a custom model's live list (else its saved names), an agent's own models. */
 export function modelNames(a: AgentAccount, catalog: ModelCatalog | null): string[] {
@@ -649,7 +588,7 @@ export interface OpenCodeState {
 
 export function openCodeState(status: ProviderStatus): OpenCodeState {
   if (!status.checkedAt) return { word: "Checking…", tone: "", action: null, line: null };
-  if (!status.installed) return { word: "Not installed", tone: "", action: "Install", line: "Install it to run a service with it. It needs Node.js on this machine." };
+  if (!status.installed) return { word: "Not installed", tone: "", action: "Install", line: "Install it to run a service with it." };
   if (status.error) return { word: "Can't be used", tone: "orange", action: "Install", line: status.error };
   if (status.version !== OPENCODE_VERSION) {
     const has = status.version ? `This machine has ${status.version}.` : "This machine's OpenCode didn't say its version.";
@@ -695,7 +634,7 @@ export function installWords(i: { name: string; machine: string; phase: InstallP
 
 /** An install that couldn't begin, with what to do. Only a hub without the route is "too old"; any other answer is reported as it came. */
 export function installFailure(name: string, message: string, status?: number): string {
-  return routeMissing(message, status) ? `This machine's hub is too old to install ${name} from here. Update it first.` : `The install didn't start: ${noDot(message)}. Try again in a moment.`;
+  return routeMissing(message, status) ? `This machine runs an older Crosstalk that can't install ${name} from here. Update Crosstalk on it first.` : `The install didn't start: ${noDot(message)}. Try again in a moment.`;
 }
 
 /**
@@ -718,5 +657,5 @@ export function switchedWords(label: string, from: Provider, to: Provider, oldKe
 
 /** Why a move didn't happen, with what to do (`button`: what the button is called). Only a hub without the route is "too old"; any other answer is reported as it came. */
 export function switchFailure(button: string, message: string, status?: number): string {
-  return routeMissing(message, status) ? "This machine's hub is too old to move a service to another agent. Update it first." : `Couldn't move it: ${noDot(message)}. Press ${button} to try again.`;
+  return routeMissing(message, status) ? "This machine runs an older Crosstalk that can't move an account to another agent. Update Crosstalk on it first." : `Couldn't move it: ${noDot(message)}. Press ${button} to try again.`;
 }

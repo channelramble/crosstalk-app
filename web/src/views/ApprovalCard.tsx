@@ -72,7 +72,7 @@ function PermissionCard({ approval: a, member, showRoom, machine }: CardProps) {
           </button>
           {/* Says what it allows ("Always allow `git status` commands"); some requests can only be allowed once. */}
           {a.always !== null && (
-            <button className="btn small always" disabled={busy} onClick={() => decide("approve_always")} title={a.always ? `${a.always.replace(/`/g, "")}: the agent won't ask for that again in this chat` : "Approve this and similar requests for the rest of the session"}>
+            <button className="btn small always" disabled={busy} onClick={() => decide("approve_always")} title={a.always ? `${a.always.replace(/`/g, "")}: the agent won't ask for that again in this chat` : "Approve this and similar requests for the rest of this chat"}>
               {a.always ? <Words text={a.always} /> : "Always allow"}
             </button>
           )}

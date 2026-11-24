@@ -285,14 +285,14 @@ test("a gated model says to agree to its licence, not that the key was refused",
   // neither refusal is anything to do with the key.
   const big = addFeatherless(app, fake.url, { label: "Featherless (big)", models: ["moonshotai/Kimi-K2.5-Instruct"] });
   const offPlan = (await readSse(await post(big.via, codexRequest({ model: "moonshotai/Kimi-K2.5-Instruct" })))).at(-1)!;
-  expect(offPlan.response.error.message).toBe("Featherless (big) says moonshotai/Kimi-K2.5-Instruct isn't included in your plan. Pick another model in Settings → AI services, or change your plan with Featherless (big).");
+  expect(offPlan.response.error.message).toBe("Featherless (big) says moonshotai/Kimi-K2.5-Instruct isn't included in your plan. Pick another model in Settings → Accounts, or change your plan with Featherless (big).");
 
   // Only the service's own answer can say those things. A 403 from something in between — a proxy's HTML block page
   // that happens to say "not available" and link to a page with "plan" in it — is a key or a network problem, and says
   // so, instead of sending someone to the model picker over it.
   const proxied = addFeatherless(app, fake.url, { label: "Featherless (proxied)", models: [BLOCKED_MODEL] });
   const blocked = (await readSse(await post(proxied.via, codexRequest({ model: BLOCKED_MODEL })))).at(-1)!;
-  expect(blocked.response.error.message).toBe("Featherless (proxied) refused this key. Paste a working key in Settings → AI services, then try again.");
+  expect(blocked.response.error.message).toBe("Featherless (proxied) refused this key. Paste a working key in Settings → Accounts, then try again.");
 });
 
 test("the plan's four-at-a-time refusal says what to wait for, and a reply still runs through the adapter", async () => {
@@ -328,14 +328,14 @@ test("Check on a Featherless address reads nothing: it says where a model is fou
   // Settings → Accounts → Change → Check, and Add a custom model, both come here (POST /api/accounts/endpoint/probe).
   // Before, this read the 22,406-model list in full and wrote its first 50 names over the one model you had searched
   // for, with the first row's context (262k) over the plan's 32k.
-  await expect(app.providers.probeEndpoint(`${fake.url}/v1`, KEY)).rejects.toThrow("too many to list here. Add it in Settings → AI services");
+  await expect(app.providers.probeEndpoint(`${fake.url}/v1`, KEY)).rejects.toThrow("too many to list here. Add it in Settings → Accounts");
   expect(fake.seen).toEqual([]);
 
   // The guard behind it, for any list a probe may meet: an answer far bigger than a model list is dropped, not held.
   const flood = feather({ floodStream: true, fillerBytes: 500_000 }); // ten rows: 5 MB, past what any model list can be
   const app2 = setup(flood);
   app2.services.catalog.origin = "http://127.0.0.1:9"; // not Featherless as far as this hub knows: the plain probe path
-  await expect(app2.providers.probeEndpoint(flood.url)).rejects.toThrow("No model server answered");
+  await expect(app2.providers.probeEndpoint(flood.url)).rejects.toThrow("No model answered");
 });
 
 test("the check asks which plan the key is on, with the key, and says it plainly", async () => {
@@ -408,7 +408,7 @@ test("the note in a chat names the plan the key is on, says what agents need, an
   const plan = (id: string, name: string) => planFrom({ id, name, max_context_length: 32_768, concurrency: 2 }, 0);
   // Its older Basic plan is a plan for a person typing too (its terms keep "individual plans" to interactive use).
   expect(chatNotice(plan("feather_pro", "Feather Basic"))).toBe(
-    "Featherless says this key is on its Basic plan, which doesn't allow agents or API use: Featherless can cancel an account used that way without a refund. Agents need its Developer plan: paid per token, so set a spending limit in Settings → Costs. See https://featherless.ai/pricing.",
+    "Featherless says this key is on its Basic plan, which doesn't allow agents or API use: Featherless can cancel an account used that way without a refund. Agents need its Developer plan: paid per token, so set a spending limit in Settings → Usage & costs → Costs. See https://featherless.ai/pricing.",
   );
   // The Chat plan under the name its plan list gives it now, and under the docs' older one: the same words.
   expect(chatNotice(plan(CHAT_PLAN_ID, "Feather Chat (formerly Premium)"))).toBe(chatNotice(planFrom(CHAT_PLAN, 0)));
@@ -416,12 +416,12 @@ test("the note in a chat names the plan the key is on, says what agents need, an
   // The Developer plan: nothing to say in a chat. A paused plan built for agents: named, never guessed at.
   expect(chatNotice(planFrom(DEVELOPER_PLAN, 0))).toBeNull();
   expect(chatNotice(plan("feather_max", "Featherless Max"))).toBe(
-    "Featherless says this key is on “Featherless Max”, a plan Crosstalk doesn't know: check what it allows. Featherless's $25 Chat plan doesn't allow agents or API use: Featherless can cancel an account used that way without a refund. Its Developer plan allows them, paid per token, so set a spending limit in Settings → Costs. See https://featherless.ai/pricing.",
+    "Featherless says this key is on “Featherless Max”, a plan Crosstalk doesn't know: check what it allows. Featherless's $25 Chat plan doesn't allow agents or API use: Featherless can cancel an account used that way without a refund. Its Developer plan allows them, paid per token, so set a spending limit in Settings → Usage & costs → Costs. See https://featherless.ai/pricing.",
   );
   // Whichever it is, the way to Featherless's plans is the whole address (the app makes it a link), and never "flat" or
   // "unlimited": every chat here is an agent driving it through the API.
   for (const p of [plan("feather_pro", "Feather Basic"), plan("feather_max", "Featherless Max"), null]) {
-    expect(chatNotice(p)).toEndWith("set a spending limit in Settings → Costs. See https://featherless.ai/pricing.");
+    expect(chatNotice(p)).toEndWith("set a spending limit in Settings → Usage & costs → Costs. See https://featherless.ai/pricing.");
     expect(chatNotice(p)).not.toMatch(/flat|unlimited/i);
   }
 });
@@ -441,7 +441,7 @@ test("what a chat says: the Chat plan's terms in every chat on that key, an unkn
   // A key on the Chat plan: said in the chat, before anything else happens in it.
   const first = chat();
   await settle();
-  expect(notes(first.id)).toEqual(["Featherless says this key is on its Chat plan, which doesn't allow agents or API use: Featherless can cancel an account used that way without a refund. Agents need its Developer plan: paid per token, so set a spending limit in Settings → Costs. See https://featherless.ai/pricing."]);
+  expect(notes(first.id)).toEqual(["Featherless says this key is on its Chat plan, which doesn't allow agents or API use: Featherless can cancel an account used that way without a refund. Agents need its Developer plan: paid per token, so set a spending limit in Settings → Usage & costs → Costs. See https://featherless.ai/pricing."]);
   expect(app.store.listMessages(first.id)).toHaveLength(1);
   // Only once in that chat, however often its agent's status changes...
   for (const m of app.store.listMembers(first.id)) for (let i = 0; i < 3; i++) app.bus.emit({ t: "member", member: m });
@@ -489,7 +489,7 @@ test("what a chat says: the Chat plan's terms in every chat on that key, an unkn
   const otherChat = () => other.chats.create({ provider: "codex", account: otherAccount.id, model: PICK, cwd: dir } as never);
   const fifth = otherChat();
   await settle();
-  expect(other.store.listMessages(fifth.id).map((m) => m.text)).toEqual(["Crosstalk couldn't tell which Featherless plan this key is on. Featherless's $25 Chat plan doesn't allow agents or API use: Featherless can cancel an account used that way without a refund. Agents need its Developer plan: paid per token, so set a spending limit in Settings → Costs. See https://featherless.ai/pricing."]);
+  expect(other.store.listMessages(fifth.id).map((m) => m.text)).toEqual(["Crosstalk couldn't tell which Featherless plan this key is on. Featherless's $25 Chat plan doesn't allow agents or API use: Featherless can cancel an account used that way without a refund. Agents need its Developer plan: paid per token, so set a spending limit in Settings → Usage & costs → Costs. See https://featherless.ai/pricing."]);
   const sixth = otherChat();
   await settle();
   expect(other.store.listMessages(sixth.id)).toEqual([]);
@@ -648,5 +648,5 @@ test("a model saved without a size is given what its key's plan reads at once: i
 test("a Featherless address isn't added by a one-tap New chat: it says where to pick a model", async () => {
   const fake = feather();
   const app = setup(fake);
-  await expect(app.services.accountForChat({ baseUrl: fake.url, apiKey: KEY })).rejects.toThrow("Add Featherless in Settings → AI services, where you can search its models");
+  await expect(app.services.accountForChat({ baseUrl: fake.url, apiKey: KEY })).rejects.toThrow("Add Featherless in Settings → Accounts, where you can search its models");
 });

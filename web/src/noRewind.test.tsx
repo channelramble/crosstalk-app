@@ -61,25 +61,31 @@ test("a failed reply: Take back only when the agent never got the message, and T
 });
 
 const first = useStore.getInitialState();
-const before = { status: first.status, syncing: first.syncing, roomData: first.roomData };
+const before = { status: first.status, syncing: first.syncing, roomData: first.roomData, hub: first.hub, members: first.members, approvals: first.approvals };
 afterEach(() => Object.assign(first, before));
 
-test("a message handed to a reply: Read it now only from an agent that can stop its step for it", () => {
-  const note = (provider: Member["provider"]) => {
-    Object.assign(first, { roomData: { r1: { messages: [], turns: {}, activities: {}, loaded: true, loading: false, error: null, hasMore: false, totals: null } }, members: { mb1: { id: "mb1", provider } }, approvals: {} });
+test("a message handed to a reply: Interrupt only from an agent that can stop its step for it (Read it now, on a hub before the one rule)", () => {
+  const note = (provider: Member["provider"], rule = false) => {
+    Object.assign(first, { hub: rule ? { messagesFlow: true, flowsIn: true } : null, roomData: { r1: { messages: [], turns: {}, activities: {}, loaded: true, loading: false, error: null, hasMore: false, totals: null } }, members: { mb1: { id: "mb1", provider } }, approvals: {} });
     return words(renderToStaticMarkup(createElement(ReadNowNote, { room, turn: turn("t1", "running", "h1", "a1"), agentName: "Agent" })));
   };
   expect(note("claude")).toContain("Read it now");
   const builtin = note("builtin");
   expect(builtin).toContain("Agent reads this at its next step.");
   expect(builtin).not.toContain("Read it now");
+  // A hub with the one rule (HubInfo.flowsIn): the same, with its one button.
+  expect(note("claude", true)).toContain("Agent reads this at its next step. Interrupt");
+  expect(note("claude", true)).not.toContain("Read it now");
+  const own = note("builtin", true);
+  expect(own).toContain("Agent reads this at its next step.");
+  expect(own).not.toContain("Interrupt");
 });
 
-test("a message waiting behind the reply says so, and only an agent that can take it mid-reply offers Send now", () => {
+test("on a hub before the one rule, a message waiting behind the reply says so, and only an agent that can take it mid-reply offers Send now", () => {
   const member = (provider: Member["provider"]) => ({ id: "mb1", roomId: "r1", handle: provider, provider, model: "m", role: "", permissionMode: "full", status: "working", statusDetail: null, config: {}, createdAt: 1000, position: 0, readSeq: 1 }) as Member;
   const messages = [msg("h1", "human", 1, "One"), msg("a1", "agent", 2, "Working on it", { status: "streaming", turnId: "t1" }), msg("h2", "human", 3, "Two")];
   const turns = [turn("t1", "running", "h1", "a1"), turn("t2", "queued", "h2", null)];
-  Object.assign(first, { status: "open", syncing: false, roomData: { r1: { messages, turns: Object.fromEntries(turns.map((t) => [t.id, t])), activities: {}, loaded: true, loading: false, error: null, hasMore: false, totals: null } } });
+  Object.assign(first, { status: "open", syncing: false, hub: null, roomData: { r1: { messages, turns: Object.fromEntries(turns.map((t) => [t.id, t])), activities: {}, loaded: true, loading: false, error: null, hasMore: false, totals: null } } });
   const panel = (m: Member) => renderToStaticMarkup(createElement(WorkingPanel, { room, members: [m] }));
   const openCode = panel(member("opencode"));
   expect(words(openCode)).toContain("Your message is waiting for this reply to finish.");
@@ -87,4 +93,10 @@ test("a message waiting behind the reply says so, and only an agent that can tak
   const codex = panel(member("codex"));
   expect(words(codex)).toContain("Your message is waiting for this reply to finish.");
   expect(codex).toContain(">Send now</button>");
+  // A hub with the one rule: no bar for either. The message goes when the reply ends, said under the message itself.
+  Object.assign(first, { hub: { messagesFlow: true, flowsIn: true } });
+  for (const provider of ["opencode", "codex"] as const) {
+    expect(panel(member(provider))).not.toContain("send-now");
+    expect(words(panel(member(provider)))).not.toContain("Send now");
+  }
 });

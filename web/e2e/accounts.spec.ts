@@ -1,5 +1,5 @@
 import type { Page, WebSocketRoute } from "@playwright/test";
-import { test, expect, noHorizontalOverflow, openGroupSettings } from "./fixtures";
+import { test, expect, noHorizontalOverflow, openGroupSettings, addAccount } from "./fixtures";
 
 const HUB = "http://127.0.0.1:8451";
 // CT_SHOTS: a folder to save the phone screens in, to look at them.
@@ -63,9 +63,9 @@ test("accounts can be named, signed in independently, renamed and removed", asyn
   let accountId = "";
   // Each account's Sign in opens the sign-in sheet for that account: Codex's device code, played here.
   const played = await signInPlayed(page, (_n, b) => ({ accountLabel: "Browser Work", userCode: "WORK123", words: "Open the sign-in link on any device, sign in, and enter this code: WORK123.", account: b.account }));
-  await page.goto("/#/setup");
+  await page.goto("/#/settings/accounts");
   const card = page.getByRole("region", { name: "Codex accounts", exact: true });
-  await card.getByRole("button", { name: "Add another sign-in", exact: true }).click();
+  await addAccount(page, "Sign in to Codex");
   await page.getByRole("textbox", { name: "Account name", exact: true }).fill("Browser Work");
   await page.getByRole("dialog").getByRole("button", { name: "Save and sign in", exact: true }).click();
   // Straight on to signing it in.
@@ -95,8 +95,11 @@ test("accounts can be named, signed in independently, renamed and removed", asyn
     await page.getByRole("dialog").getByRole("button", { name: "Save", exact: true }).click();
     await expect(card.getByText("Browser Personal", { exact: true })).toBeVisible();
     const renamed = card.locator("div").filter({ has: page.getByText("Browser Personal", { exact: true }) }).filter({ has: page.getByRole("button", { name: "Remove", exact: true }) }).last();
-    page.once("dialog", (dialog) => dialog.accept());
+    // Asked in the app's own sheet, which says what goes with it.
     await renamed.getByRole("button", { name: "Remove", exact: true }).click();
+    const sure = page.getByRole("dialog", { name: /^Remove Browser Personal/ });
+    await expect(sure).toContainText("Its saved sign-in is deleted from this machine.");
+    await sure.getByRole("button", { name: "Remove", exact: true }).click();
     await expect(card.getByText("Browser Personal", { exact: true })).toHaveCount(0);
   } finally { await request.delete(`http://127.0.0.1:8451/api/accounts/codex/${accountId}`, { headers: auth }); }
 });
@@ -130,7 +133,7 @@ test("two members of the same agent keep their selected account and scoped model
     expect(members).toHaveLength(2);
     expect(members.find((m: { handle: string }) => m.handle === "work").config.account).toBe(account.id);
     expect(members.find((m: { handle: string }) => m.handle === "personal").config.account ?? "default").toBe("default");
-    await expect(settings.getByRole("listitem").filter({ hasText: "@work" })).toContainText("Team Work");
+    await expect(settings.getByRole("region", { name: "@work", exact: true }).locator("> .cs-fold-head")).toContainText("Team Work");
     await noHorizontalOverflow(page);
   } finally {
     await request.delete(`http://127.0.0.1:8451/api/rooms/${room.id}`, { headers: auth });
@@ -162,7 +165,7 @@ test("new chat selects an account before creating its agent", async ({ page, req
     await page.goto("/#/agent/codex");
     await page.getByRole("button", { name: "New chat", exact: true }).last().click();
     const dialog = page.getByRole("dialog", { name: "New chat with Codex", exact: true });
-    await dialog.getByRole("combobox", { name: "Account", exact: true }).selectOption(account.id);
+    await dialog.getByRole("radiogroup", { name: "Account", exact: true }).locator(`[role="radio"][data-value="${account.id}"]`).click();
     await dialog.getByRole("button", { name: "Start chat", exact: true }).click();
     await expect(page.getByRole("textbox", { name: "Message", exact: true })).toBeVisible();
     roomId = new URL(page.url()).hash.split("/").pop()!;
@@ -189,10 +192,10 @@ test("an expired Codex sign-in says so, and Start again shows a fresh code", asy
   });
   const expired = { state: "expired", endedAt: Date.now(), userCode: null, words: "Nobody finished the sign-in within 15 minutes, so Crosstalk stopped it. Start again when you're ready." };
   try {
-    await page.goto("/#/settings");
+    await page.goto("/#/settings/accounts");
     await live.ready();
     const card = page.getByRole("region", { name: "Codex accounts", exact: true });
-    await card.getByRole("button", { name: "Add another sign-in", exact: true }).click();
+    await addAccount(page, "Sign in to Codex");
     await page.getByRole("textbox", { name: "Account name", exact: true }).fill("Browser Expiry");
     await page.getByRole("dialog").getByRole("button", { name: "Save and sign in", exact: true }).click();
     const sheet = page.getByRole("dialog", { name: /^Sign in to Codex \(Browser Expiry\) on / });
@@ -233,9 +236,9 @@ test("Claude Code's Sign in in Settings opens the sign-in sheet: a link and a bo
     return { method: "paste", accountLabel: "Browser Sheet", url: "https://claude.com/cai/oauth/authorize?code=true&state=browser-test", wantsCode: true, words: "Open the sign-in link and sign in with the Claude account that has your plan. The page then shows a code: copy all of it and paste it here." };
   });
   try {
-    await page.goto("/#/settings");
+    await page.goto("/#/settings/accounts");
     const card = page.getByRole("region", { name: "Claude Code accounts", exact: true });
-    await card.getByRole("button", { name: "Add another sign-in", exact: true }).click();
+    await addAccount(page, "Sign in to Claude Code");
     await page.getByRole("textbox", { name: "Account name", exact: true }).fill("Browser Sheet");
     await page.getByRole("dialog").getByRole("button", { name: "Save and sign in", exact: true }).click();
     const sheet = page.getByRole("dialog", { name: /^Sign in to Claude Code \(Browser Sheet\) on / });
@@ -281,10 +284,10 @@ test("a hub from before sign-ins from the phone: its sign-in terminal's paste fi
   // Nor is the sign-in page opened for real.
   await context.route("https://claude.ai/**", (route) => route.fulfill({ contentType: "text/html", body: "<title>Sign in</title>" }));
   try {
-    await page.goto("/#/settings");
+    await page.goto("/#/settings/accounts");
     await live.ready();
     const card = page.getByRole("region", { name: "Claude Code accounts", exact: true });
-    await card.getByRole("button", { name: "Add another sign-in", exact: true }).click();
+    await addAccount(page, "Sign in to Claude Code");
     await page.getByRole("textbox", { name: "Account name", exact: true }).fill("Browser Paste");
     await page.getByRole("dialog").getByRole("button", { name: "Save and sign in", exact: true }).click();
     const dialog = page.getByRole("dialog", { name: "Sign in to Claude Code · Browser Paste", exact: true });
@@ -356,7 +359,7 @@ test("GitHub Sign out takes two taps and says what it affects", async ({ page, r
   let fail = true;
   let signedIn = true;
   let signOuts = 0;
-  await page.route("**/api/tools/github", (route) => route.fulfill(fail ? { status: 503, json: { error: "The hub is restarting." } } : { json: { installed: true, version: "2.60.0", signedIn, account: signedIn ? "octocat" : null, error: null } }));
+  await page.route("**/api/tools/github", (route) => route.fulfill(fail ? { status: 503, json: { error: "Crosstalk is restarting." } } : { json: { installed: true, version: "2.60.0", signedIn, account: signedIn ? "octocat" : null, error: null } }));
   // Never the real gh: that's this Mac's own GitHub sign-in.
   await page.route("**/api/tools/github/logout", (route) => {
     signOuts++;
@@ -366,7 +369,7 @@ test("GitHub Sign out takes two taps and says what it affects", async ({ page, r
   await page.goto("/#/settings/more");
   const github = page.getByRole("region", { name: "GitHub", exact: true });
   // Couldn't check: it says so (not "Checking…" for ever), with Retry.
-  await expect(github.getByRole("alert")).toHaveText(`Couldn't check GitHub on ${machine}: The hub is restarting.`);
+  await expect(github.getByRole("alert")).toHaveText(`Couldn't check GitHub on ${machine}: Crosstalk is restarting.`);
   fail = false;
   await github.getByRole("button", { name: "Retry", exact: true }).click();
   await expect(github).toContainText("Signed in as octocat.");
@@ -404,18 +407,19 @@ test("an agent's Sign out says how many chats use the account", async ({ page, r
     const state = await (await request.get(`${HUB}/api/state`, { headers })).json();
     const chats = new Set(state.members.filter((m: { provider: string; config?: { account?: string } }) => m.provider === "claude" && (m.config?.account ?? "default") === "default").map((m: { roomId: string }) => m.roomId)).size;
     expect(chats).toBeGreaterThanOrEqual(2);
-    await page.goto("/#/settings");
-    const accounts = page.getByRole("region", { name: "Claude Code accounts", exact: true });
-    await accounts.getByRole("button", { name: "Sign out Claude Code · Main", exact: true }).click();
-    const asked = accounts.getByRole("group", { name: `Sign Claude Code out on ${state.hub.name}? ${chats} chats use this account, and Claude Code in Terminal there is signed out too.`, exact: true });
-    await expect(asked).toBeVisible();
-    await asked.scrollIntoViewIfNeeded();
+    await page.goto("/#/settings/accounts");
+    const main = page.getByRole("region", { name: "Claude Code accounts", exact: true }).getByRole("group", { name: "Claude Code · Main", exact: true });
+    // Sign out is under More on the account's own row, and asks in a sheet that says what it affects.
+    await main.getByRole("button", { name: "More", exact: true }).click();
+    await main.getByRole("button", { name: "Sign out", exact: true }).click();
+    const asked = page.getByRole("dialog", { name: `Sign Claude Code out on ${state.hub.name}?`, exact: true });
+    await expect(asked).toContainText(`${chats} chats use this account, and Claude Code in Terminal there is signed out too.`);
     await noHorizontalOverflow(page);
     await page.screenshot({ ...shot("agent-sign-out-asks.png"), animations: "disabled" });
     await asked.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(asked).toHaveCount(0);
     expect(signOuts).toBe(0);
-    await accounts.getByRole("button", { name: "Sign out Claude Code · Main", exact: true }).click();
-    await pastDoubleTap(page);
+    await main.getByRole("button", { name: "Sign out", exact: true }).click();
     await asked.getByRole("button", { name: "Sign out", exact: true }).click();
     await expect.poll(() => signOuts).toBe(1);
   } finally {
@@ -423,11 +427,12 @@ test("an agent's Sign out says how many chats use the account", async ({ page, r
   }
 });
 
-test("a stray tap outside Add a custom model asks before discarding", async ({ page }) => {
+test("a stray tap outside the add-by-address sheet asks before discarding", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto("/#/settings");
-  await page.getByRole("region", { name: "Codex accounts", exact: true }).getByRole("button", { name: "Add a custom model", exact: true }).click();
-  const dialog = page.getByRole("dialog", { name: "Add a custom model for Codex", exact: true });
+  await page.goto("/#/settings/accounts");
+  // A model that isn't running right now, or is on another computer, is added by its address under Your own models.
+  await page.getByRole("region", { name: "Your own models", exact: true }).getByRole("button", { name: "For Codex", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Add an account for Codex", exact: true });
   const models = dialog.getByPlaceholder("Check fills this in", { exact: true });
   await models.fill("qwen3-coder");
   // A tap beside the dialog, as a thumb easily does.
@@ -439,3 +444,46 @@ test("a stray tap outside Add a custom model asks before discarding", async ({ p
   await page.getByRole("button", { name: "Discard changes", exact: true }).click();
   await expect(dialog).toHaveCount(0);
 });
+
+for (const width of [390, 320]) {
+  test(`at ${width} px Accounts is one list with one Add an account, which asks what to add and opens the right sheet`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 844 });
+    await page.goto("/#/settings/accounts");
+    const add = page.getByRole("button", { name: "Add an account", exact: true });
+    // One add button on the whole page, a finger high; each account is listed once, under its heading.
+    await expect(add).toHaveCount(1);
+    expect((await add.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+    await expect(page.locator(".acct-group .settings-heading")).toHaveText(["Claude Code", "Codex", "Other services", "Your own models"]);
+    await expect(page.getByRole("group", { name: "Claude Code · Main", exact: true })).toHaveCount(1);
+    await expect(page.getByRole("group", { name: "Codex · Main", exact: true })).toHaveCount(1);
+    // Every button on a row is a finger high, and nothing is wider than the phone.
+    const main = page.getByRole("group", { name: "Codex · Main", exact: true });
+    for (const b of await main.getByRole("button").all()) if (await b.isVisible()) expect((await b.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+    await noHorizontalOverflow(page);
+
+    await add.click();
+    const sheet = page.getByRole("dialog", { name: "Add an account", exact: true });
+    await expect(sheet.locator(".choice-card-title")).toHaveText([
+      "Sign in to Claude Code with your plan",
+      "Sign in to Codex with your plan",
+      "An API key for Claude Code",
+      "An API key for Codex",
+      "Another service",
+      "A model running on this machine",
+    ]);
+    for (const c of await sheet.locator(".choice-card").all()) expect((await c.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+    await noHorizontalOverflow(page);
+    await page.screenshot({ ...shot(`add-an-account-${width}.png`), animations: "disabled" });
+    // An API key: the key form Settings always had.
+    await sheet.getByRole("button", { name: /^An API key for Claude Code/ }).click();
+    const key = page.getByRole("dialog", { name: "Claude Code API key", exact: true });
+    await expect(key.getByText("API key", { exact: true }).first()).toBeVisible();
+    await key.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(key).toHaveCount(0);
+    // A model running on this machine: the check of what runs here.
+    await add.click();
+    await sheet.getByRole("button", { name: /^A model running on this machine/ }).click();
+    await expect(page.getByRole("dialog", { name: "Add a model on this machine", exact: true })).toBeVisible();
+    await noHorizontalOverflow(page);
+  });
+}

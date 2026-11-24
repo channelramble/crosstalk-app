@@ -4,7 +4,7 @@ import { HELP, JARGON_WORDS, jargonIn } from "./helpCopy";
 const tips = Object.entries(HELP);
 
 test("there is a tip for every heading and setting the first-run brief names", () => {
-  expect(Object.keys(HELP).sort()).toEqual(["computers", "helpers", "machines", "modelPool", "permissions", "storage", "teamwork", "templates", "thisMac", "usage"]);
+  expect(Object.keys(HELP).sort()).toEqual(["computers", "helpers", "machines", "permissions", "storage", "teamwork", "templates", "thisMac", "usage"]);
 });
 
 test("each tip is one short sentence", () => {
@@ -29,6 +29,10 @@ test("the jargon check finds whole words only, in any case", () => {
   expect(jargonIn("Needs an API key.")).toBe("api");
   expect(jargonIn("Runs on the GPUs of your PCs.")).toBe("gpu");
   expect(jargonIn("Clears the cache.")).toBe("cache");
+  // The words the app has one plain word for instead: chat, account, folder, machine.
+  expect(jargonIn("Start a fresh session in this conversation.")).toBe("conversation");
+  expect(jargonIn("Runs on the server, in its workspace.")).toBe("workspace");
+  expect(jargonIn("Each provider has its own.")).toBe("provider");
   expect(jargonIn("Therapies and capital letters are fine.")).toBeNull();
   expect(JARGON_WORDS.length).toBeGreaterThan(10);
 });

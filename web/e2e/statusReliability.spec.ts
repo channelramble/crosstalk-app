@@ -129,7 +129,7 @@ test("failed history loading stays visible without request loops and can be retr
     await page.goto(`/#/room/${s.room.id}`);
     const historyError = page.locator(".messages").getByRole("alert");
     await expect(historyError).toContainText("History is temporarily unavailable.");
-    const retry = historyError.getByRole("button", { name: "Retry loading conversation", exact: true });
+    const retry = historyError.getByRole("button", { name: "Retry loading the chat", exact: true });
     await expect(retry).toBeEnabled();
     const failedRequests = s.control.historyRequests;
     // A stable error must not re-trigger the room's load effect on every render.
@@ -155,10 +155,10 @@ test("a failed history resync keeps cached replies without reviving live indicat
     await expect(page.locator(".working-thought.live")).toBeVisible();
     s.control.historyError = "History resync failed.";
     s.sockets.at(-1)!.close({ code: 1001, reason: "Fixture interruption" });
-    const retry = page.locator(".messages").getByRole("button", { name: "Retry loading conversation", exact: true });
+    const retry = page.locator(".messages").getByRole("button", { name: "Retry loading the chat", exact: true });
     await expect(retry).toBeEnabled();
     await expect(page.locator(".messages")).toContainText("Last received reply text.");
-    await expect(page.getByRole("region", { name: "Agent status unknown", exact: true })).toContainText("Conversation status unavailable");
+    await expect(page.getByRole("region", { name: "Agent status unknown", exact: true })).toContainText("Chat status unavailable");
     await expect(page.locator(".messages .cursor, .messages .spin, .working-panel .spin, .working-thought.live")).toHaveCount(0);
     s.control.historyError = undefined;
     Object.assign(s.history.messages[0], { status: "stopped" });
@@ -190,7 +190,7 @@ async function chatScenario(page: Page, request: APIRequestContext, token: strin
   await page.route("**/api/state", (r) => r.fulfill({ json: snapshot }));
   await page.route(`**/api/rooms/${room.id}/history**`, (r) => {
     control.requests.push(Date.now());
-    return r.fulfill(control.fail(control.requests.length) ? { status: 503, json: { error: "The hub is restarting." } } : { json: history });
+    return r.fulfill(control.fail(control.requests.length) ? { status: 503, json: { error: "Crosstalk is restarting." } } : { json: history });
   });
   const send = (e: unknown) => sockets.at(-1)!.send(JSON.stringify(e));
   return { room, member, history, control, send, cleanup: () => request.delete(`${hub}/api/rooms/${room.id}`, { headers }) };
@@ -212,7 +212,7 @@ test("a chat whose history fails says Couldn't load this chat with Retry, and lo
     await expect(strip).toContainText("Couldn't load this chat");
     await expect(strip.getByRole("button", { name: "Retry", exact: true })).toBeVisible();
     // Why, said once: on the status line, not again in the conversation above it.
-    await expect(strip.locator(".chat-status-note")).toHaveText("The hub is restarting.");
+    await expect(strip.locator(".chat-status-note")).toHaveText("Crosstalk is restarting.");
     await expect(page.locator(".messages")).not.toContainText("Couldn't load");
     // Not "Catching up…": the agent isn't working, and the line says what's wrong.
     await expect(page.getByText("Catching up…")).toHaveCount(0);

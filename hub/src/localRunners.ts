@@ -16,9 +16,9 @@ import type { App } from "./app";
 import { RUN_DIR } from "./config";
 import { HttpError } from "./engine/engine";
 import { cwdOf, lastProblem } from "./imageEditor";
+import { explainExit, findInstall, installedBuilds, type LlamaInstall } from "./local/llama";
+import { ALIAS_RE, aliasFor } from "./local/models";
 import { localLibraryOf } from "./localLibrary";
-import { explainExit, findInstall, installedBuilds, type LlamaInstall } from "./pool/llama";
-import { aliasFor, POOL_PORT } from "./pool/pool";
 import { logger } from "./util/log";
 
 const log = logger("local-models");
@@ -173,10 +173,8 @@ export class LocalRunners {
   }
 
   /** Why Crosstalk won't stop a server it didn't start, with what to do instead. */
-  stopWhy(server: Pick<LocalServer, "kind" | "baseUrl">, poolPort: number | null): string {
-    const port = Number(new URL(server.baseUrl).port);
+  stopWhy(server: Pick<LocalServer, "kind">): string {
     if (server.kind === "lmstudio") return "LM Studio is managed in LM Studio: start and stop it there.";
-    if (poolPort !== null && port === poolPort) return "This is the model pool's server: stop it in Model pool.";
     if (server.kind === "ollama") {
       return process.platform === "darwin"
         ? "Crosstalk didn't start this Ollama, so it leaves it alone: quit it from its menu bar icon, or where it was started."
@@ -190,7 +188,7 @@ export class LocalRunners {
     await this.ready();
     const pick = async (kind: Kind) => {
       const from = DEFAULT_PORTS[kind];
-      for (let p = from; p < from + 100; p++) if (p !== this.deps.hubPort() && p !== POOL_PORT && !this.at(p) && (await this.portFree(p))) return p;
+      for (let p = from; p < from + 100; p++) if (p !== this.deps.hubPort() && !this.at(p) && (await this.portFree(p))) return p;
       return from;
     };
     return { ollama: await pick("ollama"), llamacpp: await pick("llamacpp") };
@@ -201,13 +199,13 @@ export class LocalRunners {
   /** POST /api/local-models/start: starts it on its own and answers at once (`starting`); the page looks again until it's `running`. */
   async start(body: unknown): Promise<LocalStarted> {
     await this.ready();
-    if (this.closed) throw new HttpError(503, "The hub is shutting down: try again once it's back.");
+    if (this.closed) throw new HttpError(503, "Crosstalk is shutting down: try again once it's back.");
     const b = (body && typeof body === "object" ? body : {}) as Partial<Record<keyof LocalServerStart, unknown>>;
     if (b.kind !== "ollama" && b.kind !== "llamacpp") throw new HttpError(400, "Say which server to start: Ollama or llama.cpp.");
     const kind: Kind = b.kind;
     const port = b.port === undefined || b.port === null ? DEFAULT_PORTS[kind] : Number(b.port);
     if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new HttpError(400, "Pick a port from 1024 to 65535.");
-    if (port === this.deps.hubPort()) throw new HttpError(409, `Port ${port} is the hub's own: pick another.`, "port_taken");
+    if (port === this.deps.hubPort()) throw new HttpError(409, `Port ${port} is Crosstalk's own: pick another.`, "port_taken");
     const program = this.programs().find((p) => p.kind === kind);
     if (!program) throw new HttpError(409, notInstalled(kind), "no_program");
     let model: { id: string; path: string; alias: string; gpu: string[] } | null = null;
@@ -237,7 +235,7 @@ export class LocalRunners {
     this.claimed.add(port);
     try {
       if (!(await this.portFree(port))) throw new HttpError(409, `Port ${port} is taken on this machine: pick another.`, "port_taken");
-      if (this.closed) throw new HttpError(503, "The hub is shutting down: try again once it's back.");
+      if (this.closed) throw new HttpError(503, "Crosstalk is shutting down: try again once it's back.");
       this.forget(id);
       const run = this.launch({ id, kind, port, bin: program.path, model, context });
       log.info(`started ${NAMES[kind]} on port ${port}${model ? ` with ${model.id}` : ""} (pid ${run.pid})`);
@@ -557,25 +555,25 @@ export function gpuLayers(m: Pick<LocalMachine, "unified" | "gpuBytes"> | null, 
 
 /** The model's name in chats: "qwen3-8b-q4_k_m". */
 function aliasOf(repo: string, quant: string | null): string {
-  const base = aliasFor({ repo });
+  const base = aliasFor(repo);
   const name = quant ? `${base}-${quant.toLowerCase()}` : base;
-  return /^[\w.:-]{1,64}$/.test(name) ? name : base;
+  return ALIAS_RE.test(name) ? name : base;
 }
 
 function notInstalled(kind: Kind): string {
   if (kind === "ollama") return "Ollama isn't installed on this machine: get it at ollama.com/download, then press Rescan.";
   return process.platform === "darwin"
-    ? "llama.cpp isn't installed on this machine: install it with Homebrew (brew install llama.cpp), or start the model pool once to get its build, then press Rescan."
-    : "llama.cpp isn't installed on this machine: get llama-server from github.com/ggml-org/llama.cpp/releases (or start the model pool once to get its build), then press Rescan.";
+    ? "llama.cpp isn't installed on this machine: install it with Homebrew (brew install llama.cpp), then press Rescan."
+    : "llama.cpp isn't installed on this machine: get llama-server from github.com/ggml-org/llama.cpp/releases, then press Rescan.";
 }
 
 const minutes = (ms: number) => (ms >= 60_000 ? `${Math.round(ms / 60_000)} minute${Math.round(ms / 60_000) === 1 ? "" : "s"}` : `${Math.round(ms / 1000)} seconds`);
 
 /**
  * The programs on this machine: Ollama and llama-server on the PATH or where their installers put them (the Ollama
- * app keeps its program inside it), and the model pool's llama.cpp. CROSSTALK_LOCAL_PROGRAMS (folders, ":" between
- * them; empty: nowhere) replaces where to look; in-memory hubs (tests) and the compiled-binary check
- * (CROSSTALK_NO_AGENT_CLIS) look nowhere else, so they never find this machine's own.
+ * app keeps its program inside it), else a llama.cpp build in Crosstalk's own folder (local/llama.ts).
+ * CROSSTALK_LOCAL_PROGRAMS (folders, ":" between them; empty: nowhere) replaces where to look; in-memory hubs (tests)
+ * and the compiled-binary check (CROSSTALK_NO_AGENT_CLIS) look nowhere else, so they never find this machine's own.
  */
 export function findPrograms(lookNowhere: boolean): LocalProgram[] {
   const only = process.env.CROSSTALK_LOCAL_PROGRAMS;
@@ -591,11 +589,11 @@ export function findPrograms(lookNowhere: boolean): LocalProgram[] {
       continue;
     }
     if (kind !== "llamacpp" || only !== undefined || lookNowhere || process.env.CROSSTALK_NO_AGENT_CLIS === "1") continue;
-    const pool = installedBuilds()
+    const own = installedBuilds()
       .map((id) => /^(b\d+)-(\w+)$/.exec(id))
       .map((m) => (m ? findInstall(m[1], m[2] as LlamaInstall["backend"]) : null))
       .find((i): i is LlamaInstall => !!i);
-    if (pool) out.push({ kind, path: pool.server, from: `the model pool's llama.cpp ${pool.build}` });
+    if (own) out.push({ kind, path: own.server, from: `Crosstalk's llama.cpp ${own.build}` });
   }
   return out;
 }

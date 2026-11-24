@@ -2,37 +2,33 @@
 
 **Chat with Claude Code and Codex from your phone, while they work on your own computer.**
 
-Crosstalk runs the official Claude Code and Codex tools on a computer you leave on (a Mac, a Linux box or a Windows PC),
-signed in to *your* plan. Then you chat with them from any phone, tablet or browser: start a chat in a project folder,
-watch them work, answer their questions, approve what they run, and pick up where you left off on another device.
+Crosstalk runs the official coding agents on a computer you leave on, signed in to *your* plan. You chat with them
+from any phone, tablet or browser: start a chat in a folder, watch them work, answer their questions, approve what
+they run, and pick it up later on another device.
 
 <p align="center">
-  <img src="docs/images/phone-home.png" width="250" alt="Home: your agents and how much of each plan is left">
-  <img src="docs/images/phone-chat.png" width="250" alt="A chat: the agent's reply, its steps, and the message box">
-  <img src="docs/images/phone-new-chat.png" width="250" alt="New chat: pick a folder from the list or type a path">
+  <img src="docs/images/phone-home.png" width="250" alt="Home: your agents, how much of each plan is left, and what is waiting for you">
+  <img src="docs/images/phone-chat.png" width="250" alt="A chat: the agent's reply, its steps, and a command waiting for your approval">
+  <img src="docs/images/phone-chats.png" width="250" alt="The chat list: what needs you first, then what's working, then the rest">
 </p>
 
-- **Your plan, your computer.** Agents use your own Claude or ChatGPT subscription (or an API key), on your own
-  hardware. Crosstalk never sees your passwords; each agent signs in through its own official sign-in.
-- **Private by default.** Your phone reaches your computer over [Tailscale](https://tailscale.com), your own private
-  network. Nothing is exposed to the internet and there's no Crosstalk server or account.
-- **Made for phones.** An installable web app (Add to Home Screen) with notifications, plus native apps.
-
-## What you need
-
-| | |
-|---|---|
-| **A computer that stays on** | A Mac (best if you build iPhone apps), a Linux machine, or a Windows 10/11 PC. Your agents work here. |
-| **An agent plan** | Claude Pro or Max for Claude Code, and/or ChatGPT Plus or Pro for Codex. An API key from an AI service works too. |
-| **Tailscale** (free) | On that computer and on your phone, signed in to the same account. |
+- **Your plan, your computer.** Agents use your own Claude or ChatGPT subscription (or an API key) on your own
+  hardware. Crosstalk never sees your passwords: each agent signs in through its own official sign-in.
+- **Private.** Your phone reaches your computer over [Tailscale](https://tailscale.com), a private network between
+  your own devices. Nothing is on the open internet, and there is no Crosstalk account or server.
+- **Made for phones.** It installs to the Home Screen like an app, with notifications when an agent finishes or
+  needs you.
 
 ## Get started
 
-**1. Install Tailscale** on the computer and on your phone ([download](https://tailscale.com/download)) and sign in to
-both with the same account. In the [Tailscale admin console](https://login.tailscale.com/admin/dns), under DNS, turn on
-**HTTPS Certificates**.
+About ten minutes. You need a computer that stays on (a Mac, a Linux machine, or a Windows 10/11 PC), a Claude or
+ChatGPT plan (or an API key from another service), and a phone.
 
-**2. Install Crosstalk on the computer.** Open a terminal and paste one line:
+**1. Tailscale.** Install [Tailscale](https://tailscale.com/download) (free) on the computer and on your phone, and
+sign in to both with the same account. Then turn on **HTTPS Certificates** on its
+[DNS page](https://login.tailscale.com/admin/dns). *(On Windows, only the phone: the installer handles the PC.)*
+
+**2. Install Crosstalk.** On the computer, open a terminal and paste one line:
 
 ```bash
 # Mac or Linux
@@ -44,83 +40,86 @@ curl -fsSL https://raw.githubusercontent.com/channelramble/crosstalk-app/main/in
 irm https://raw.githubusercontent.com/channelramble/crosstalk-app/main/install.ps1 | iex
 ```
 
-It installs the hub as a background service that starts by itself, and ends by printing an **address** and a
-**pairing code**.
+It sets Crosstalk up to run by itself in the background, and ends with a QR code.
 
-**3. Open that address on your phone** and enter the code. Then:
+**3. Pair your phone.** Point its camera at the QR code. On an iPhone, tap **Share → Add to Home Screen** first and
+pair from the new icon; on Android, choose **Install app**. *(At a desktop, Crosstalk also opens in the computer's
+own browser, ready to pair.)*
 
-- Tap **Share → Add to Home Screen** (iPhone) or **Install app** (Android) to get an app icon and notifications.
-- On the welcome card, tap **Sign in to Claude Code** or **Sign in to Codex**. You sign in on the agent's own page
-  from your phone; no need to be at the computer.
-- Tap **Start a chat**, pick a folder, and say hello.
+**4. Set up an agent.** The welcome card has one button for each: **Set up Claude Code** or **Sign in to Codex**. It
+installs the agent if the computer doesn't have it, then you sign in on the agent's own page, from your phone. Start
+a chat, pick a folder, say hello.
 
-Stuck? The step-by-step guide with pictures is in **[docs/GETTING-STARTED.md](docs/GETTING-STARTED.md)**, including
-what to do when something doesn't work.
+Stuck? **[The step-by-step guide](docs/GETTING-STARTED.md)** has pictures and a fix for each thing that can go wrong.
 
 ## What you can do
 
-**Chats**
-- One chat per task, each in a project folder. Pick a folder from the list of folders on the computer, or type a path.
-- **Group chats**: two to six agents in one conversation (say, Claude Code builds and Codex reviews).
-- **Answer, approve, stop**: questions and permission requests show up as cards; Stop works any time.
-- **Rewind** to any point, **edit** or **unsend** a message: the agent forgets what came after. (Files it already
-  changed stay changed.)
-- **Ask others**: from any message, ask another agent or model for a second opinion, side by side.
-- **Helpers**: agents can start background helpers; you keep chatting while they work.
-- **Attach** files, photos and whole folders; **dictate** messages.
-- **Search** every chat, **pin** the ones you use most, **bookmark** messages to find them later, export a chat as
-  Markdown, or duplicate it.
-- **Templates**: save prompts you use often, with blanks to fill in.
-- Continue sessions you started in the Claude or Codex apps on the computer.
+**In a chat**
+- One chat per task, each in a folder on the computer. A new chat asks for the folder and nothing else.
+- One Chat settings sheet per chat: the model and effort, what the agent may do, who helps it, what it remembers.
+- Keep typing while the agent works: your message goes into the running reply, and **Interrupt** stops it to answer
+  you now.
+- Questions and permission requests arrive as cards (and notifications) to answer or approve.
+- Rewind to any point, or edit or unsend a message: the agent forgets what came after.
+- Attach files, photos and whole folders; bookmark messages; search every chat; export or duplicate a chat.
+- Ask another agent or model for a second opinion on any message, side by side.
+- Group chats: several agents in one chat, say one that builds and one that reviews.
+- Helpers on another account: let an agent hand side jobs to an API key, another agent or one of your own models,
+  so your plan's limits go on the main work.
 
-**Your plans and costs**
-- See how much of each plan's 5-hour and weekly limits you've used, on every agent.
-- Costs per chat and per account, with spending limits that warn at 80% and stop at 100%.
-- A reply stopped by a plan limit waits and carries on when the limit resets.
+**Across chats**
+- The chat list shows what needs you first, then what's working, then the rest.
+- Usage for each plan's limits, costs per chat and per account, and spending limits. A reply stopped by a plan limit
+  carries on when the limit resets.
+- Templates for prompts you use often.
+- Themes: dark, light and colourful looks, or your own colours, gradient or picture.
 
-**More models**
-- **AI services**: add Kimi, DeepSeek, Mistral, OpenRouter, Groq, xAI, Gemini, Venice and others with an API key, and
-  run them inside Claude Code or Codex.
-- **Local models**: find, download and run open models on your own computer (Ollama, LM Studio, llama.cpp). Crosstalk
-  tells you whether a model fits your machine first.
-- **Model pool**: split one big model across several of your computers.
+<p align="center">
+  <img src="docs/images/phone-chat-settings.png" width="250" alt="Chat settings: Answers with, May do, Helpers, Memory, This chat">
+  <img src="docs/images/phone-themes.png" width="250" alt="Themes: dark, light and colourful presets, and your own">
+  <img src="docs/images/phone-theme-glass.webp" width="250" alt="A chat in the Liquid glass theme">
+</p>
 
-**Several computers**
-- Link more computers (say, a Mac and a Linux box) and see all their chats in one app.
-- Let agents run commands on another computer you connect, like a laptop with a phone plugged in.
+**More than Claude and ChatGPT**
+- Other services with an API key (OpenRouter, DeepSeek, Kimi, Mistral, Groq, xAI, Gemini and more).
+- Models on your own computer: find, download and run open models with Ollama, LM Studio or llama.cpp. Crosstalk
+  says whether a model fits your machine first.
 
-**Set and forget**
-- Notifications when an agent finishes or needs you.
-- If an agent's sign-in stops working, every device tells you, with a Sign in button.
-- On a Mac: warnings about what would stop it running unattended (sleep, automatic login, privacy dialogs waiting on
-  its screen), most fixable from your phone.
+**The computer itself**
+- **Screen**: see the computer's screen live and take control from your phone; agents can use it too, for apps with
+  no command line ([how](docs/SCREEN.md)).
+- Several computers in one app, and remote computers your agents can run commands on.
+- On a Mac, warnings about what would stop it running unattended (sleep, automatic login, a dialog waiting on its
+  screen), most fixable from your phone.
 
-## Updating
+## Updating and removing
 
-Run the same install line again. Open pages show **"Crosstalk was updated. Reload"** once the new version runs.
+**Update:** run the install line again. Your chats, settings and accounts stay, and open pages offer to reload.
 
-To remove it, see [Uninstall](docs/GETTING-STARTED.md#uninstall). Your chats stay in `~/.crosstalk` until you delete
-that folder.
+**Remove:** add `-s -- --uninstall` to the install line ([details](docs/GETTING-STARTED.md#uninstall)). Your chats
+stay in `~/.crosstalk` until you delete that folder.
 
 ## Questions
 
-**Does it cost anything?** Crosstalk is free. Agents use your own plan or API key, so they cost what they cost you
+**Does it cost anything?** Crosstalk is free. Agents use your own plan or API key, so they cost what they'd cost you
 anyway.
 
-**Who can reach my computer?** Only devices on your Tailscale network that you've paired with a code. Pairing codes are
-single-use and expire. You can remove a device in Settings → Devices.
+**Who can reach my computer?** Only devices on your own Tailscale network that you've paired with a code. Codes work
+once and expire. Remove a device any time in Settings → This device → Paired devices.
 
-**Can agents break things?** Each agent has a permission level per chat, from "Read-only" to "Full access". Anything
-above what it's allowed shows up on your phone to approve first. They're real coding agents with real access to the
-computer, so start each chat in a project folder, not your home folder.
+**Can agents break things?** They're real coding agents with real access to the computer. Each has a permission level
+per chat, from "Read-only" to "Full access"; anything above it comes to your phone to approve first. Start each chat
+in a project's own folder, not your home folder.
 
-**Do I need to keep my phone open?** No. The agents run on the computer; the app just shows what they're doing.
+**Do I need to keep my phone open?** No. The agents run on the computer; the app shows what they're doing.
 
-**Can I use it on my laptop too?** Yes: open the same address in any browser on your tailnet, or install a native app.
+**Can I use it on a laptop too?** Yes: open the same address in any browser on your Tailscale network.
 
-## For developers
+## More
 
-How it's built, how to run it from source, the native apps and the tests: **[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)**.
-Other guides: [group chats](docs/GROUP-CHATS.md), [local models](docs/LOCAL-MODELS.md),
-[model pool](docs/MODEL-POOL.md), [setting up with an AI agent](docs/SETUP-FOR-AGENTS.md),
-[the hub menu-bar app](docs/HUB-APP.md), [image editor](docs/IMAGE-EDITOR.md).
+**Guides:** [getting started, step by step](docs/GETTING-STARTED.md) · [the screen](docs/SCREEN.md) ·
+[group chats](docs/GROUP-CHATS.md) · [the menu-bar app](docs/HUB-APP.md) ·
+[setting up with an AI agent](docs/SETUP-FOR-AGENTS.md) · [what's new](CHANGELOG.md)
+
+**For developers:** [building it from source](docs/DEVELOPMENT.md) · [how your own models work](docs/LOCAL-MODELS.md) ·
+[the image editor](docs/IMAGE-EDITOR.md)

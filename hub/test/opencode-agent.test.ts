@@ -17,7 +17,7 @@ import { fakeRefuseless } from "./fixtures/fake-refuseless";
 const FAKE = join(import.meta.dir, "fixtures", "fake-opencode-acp");
 const MODEL = "deepseek-v4.1-flash-abliterated";
 const KEY = "abl_test_key_0001";
-const REFUSED = "Refuseless refused the key — check it in Settings → AI services, then tap Try again.";
+const REFUSED = "Refuseless refused the key — check it in Settings → Accounts, then tap Try again.";
 const endpoint = { id: "rl", label: "Refuseless", baseUrl: "https://api.refuseless.com", models: [MODEL, "glm-5.3-abliterated"], contextWindow: 1_048_576, key: KEY };
 
 const cleanups: (() => void | Promise<void>)[] = [];
@@ -96,7 +96,7 @@ const turn = (prompt = "Go") => ({ turnId: "t1", prompt, systemNote: null, messa
 const text = (t: string, meta?: unknown) => ({ u: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: t }, ...(meta ? { _meta: meta } : {}) } });
 
 describe("an agent with a sign-in, over ACP (Gemini CLI): a start refused for want of one reaches the recovery", () => {
-  const ACP_WORDS = "Gemini CLI isn't signed in on the hub. Open Settings → AI services.";
+  const ACP_WORDS = "Gemini CLI isn't signed in on this machine. Open Settings → Accounts.";
   function gemini(script: Record<string, unknown>, session: Record<string, unknown> = {}) {
     const s = scripted(script);
     const ctx = ctxFor(s.env, s.dir, { session, endpoint: null });
@@ -472,7 +472,7 @@ describe("OpenCode's driver", () => {
 
   test("without a service or a model it says what to do", async () => {
     const none = driver({}, { endpoint: null });
-    expect((await none.d.runTurn(turn(), sinkFor().sink)).error).toContain("runs on an AI service");
+    expect((await none.d.runTurn(turn(), sinkFor().sink)).error).toContain("needs an account to run on");
     const noModels = driver({}, { endpoint: { ...endpoint, models: [] } });
     (noModels.d as unknown as { ctx: DriverContext }).ctx.member.model = null;
     expect((await noModels.d.runTurn(turn(), sinkFor().sink)).error).toContain("Pick a model for Refuseless");
@@ -575,11 +575,11 @@ describe("OpenCode's driver", () => {
     const { d } = driver({ prompts: [[marker("started"), marker("completed")]] });
     const { sink, out } = sinkFor();
     expect(await d.runTurn(turn("/compact"), sink)).toEqual({ ok: true });
-    expect(out.text).toBe("Done: the conversation so far is summarised, and the chat goes on from the summary.");
-    expect(out.activities).toEqual([{ kind: "notice", title: "Summarising the conversation so far", detail: "", status: "done" }]);
+    expect(out.text).toBe("Done: the chat so far is summarised, and it goes on from the summary.");
+    expect(out.activities).toEqual([{ kind: "notice", title: "Summarising the chat so far", detail: "", status: "done" }]);
     const bad = driver({ prompts: [[marker("started"), marker("failed", { error: { message: "Compaction summary did not match the required template" } })]] });
     const b = sinkFor();
-    expect(await bad.d.runTurn(turn("/compact"), b.sink)).toEqual({ ok: false, error: "Couldn't summarise the conversation: Compaction summary did not match the required template" });
+    expect(await bad.d.runTurn(turn("/compact"), b.sink)).toEqual({ ok: false, error: "Couldn't summarise the chat: Compaction summary did not match the required template" });
   });
 
   test("OpenCode's errors in Crosstalk's plain words", async () => {
@@ -675,7 +675,7 @@ describe("OpenCode's driver", () => {
     const { sink, out } = sinkFor();
     expect(await d.runTurn(turn(), sink)).toEqual({ ok: true });
     expect(out.session.acpSessionId).toBe("ses_fake");
-    expect(out.activities.find((a) => a.kind === "notice")?.title).toBe("OpenCode has lost this chat's earlier conversation");
+    expect(out.activities.find((a) => a.kind === "notice")?.title).toBe("OpenCode no longer remembers this chat's earlier messages");
   });
 
   test("a start that fails doesn't leave the chat stuck: the next message starts a new process", async () => {
@@ -867,7 +867,7 @@ describe("OpenCode's driver", () => {
     expect(r.auth).toBeUndefined();
     // A service with no key saved: what it needs is one.
     const noKey = driver({ newFails: [failure], prompts: [[text("Never.")]] }, { endpoint: { ...endpoint, key: "" } }, { fetch: refusedRead });
-    expect((await noKey.d.runTurn(turn(), sinkFor().sink)).error).toBe("Refuseless needs a key — add it in Settings → AI services, then tap Try again.");
+    expect((await noKey.d.runTurn(turn(), sinkFor().sink)).error).toBe("Refuseless needs a key — add it in Settings → Accounts, then tap Try again.");
   });
 
   test("a stopped reply's answer still counts, where its store can't be read", async () => {
@@ -989,7 +989,7 @@ describe("the hub and OpenCode", () => {
     expect(models.models.find((m) => m.id === MODEL)).toMatchObject({ efforts: ["off", "low", "high", "max"], defaultEffort: "high" });
     expect(app.endpointFor("opencode", account.id, MODEL)).toMatchObject({ baseUrl: fake.base, key: KEY });
     // A chat with it names one of its accounts.
-    expect(() => app.chats.create({ provider: "opencode", cwd: dir } as never)).toThrow("OpenCode runs on an AI service");
+    expect(() => app.chats.create({ provider: "opencode", cwd: dir } as never)).toThrow("OpenCode needs an account to run on");
   });
 
   test("a service moves between Crosstalk's agent and OpenCode with its key; the old account stays while chats use it", async () => {
@@ -1014,7 +1014,7 @@ describe("the hub and OpenCode", () => {
     expect(app.store.getRoom(room.id)).toBeTruthy();
 
     expect(() => app.providers.switchServiceAgent("opencode", moved.id, "codex")).toThrow("between Crosstalk's agent and OpenCode");
-    expect(() => app.providers.switchServiceAgent("opencode", "nope", "builtin")).toThrow("No such AI service");
+    expect(() => app.providers.switchServiceAgent("opencode", "nope", "builtin")).toThrow("That account isn't here any more");
     app.providers.which = (p) => (p === "opencode" ? null : which(p));
     expect(() => app.providers.switchServiceAgent("builtin", back.id, "opencode")).toThrow("isn't installed on this machine yet");
   });
@@ -1028,7 +1028,7 @@ describe("the hub and OpenCode", () => {
       chmodSync(bin, 0o755);
       return bin;
     };
-    expect(await opencodeProvider.checkAuth!(app, write("v2", OPENCODE_VERSION))).toEqual({ signedIn: true, authMethod: "AI service" });
+    expect(await opencodeProvider.checkAuth!(app, write("v2", OPENCODE_VERSION))).toEqual({ signedIn: true, authMethod: "Accounts you add" });
     expect((await opencodeProvider.checkAuth!(app, write("v1", "1.19.5"))).error).toContain("Crosstalk needs version 2");
     expect(opencodeProvider.installCommand!.join(" ")).toContain(`@opencode/cli@${OPENCODE_VERSION}`);
   });

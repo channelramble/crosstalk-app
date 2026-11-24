@@ -64,10 +64,11 @@ test("a reply that ends in another chat marks it unread, and opening it clears t
     await expect(row).toHaveClass(/unread/);
     await expect(row.getByLabel("New reply", { exact: true })).toBeVisible();
     await second.page.screenshot({ ...shot("home-new-reply.png"), animations: "disabled" });
-    // …and on this one, which is in another chat: Show chats has a dot, and the drawer's row is bold.
-    const show = page.getByRole("button", { name: "Show chats, new replies", exact: true });
+    // …and on this one, which is in another chat: Show chats counts it (a reply that failed and hasn't been looked at
+    // needs you, as the list's Needs you section says), and the drawer's row is bold.
+    const show = page.getByRole("button", { name: "Show chats, 1 needs you", exact: true });
     await expect(show).toBeVisible();
-    await expect(show.locator(".sidebar-new")).toBeVisible();
+    await expect(show.locator(".sidebar-count")).toHaveText("1");
     await page.screenshot({ ...shot("show-chats-new-reply.png"), animations: "disabled" });
     await show.click();
     const side = page.getByRole("complementary", { name: "Chats", exact: true });
@@ -120,7 +121,8 @@ test("a request in another chat puts a count on Show chats and shows a notice wh
     // The drawer says so too.
     await page.getByRole("button", { name: "Show chats, 2 need you", exact: true }).click();
     const side = page.getByRole("complementary", { name: "Chats", exact: true });
-    await expect(side.locator(".csb-chat").filter({ hasText: "Fix login" }).getByLabel("Needs you", { exact: true })).toBeVisible();
+    // (Under Needs you, with both requests counted in words on its row.)
+    await expect(side.getByRole("region", { name: "Needs you", exact: true }).locator(".csb-chat").filter({ hasText: "Fix login" }).locator(".csb-chat-words")).toHaveText("Needs your OK · 2");
     await side.getByRole("button", { name: "Close", exact: true }).click();
 
     await notice.getByRole("button", { name: "Open", exact: true }).click();

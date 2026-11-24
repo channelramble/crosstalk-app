@@ -131,7 +131,7 @@ export const SHEET_ACTIONS: Record<SheetAction, string> = {
   again: "Start again",
   retry: "Try again",
   terminal: "Use its terminal sign-in",
-  settings: "Open AI services",
+  settings: "Open Accounts",
 };
 
 /** What the sheet shows: one of these at a time (the dialog's words fade in as it moves on). */

@@ -110,7 +110,7 @@ export function anyApproximate(list: Pick<AccountSpend, "today" | "month" | "tot
 /** What "≈" means, said once under the figures when any is shown. */
 export const APPROX_NOTE = "≈ means worked out from a reply's tokens and a price list.";
 
-const KIND_WORDS: Record<AccountSpend["kind"], string> = { signin: "Plan sign-in", apikey: "API key", endpoint: "AI service" };
+const KIND_WORDS: Record<AccountSpend["kind"], string> = { signin: "On your plan", apikey: "API key", endpoint: "Service or own model" };
 
 /**
  * Said on the card of an account whose key is on a plan of one flat fee for the month: only a Featherless key the hub

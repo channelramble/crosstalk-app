@@ -27,6 +27,35 @@
   --code-bg: #161619;
   --shadow: none;
   --shadow-pop: 0 12px 40px rgba(0, 0, 0, 0.8), 0 0 0 0.5px rgba(255, 255, 255, 0.14);
+  /* More colours a theme sets (theme.ts works every one of them out, readable on its own page; styles/themes.css has
+     the rules only a theme needs). These are OLED black's: with no theme chosen, nothing below changes. */
+  --primary-bg: #f5f5f7;
+  --primary-text: #000;
+  --primary-hover: #fff;
+  /* Words and marks on a fill of the text colour, of orange and of the accent. */
+  --on-text: #000;
+  --on-orange: #000;
+  --tick: #fff;
+  --edge-focus: rgba(255, 255, 255, 0.22);
+  --edge-hover: rgba(255, 255, 255, 0.3);
+  --drawer: #0a0a0b;
+  --term-bg: #101012;
+  --term-screen: #000000;
+  --term-text: #e8e8ea;
+  /* The strips under the header: reconnecting, offline, an update, a question on the Mac. */
+  --strip: #1f1a12;
+  --strip-down: #261315;
+  --strip-update: #0d1a2b;
+  --strip-mac: #1c1a28;
+  --purple: #c58cff;
+  --gold: #ffc23c;
+  --chip-model: #f0b39c;
+  --chip-effort: #d9b8ff;
+  --heat-cool: #5ab0ff;
+  --heat-hot: #ff5a3c;
+  --human-link: white;
+  --human-code-bg: rgba(255, 255, 255, 0.18);
+  --human-code-text: white;
   --radius: 12px;
   --radius-lg: 18px;
   --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI Variable Text", "Segoe UI", Roboto, "Helvetica Neue", system-ui, sans-serif;
@@ -632,6 +661,10 @@ a {
   bottom: -3px;
   width: 11px;
   height: 11px;
+  /* The dot's second class is the agent's status, and one status shares its name with the request card (.approval):
+     none of the card's spacing belongs on a dot. */
+  padding: 0;
+  margin: 0;
   border-radius: 50%;
   border: 2px solid var(--surface);
   background: var(--text-3);
@@ -745,12 +778,12 @@ a {
 }
 .msg.human .bubble a,
 .msg.human .bubble .mention {
-  color: white;
+  color: var(--human-link);
   font-weight: 650;
 }
 .msg.human .bubble code {
-  background: rgba(255, 255, 255, 0.18);
-  color: white;
+  background: var(--human-code-bg);
+  color: var(--human-code-text);
 }
 .msg.system {
   justify-content: center;
@@ -1036,7 +1069,7 @@ a {
 }
 .composer .send:not(:disabled) {
   background: var(--text);
-  color: #000;
+  color: var(--on-text);
   border-radius: 50%;
 }
 .composer .send:disabled {
@@ -1286,7 +1319,7 @@ a {
 .effort-word {
   font-size: 20px;
   font-weight: 650;
-  color: color-mix(in oklch, #5ab0ff calc((1 - var(--heat)) * 100%), #ff5a3c);
+  color: color-mix(in oklch, var(--heat-cool) calc((1 - var(--heat)) * 100%), var(--heat-hot));
 }
 .effort-range {
   -webkit-appearance: none;
@@ -1325,7 +1358,7 @@ a {
   border: 0;
 }
 .ctl-ultra {
-  color: #c58cff;
+  color: var(--purple);
   margin-left: 3px;
 }
 .ctl-helpers {
@@ -1353,7 +1386,7 @@ a {
   margin: 4px 8px 6px;
 }
 .ctl-fast {
-  color: #ffc23c;
+  color: var(--gold);
   flex: none;
 }
 .fast-row {
@@ -1908,6 +1941,16 @@ a {
   justify-content: flex-end;
   gap: 8px;
 }
+/* A line over the buttons saying why the main one isn't there (New chat on a signed-out account: Sign in takes its place). */
+.dialog-foot-note {
+  flex: 1 1 100%;
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-2);
+}
+.dialog-foot:has(.dialog-foot-note) {
+  flex-wrap: wrap;
+}
 .app.mobile .overlay {
   place-items: end stretch;
   padding: 0;
@@ -2050,7 +2093,7 @@ a {
   user-select: all;
 }
 .term-box {
-  background: #101012;
+  background: var(--term-bg);
   border-radius: 12px;
   padding: 8px;
   height: 360px;
@@ -2071,7 +2114,7 @@ a {
   margin: 0;
   padding: 8px 12px;
   border-radius: 8px;
-  background: #261315;
+  background: var(--strip-down);
   color: var(--text);
   font-size: 13px;
   overflow-wrap: anywhere;
@@ -2126,7 +2169,7 @@ a {
   gap: 10px;
   padding: 8px 16px;
   font-size: 12.5px;
-  background: #1f1a12;
+  background: var(--strip);
   color: var(--text);
   border-bottom: 0.5px solid var(--sep);
   flex: none;
@@ -2138,7 +2181,7 @@ a {
   order: -1;
 }
 .conn-strip.down {
-  background: #261315;
+  background: var(--strip-down);
 }
 .conn-strip-text {
   flex: 1;
@@ -2429,7 +2472,7 @@ a {
 /* Filled to --fill (0 to 1) by scaling, like the meters. */
 .upload-bar > span { display: block; height: 100%; background: var(--accent); transform-origin: 0 50%; transform: scaleX(var(--fill, 0)); }
 
-.conn-strip.update-banner { background: #0d1a2b; justify-content: space-between; }
+.conn-strip.update-banner { background: var(--strip-update); justify-content: space-between; }
 
 /* ------------------------------------------------------------ agent picker app */
 
@@ -2645,7 +2688,7 @@ a {
   width: calc(min(320px, calc(86vw / var(--zoom, 1))) + var(--safe-left));
   padding-left: var(--safe-left);
   z-index: 40;
-  background: #0a0a0b;
+  background: var(--drawer);
   border-right: 0.5px solid var(--sep-strong);
   padding-top: var(--safe-top);
   padding-bottom: var(--safe-bottom);
@@ -2821,84 +2864,14 @@ a {
   overflow-y: auto;
   padding: 2px 8px 12px;
 }
-.csb-waiting {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  margin: 4px 0 6px;
-  padding: 9px 10px;
-  border: 0.5px solid color-mix(in srgb, var(--orange) 40%, transparent);
-  border-radius: 10px;
-  background: var(--orange-2);
-  color: var(--orange);
-  font-size: 13px;
-  text-align: left;
-  cursor: pointer;
-}
 .csb-group {
   margin-top: 12px;
-}
-.csb-agent {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 5px 8px;
-  border: 0;
-  border-radius: 8px;
-  background: none;
-  color: var(--text-2);
-  font-size: 12.5px;
-  font-weight: 600;
-  cursor: pointer;
-}
-.csb-agent.active {
-  background: var(--surface);
-  color: var(--text);
-}
-@media (hover: hover) {
-  .csb-agent:hover {
-    background: var(--surface);
-    color: var(--text);
-  }
-}
-.csb-agent .avatar.sm {
-  width: 20px;
-  height: 20px;
-  font-size: 8.5px;
-}
-.csb-agent-name {
-  flex: 1;
-  text-align: left;
 }
 /* A group's heading and its fold control side by side: the heading keeps its own action (GroupFold.tsx). */
 .csb-group-head {
   display: flex;
   align-items: center;
   gap: 2px;
-}
-.csb-group-head > .csb-agent,
-.csb-group-head > .csb-heading {
-  flex: 1;
-  min-width: 0;
-}
-/* The group's own name is what the heading is for: it gives way with an ellipsis rather than wrapping under the fold
-   control (a model's name can be long, and an agent's heading ends with its usage). */
-.csb-group-head .csb-agent-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-/* What a folded group holds, on the line its rows were on: a phone's heading row has no room for these words beside
-   the group's name, and squeezing them in there wrapped the name or painted the usage over them. */
-.csb-fold-said {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin: 2px 10px 4px 36px;
-  font-size: 12.5px;
-  color: var(--text-3);
 }
 /* Something inside needs a look. Not the rows' needs-you orange for all five states: orange only when an agent really
    is waiting for you, red when one stopped with an error, else the accent of a reply you haven't read. */
@@ -2932,62 +2905,10 @@ a {
     min-height: 44px;
   }
 }
-.csb-usage {
-  flex: none;
-  font-size: 11px;
-  font-weight: 500;
-  color: var(--text-3);
-  font-variant-numeric: tabular-nums;
-}
-.csb-usage.warn {
-  color: var(--orange);
-}
-.csb-usage.full {
-  color: var(--red);
-}
-.csb-chat {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  min-height: 34px;
-  padding: 6px 10px 6px 36px;
-  border: 0;
-  border-radius: 8px;
-  background: none;
-  color: var(--text-2);
-  font-size: 13.5px;
-  text-align: left;
-  cursor: pointer;
-}
-@media (hover: hover) {
-  .csb-chat:hover {
-    background: var(--surface);
-    color: var(--text);
-  }
-}
-.csb-chat.active {
-  background: var(--surface-2);
-  color: var(--text);
-}
-.csb-chat-name {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 .csb-time {
   flex: none;
   font-size: 11px;
   color: var(--text-3);
-}
-/* Waiting for a usage limit: when the chat comes back, beside its dot (on a phone it's on the row's second line). */
-.csb-wait {
-  flex: none;
-  font-size: 11px;
-  color: var(--text-3);
-  white-space: nowrap;
 }
 .csb-dot {
   flex: none;
@@ -3004,19 +2925,6 @@ a {
 }
 .csb-dot.needs {
   background: var(--orange);
-}
-.csb-empty {
-  margin: 2px 10px 4px 36px;
-  font-size: 12.5px;
-  color: var(--text-3);
-}
-.csb-more {
-  padding: 4px 10px 4px 36px;
-  border: 0;
-  background: none;
-  color: var(--text-3);
-  font-size: 12px;
-  cursor: pointer;
 }
 @media (hover: hover) {
   .csb-more:hover {
@@ -3047,49 +2955,8 @@ a {
 .csb-storage svg {
   flex: none;
 }
-.csb-foot {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 8px;
-  border-top: 0.5px solid var(--sep);
-}
-.csb-link {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 10px;
-  border: 0;
-  border-radius: 8px;
-  background: none;
-  color: var(--text-2);
-  font-size: 13.5px;
-  cursor: pointer;
-}
-.csb-link.active {
-  background: var(--surface);
-  color: var(--text);
-}
-@media (hover: hover) {
-  .csb-link:hover {
-    background: var(--surface);
-    color: var(--text);
-  }
-}
-/* Fingers need bigger rows than pointers. */
+/* Fingers need bigger fields than pointers. */
 @media (max-width: 760px), (pointer: coarse) {
-  .csb-chat {
-    min-height: 42px;
-    font-size: 15px;
-  }
-  .csb-agent {
-    font-size: 13.5px;
-    padding: 8px;
-  }
-  .csb-link {
-    padding: 11px 10px;
-    font-size: 15px;
-  }
   .csb-search {
     height: 38px;
   }
@@ -3123,7 +2990,36 @@ a {
 }
 .helpers-head > svg:first-child {
   flex: none;
-  color: #c58cff;
+  color: var(--purple);
+}
+.helpers-top {
+  display: flex;
+  align-items: stretch;
+}
+.helpers-top .helpers-head {
+  flex: 1;
+  min-width: 0;
+}
+/* Stops what still runs after the reply ended. The second tap is the one that does it. */
+.helpers-stop {
+  flex: none;
+  min-width: 56px;
+  min-height: 44px;
+  padding: 0 14px;
+  border: 0;
+  border-left: 0.5px solid var(--sep);
+  background: none;
+  color: var(--text-2, var(--muted));
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.helpers-stop.ask {
+  color: #fff;
+  background: var(--red, #e5484d);
+}
+.helpers-stop:disabled {
+  opacity: 0.6;
 }
 .helpers-title {
   flex: 1;
@@ -3266,7 +3162,7 @@ a {
 }
 @media (hover: hover) {
   .q-option:hover:not(:disabled) {
-    border-color: rgba(255, 255, 255, 0.3);
+    border-color: var(--edge-hover);
   }
 }
 .q-option.on {
@@ -3281,7 +3177,7 @@ a {
   height: 18px;
   margin-top: 1px;
   border: 1.5px solid var(--text-3);
-  color: #fff;
+  color: var(--tick);
 }
 .q-mark.dot {
   border-radius: 50%;
@@ -3331,9 +3227,9 @@ a {
   display: inline-block;
   flex: none;
   padding: 0 5px;
-  border: 1px solid color-mix(in srgb, #ffc23c 55%, transparent);
+  border: 1px solid color-mix(in srgb, var(--gold) 55%, transparent);
   border-radius: 5px;
-  color: #ffc23c;
+  color: var(--gold);
   font-size: 9.5px;
   font-weight: 700;
   letter-spacing: 0.04em;
@@ -3368,13 +3264,13 @@ h1 .api-badge {
   }
 }
 .btn.primary {
-  background: #f5f5f7;
-  color: #000;
+  background: var(--primary-bg);
+  color: var(--primary-text);
   border-color: transparent;
 }
 @media (hover: hover) {
   .btn.primary:hover {
-    background: #fff;
+    background: var(--primary-hover);
   }
 }
 .btn.primary:disabled {
@@ -3493,7 +3389,7 @@ h1 .api-badge {
   color: var(--text-3);
 }
 
-/* Sidebar: a quiet New chat, and the open chat tinted in its agent's color. */
+/* Sidebar: a quiet New chat (the open chat's tint is in styles/chat-list.css). */
 .csb-new {
   justify-content: flex-start;
   background: var(--surface);
@@ -3505,10 +3401,6 @@ h1 .api-badge {
     background: var(--surface-2);
   }
 }
-.csb-chat.active {
-  background: linear-gradient(90deg, color-mix(in srgb, var(--c) 20%, var(--surface)) 0%, var(--surface) 85%);
-  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--c) 70%, transparent);
-}
 
 /* The message box and the strips above it share one surface. */
 .composer,
@@ -3517,7 +3409,7 @@ h1 .api-badge {
   background: linear-gradient(180deg, var(--card-top), var(--card-bottom));
 }
 .composer:focus-within {
-  border-color: rgba(255, 255, 255, 0.22);
+  border-color: var(--edge-focus);
 }
 
 /* Helper details: role, model and effort chips, and a context bar, like Claude Code's own agent view. */
@@ -3538,11 +3430,11 @@ h1 .api-badge {
 }
 .hchip.model {
   background: color-mix(in srgb, #d97757 22%, var(--surface-2));
-  color: #f0b39c;
+  color: var(--chip-model);
 }
 .hchip.effort {
   background: color-mix(in srgb, #c58cff 20%, var(--surface-2));
-  color: #d9b8ff;
+  color: var(--chip-effort);
 }
 .helper-chips .helper-meta {
   margin-left: 2px;
@@ -3666,13 +3558,57 @@ h1 .api-badge {
   font-size: 12px;
   color: var(--text);
 }
-/* Under a message of yours while helpers work: what becomes of it, in a few quiet words, with nothing to tap. */
+/* Under a message of yours: what becomes of it, in a few quiet words, with Interrupt beside them: a tap target of its
+   own, without shouting. The words wrap to the button's left (never a word alone on a line), and the button stays whole
+   at the line's end. */
 .msg-quiet {
   align-self: flex-end;
+  max-width: 100%;
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 10px;
   margin: 2px 2px 6px;
-  font-size: 12px;
-  color: var(--text-3);
+  font-size: 12.5px;
+  line-height: 16px;
+  color: var(--text-2);
   text-align: right;
+}
+.msg-quiet-text {
+  min-width: 0;
+  overflow-wrap: break-word;
+  text-wrap: balance;
+}
+.msg-quiet code {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--text);
+}
+/* It keeps the button's height while the button is away (the step is being stopped): nothing above it moves. Two lines
+   of its words are as tall. */
+.msg-quiet.roomy {
+  min-height: 32px;
+}
+.msg-quiet .interrupt {
+  position: relative;
+  flex: none;
+  min-height: 32px;
+  padding: 0 12px;
+  border-radius: 16px;
+  border: 0.5px solid var(--sep-strong);
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+/* A finger-sized (44 px) target around it, without making the line taller. */
+.msg-quiet .interrupt::after {
+  content: "";
+  position: absolute;
+  inset: -6px 0;
+}
+.msg-quiet .interrupt:active {
+  background: var(--surface-2);
 }
 .act-row .step-more {
   margin: 0;
@@ -4198,48 +4134,17 @@ h1 .api-badge {
   overflow-wrap: anywhere;
 }
 
-/* Settings → Model pool */
-.pool-intro {
-  margin: -2px 0 10px;
+/* Pieces Settings' pages share: a part's own title, and what went wrong in it. */
+.setting-title {
+  font-weight: 600;
 }
-.pool-error {
+.setting-error {
   color: var(--red);
   overflow-wrap: anywhere;
 }
-.pool-warn {
-  color: var(--orange) !important;
-}
-.pool .card + .card,
-.pool .pool-card {
-  margin-top: 12px;
-}
-.pool-status {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-.pool-head {
-  display: flex;
-  align-items: baseline;
-  flex-wrap: wrap;
-  gap: 6px 10px;
-}
-.pool-detail {
-  flex: 1 1 180px;
-  min-width: 0;
-  font-size: 13px;
-  color: var(--text-2);
-  overflow-wrap: anywhere;
-}
-.pool-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-.pool-actions:empty {
-  display: none;
-}
-.pool-download {
+
+/* Settings → Local models → Get a model (the rest is in styles/localmodels.css) */
+.download-progress {
   display: flex;
   flex-direction: column;
   gap: 5px;
@@ -4247,159 +4152,26 @@ h1 .api-badge {
   color: var(--text-2);
   font-variant-numeric: tabular-nums;
 }
-.pool-file-name {
-  color: var(--text-3);
-  overflow-wrap: anywhere;
-}
-.pool-bar {
+.fill-bar {
   height: 8px;
   border-radius: 4px;
   background: var(--surface-3);
   overflow: hidden;
 }
 /* Filled to --fill (0 to 1) by scaling, like the meters (the bar's rounded ends shape it). */
-.pool-bar > span {
+.fill-bar > span {
   display: block;
   height: 100%;
   background: var(--accent);
   transform-origin: 0 50%;
   transform: scaleX(var(--fill, 0));
 }
-.pool-bar.good > span {
-  background: var(--green);
-}
-.pool-bar.tight > span,
-.pool-bar.maybe > span {
-  background: var(--orange);
-}
-.pool-bar.over > span {
-  background: var(--red);
-}
-.pool-running {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding-top: 10px;
-  border-top: 0.5px solid var(--sep);
-  font-size: 13px;
-  overflow-wrap: anywhere;
-}
-/* The address and the model's name move to the next line whole ("qwen3.8-27b-instruct", not "qw" + "en3.8…"). */
-.pool-running .mono {
-  word-break: normal;
-}
-.pool-log > summary {
-  cursor: pointer;
-  color: var(--text-2);
-  font-size: 13px;
-}
-.pool-log pre {
-  margin: 8px 0 0;
-  padding: 8px 10px;
-  max-height: 260px;
-  overflow: auto;
-  border-radius: 8px;
-  background: var(--code-bg);
-  font-family: var(--mono);
-  font-size: 11.5px;
-  line-height: 1.45;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-.pool-title {
-  margin: 18px 2px 8px;
-}
-.pool-machine {
-  align-items: flex-start;
-  flex-wrap: wrap;
-  row-gap: 8px;
-  cursor: default;
-}
-@media (hover: hover) {
-  .pool-machine:hover {
-    background: transparent;
-  }
-}
-.pool-machine > svg {
-  flex: none;
-  margin-top: 2px;
-  color: var(--text-2);
-}
-.pool-machine > .row-text {
-  flex: 1 1 140px;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.pool-machine .title {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 4px 8px;
-  white-space: normal;
-}
-.pool-machine-name {
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-.pool-machine .subtitle {
-  white-space: normal;
-  overflow-wrap: anywhere;
-}
-.pool-why {
-  color: var(--text-3) !important;
-}
-.pool-machine-actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  flex-basis: 100%;
-  min-width: 0;
-  padding-left: 32px;
-}
-.pool-dot {
-  display: inline-block;
-  width: 7px;
-  height: 7px;
-  margin-right: 6px;
-  border-radius: 50%;
-  vertical-align: 1px;
-  background: var(--text-3);
-}
-.pool-dot.ok {
-  background: var(--green);
-}
-.pool-dot.wait {
-  background: var(--orange);
-}
-.pool-dot.bad {
-  background: var(--red);
-}
-.pool-buttons {
-  gap: 8px;
-  margin-top: 10px;
-}
-.pool-label {
+.get-label {
   font-size: 12.5px;
   font-weight: 600;
   color: var(--text-2);
 }
-.pool-model {
-  display: flex;
-  align-items: flex-start;
-  flex-wrap: wrap;
-  gap: 8px 12px;
-}
-.pool-model-text {
-  flex: 1 1 180px;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.pool-model-name {
+.get-model-name {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
@@ -4408,44 +4180,34 @@ h1 .api-badge {
   font-weight: 600;
   overflow-wrap: anywhere;
 }
-.pool-repo {
+.get-repo {
   overflow-wrap: anywhere;
 }
-/* Repo and file names break after a dash ("…-27B-" / "Instruct-GGUF"), not mid-word as other mono text does. */
-.pool-repo.mono,
-.pool .pool-repo,
-.pool-file-name.mono {
+/* Repo names break after a dash ("…-27B-" / "Instruct-GGUF"), not mid-word as other mono text does. */
+.get-repo.mono {
   word-break: normal;
 }
-a.pool-repo {
+a.get-repo {
   color: var(--text-3);
   text-decoration: none;
 }
 @media (hover: hover) {
-  a.pool-repo:hover {
+  a.get-repo:hover {
     color: var(--text-2);
     text-decoration: underline;
   }
 }
-.pool-wrap {
+.get-wrap {
   flex-wrap: wrap;
   min-width: 0;
 }
-.pool-fit {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin-top: 14px;
+/* A badge with long words in it wraps rather than widen a narrow phone. */
+.get-wrap .pill {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
-.pool-fit-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 6px;
-  font-size: 13px;
-}
-.pool-token {
+.hf-token {
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -4453,63 +4215,36 @@ a.pool-repo {
   padding-top: 12px;
   border-top: 0.5px solid var(--sep);
 }
-.pool-token-head {
+.hf-token-head {
   display: flex;
   align-items: center;
   gap: 8px;
 }
-.pool-token-form {
+.hf-token-form {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
 }
-.pool-token-form .input {
+.hf-token-form .input {
   flex: 1 1 160px;
   min-width: 0;
 }
-.pool-advanced > summary {
-  cursor: pointer;
-  font-weight: 600;
-}
-.pool-advanced[open] > summary {
-  margin-bottom: 12px;
-}
-.pool-setting {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px 12px;
-  margin-top: 16px;
-}
-.pool-setting > div:first-child {
-  flex: 1 1 160px;
-  min-width: 0;
-}
-.pool-setting-title {
-  font-weight: 600;
-}
-.pool-advanced .pool-token {
-  margin-top: 16px;
-}
-.pool-link-row {
+.get-row {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
   margin-top: 6px;
 }
-.pool-link-row .input {
+.get-row .input {
   flex: 1 1 180px;
   min-width: 0;
 }
-.pool-back {
+.get-back {
   display: inline-flex;
   align-items: center;
   align-self: flex-start;
   gap: 2px;
   margin-bottom: 8px;
-}
-.pool-share {
-  align-self: flex-start;
 }
 /* Fields a preset filled in (Add a custom model): folded away under "Details". */
 .field-details {
@@ -4522,51 +4257,6 @@ a.pool-repo {
 }
 .field-details[open] > summary {
   margin-bottom: 8px;
-}
-/* The main machine's downloads (Advanced): one row each, its name wrapping rather than widening a phone. */
-.pool-downloads {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-top: 16px;
-}
-.pool-downloads .pool-setting {
-  margin-top: 0;
-}
-.pool-file .choice-card-help {
-  font-variant-numeric: tabular-nums;
-}
-.pool-kimi {
-  margin-top: 12px;
-  padding: 10px 12px;
-  border: 1px dashed var(--sep-strong);
-  border-radius: 10px;
-}
-.pool-notes {
-  margin: 8px 0 0;
-  padding-left: 18px;
-}
-.pool-notes li + li {
-  margin-top: 4px;
-}
-.pool-run {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  scroll-margin-top: 8px;
-}
-/* A helper command is a few thousand characters: it scrolls in its box, so Copy and the notes stay in view. */
-.pool-run .command-box code {
-  max-height: 11.5em;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  line-height: 1.45;
-}
-/* A badge with a long GPU name ("Fits alone on RTX A6000 Ada Generation") wraps rather than widen a narrow phone. */
-.pool-wrap .pill {
-  max-width: 100%;
-  white-space: normal;
-  overflow-wrap: anywhere;
 }
 
 /* ---- Chat replies, Stop and the status line (QOL batch 1) ---- */
@@ -4729,7 +4419,7 @@ a.pool-repo {
   padding: 0 4px;
   border-radius: 99px;
   background: var(--orange);
-  color: #000;
+  color: var(--on-orange);
   font-size: 10.5px;
   font-weight: 750;
   line-height: 17px;
@@ -4779,19 +4469,6 @@ a.pool-repo {
   background: transparent;
   border: 2px solid var(--text-3);
 }
-.csb-chat-text {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-}
-.csb-chat-sub {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 12px;
-  color: var(--text-3);
-}
 /* A machine that isn't answering, or one linked on another device: a line of its own, at the top of the list. */
 .csb-machine {
   display: flex;
@@ -4829,17 +4506,8 @@ a.pool-repo {
   }
 }
 
-/* Pinned chats (ChatRow.tsx): every machine's first, under Pinned. Each row's ⋯ opens a tray of its options under it. */
-.csb-heading {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin: 0;
-  padding: 5px 8px;
-  color: var(--text-2);
-  font-size: 12.5px;
-  font-weight: 600;
-}
+/* A chat's row and its options (ChatRow.tsx): a tray under the row. The rows and sections themselves are in
+   styles/chat-list.css. */
 .csb-item {
   position: relative;
   border-radius: 8px;
@@ -4882,49 +4550,6 @@ a.pool-repo {
   flex: 1;
   min-width: 0;
 }
-/* Pinned rows have every agent's chats: each shows its agent in the indent. */
-.csb-chat.pinned {
-  padding-left: 8px;
-}
-.csb-chat.pinned .avatar.sm {
-  width: 20px;
-  height: 20px;
-  border-radius: 6px;
-  font-size: 8.5px;
-}
-/* With a mouse, ⋯ comes up over the row's end when it's pointed at or focused; on a phone it's always there. */
-.csb-row .csb-row-more {
-  position: absolute;
-  top: 50%;
-  right: 3px;
-  width: 28px;
-  height: 28px;
-  transform: translateY(-50%);
-  background: var(--surface-2);
-  opacity: 0;
-}
-.csb-row:focus-within .csb-row-more,
-.csb-row .csb-row-more[aria-expanded="true"] {
-  opacity: 1;
-}
-@media (hover: hover) {
-  .csb-row:hover .csb-row-more {
-    opacity: 1;
-  }
-}
-@media (hover: hover) {
-  .csb-row .csb-row-more:hover {
-    background: var(--surface-3);
-    color: var(--text);
-  }
-}
-.csb-row-tray {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  padding: 2px 8px 8px 36px;
-}
 .csb-row-place {
   font-size: 12px;
   color: var(--text-3);
@@ -4953,24 +4578,6 @@ a.pool-repo {
   cursor: default;
 }
 @media (max-width: 760px), (pointer: coarse) {
-  .csb-row .csb-row-more {
-    position: static;
-    width: 40px;
-    height: 40px;
-    min-width: 40px;
-    min-height: 40px;
-    transform: none;
-    background: none;
-    color: var(--text-3);
-    opacity: 1;
-  }
-  .csb-heading {
-    padding: 8px;
-    font-size: 13.5px;
-  }
-  .csb-row-tray {
-    padding-left: 12px;
-  }
   .csb-tray-btn {
     min-height: 40px;
     padding: 0 12px;
@@ -5206,6 +4813,13 @@ a.pool-repo {
 .memory-card p:last-child {
   margin-bottom: 0;
 }
+/* The switch, "Free memory by itself": its sentence sits under its name, the switch beside both. */
+.memory-act {
+  margin: 0 0 10px;
+}
+.memory-act p.help {
+  margin: 2px 0 0;
+}
 .memory-list {
   list-style: none;
   margin: 0 0 10px;
@@ -5330,7 +4944,7 @@ a.pool-repo {
 /* ------------------------------------------------------------ this Mac */
 
 .mac-strip {
-  background: #1c1a28;
+  background: var(--strip-mac);
 }
 .mac-server .mac-note,
 .mac-waiting .mac-note {
@@ -5495,4 +5109,377 @@ a.pool-repo {
 }
 .link-action.on {
   color: var(--accent);
+}
+
+/* Screen (ScreenPage.tsx): the machine's screen, live. The view fills what's left under the bars and scrolls both ways;
+   the picture inside is as big as the zoom makes it. */
+.screen-live {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.screen-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px 4px;
+}
+.screen-bar .icon-btn:disabled {
+  opacity: 0.35;
+}
+.screen-bar .seg button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.screen-zoom {
+  display: flex;
+  gap: 2px;
+}
+.screen-bar .icon-btn.on {
+  background: var(--surface-2, var(--surface));
+  color: var(--accent);
+}
+.screen-options-btn {
+  margin-left: auto;
+}
+.screen-options {
+  margin: 4px 12px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: flex-start;
+}
+.screen-options .title {
+  font-weight: 600;
+}
+.screen-windows {
+  display: flex;
+  gap: 6px;
+  padding: 4px 12px 8px;
+  overflow-x: auto;
+  flex: none;
+  scrollbar-width: none;
+}
+.screen-windows::-webkit-scrollbar {
+  display: none;
+}
+.screen-windows .chip {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 0 12px;
+  border-radius: 17px;
+  border: 0.5px solid var(--sep);
+  background: var(--surface);
+  color: var(--text-2);
+  font-size: 13px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.screen-windows .chip.on {
+  color: var(--text);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface));
+}
+.chip-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex: none;
+}
+.screen-view {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  position: relative;
+  background: #000;
+  border-top: 0.5px solid var(--sep);
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+.screen-view.control {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.screen-target {
+  position: relative;
+}
+/* noVNC centres its canvas in a flex box of its own: here it starts at the corner, so scrolling matches the screen. */
+.screen-target > div {
+  display: block !important;
+}
+.screen-target canvas {
+  display: block;
+}
+.screen-note {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 10px;
+  padding: 20px;
+  text-align: center;
+  color: #ddd;
+  background: rgba(0, 0, 0, 0.6);
+}
+.screen-note p {
+  margin: 0;
+  max-width: 34ch;
+}
+.screen-keys {
+  flex: none;
+  padding: 8px 12px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-top: 0.5px solid var(--sep);
+}
+.screen-type {
+  display: flex;
+  gap: 8px;
+}
+.screen-type .input {
+  flex: 1;
+  min-width: 0;
+}
+.screen-keyrow {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.screen-keyrow .btn {
+  flex: none;
+  min-width: 44px;
+}
+.screen-hint {
+  flex: none;
+  margin: 0;
+  padding: 6px 12px calc(8px + var(--safe-bottom));
+}
+.screen-setup-title svg {
+  flex: none;
+}
+.screen-setup-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 17px;
+  margin: 0 0 8px;
+}
+.screen-steps {
+  margin: 10px 0 14px;
+  padding-left: 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.screen-setup .field {
+  margin-bottom: 12px;
+}
+.csb-live {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--green, #30d158);
+  margin-left: auto;
+}
+
+/* Home: an update waiting for the chats to go quiet (UpdateReady.tsx). */
+.update-ready {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+  padding: 12px 14px;
+}
+.update-ready svg {
+  flex: none;
+  color: var(--accent);
+}
+.update-ready-text {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: 13.5px;
+}
+
+/* Pairing in Safari on an iPhone: add it to the Home Screen first. */
+.pair-first {
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--surface-2, rgba(255, 255, 255, 0.06));
+  border: 0.5px solid var(--sep);
+  font-size: 13px;
+  line-height: 1.45;
+  text-align: left;
+  color: var(--text);
+}
+
+/* New chat: everything but the folder, under one fold with what it holds said on its closed row. */
+.more-options {
+  margin-top: 4px;
+  border-top: 0.5px solid var(--sep);
+}
+.more-options > summary {
+  display: block;
+  position: relative;
+  min-height: 44px;
+  padding: 11px 28px 11px 0;
+  cursor: pointer;
+  font-weight: 600;
+  list-style: none;
+}
+.more-options > summary::-webkit-details-marker {
+  display: none;
+}
+.more-options > summary::after {
+  content: "";
+  position: absolute;
+  right: 6px;
+  top: 18px;
+  width: 8px;
+  height: 8px;
+  border-right: 2px solid var(--text-2);
+  border-bottom: 2px solid var(--text-2);
+  transform: rotate(45deg);
+}
+.more-options[open] > summary::after {
+  transform: rotate(-135deg);
+  top: 22px;
+}
+.more-options > summary .more-picks {
+  display: block;
+  margin-top: 2px;
+  font-weight: 500;
+  font-size: 13.5px;
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+.more-options[open] > summary {
+  margin-bottom: 6px;
+}
+
+/* Phones: the small controls around the message box take a finger. They keep their look; the area that takes the tap
+   grows to 44 px (the row of chat settings upward and downward, the + and the mic all round). */
+@media (max-width: 760px), (pointer: coarse) {
+  .chat-controls .ctl,
+  .composer-icon {
+    position: relative;
+  }
+  .chat-controls .ctl::after {
+    content: "";
+    position: absolute;
+    inset: -7px 0;
+  }
+  .composer-icon::after,
+  .chat-controls .ctl.ring-btn::after {
+    content: "";
+    position: absolute;
+    inset: -5px;
+  }
+  .chat-controls .ctl.ring-btn::after {
+    inset: -7px;
+  }
+  .chat-status {
+    min-height: 44px;
+  }
+}
+
+/* Screen: the note that what's shown is a login screen macOS made aside, with the sign-in that gets the desktop. */
+.screen-aside {
+  margin: 8px 12px 0;
+  padding: 10px 12px 12px;
+  border-radius: 12px;
+  border: 0.5px solid color-mix(in srgb, var(--amber, #f5a524) 55%, var(--sep));
+  background: color-mix(in srgb, var(--amber, #f5a524) 10%, var(--surface));
+  font-size: 13.5px;
+  line-height: 1.45;
+}
+.screen-aside p {
+  margin: 0 0 8px;
+}
+.screen-account.compact {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px;
+}
+.screen-account.compact .field {
+  flex: 1 1 220px;
+  margin: 0;
+}
+.screen-account.compact .field .help {
+  display: none;
+}
+.screen-account:not(.compact) .btn.primary {
+  margin-top: 4px;
+}
+/* The whole screen sits across the middle of a view wider than it, at its top: so nothing under it (a hint that
+   comes or goes) moves the picture under a finger. */
+.screen-view {
+  display: flex;
+  align-items: flex-start;
+}
+.screen-target {
+  flex: none;
+  margin: 0 auto;
+}
+.screen-bar .seg {
+  flex: none;
+}
+.screen-bar .seg button {
+  white-space: nowrap;
+}
+/* The narrowest phones: the bar's buttons stand closer, so the last one stays on the screen. */
+@media (max-width: 360px) {
+  .screen-bar {
+    gap: 1px;
+    padding-left: 8px;
+    padding-right: 8px;
+  }
+  .screen-bar .seg button {
+    padding-left: 9px;
+    padding-right: 9px;
+  }
+}
+/* Full screen is for a window or a phone on its side: a phone held upright has no room for its button, nor need of it. */
+@media (max-width: 480px) {
+  .screen-full-btn {
+    display: none;
+  }
+}
+.screen-nudge {
+  color: var(--text);
+}
+.screen-live:fullscreen {
+  background: var(--bg, #000);
+}
+.screen-live:fullscreen .screen-aside {
+  display: none;
+}
+
+/* The welcome card: an agent being installed takes the card's width, under the buttons that are left. */
+.welcome-setup {
+  display: contents;
+}
+.welcome-setup .svc-install {
+  flex: 1 1 100%;
+  min-width: 0;
+  order: 5;
+}
+
+.welcome-also {
+  margin: 12px 0 0;
+  padding-top: 12px;
+  border-top: 0.5px solid var(--sep);
+  font-size: 13.5px;
+  color: var(--text-2);
 }

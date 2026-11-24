@@ -30,11 +30,11 @@ afterAll(() => {
   for (const d of dirs) rmSync(d, { recursive: true, force: true });
   // Back to what providers/all.ts registers.
   registerDriver("claude", (ctx) => {
-    if (!ctx.bin) throw new Error("Claude Code isn't installed on the hub. Install it under Agents & sign-ins.");
+    if (!ctx.bin) throw new Error("Claude Code isn't installed on the machine. Install it under Agents & sign-ins.");
     return new ClaudeDriver(ctx, ctx.bin);
   });
   registerDriver("codex", (ctx) => {
-    if (!ctx.bin) throw new Error("Codex isn't installed on the hub. Install it under Agents & sign-ins.");
+    if (!ctx.bin) throw new Error("Codex isn't installed on the machine. Install it under Agents & sign-ins.");
     return new CodexDriver(ctx, ctx.bin);
   });
 });
@@ -170,7 +170,8 @@ describe("what a reply cost", () => {
       t.app.engine.postHumanMessage(room.id, "LONG_STEP: run the long check", "Phone");
       await until(() => t.app.store.listActivities(room.id, t.app.engine.runningTurns(room.id).map((x) => x.id)).some((a) => a.kind === "command" && a.status === "running"));
       t.app.engine.postHumanMessage(room.id, "also add tests", "Phone");
-      expect(await t.app.engine.sendNow(room.id)).toBe(true);
+      // It goes into the reply by itself, to be read after the step: Read it now stops the step for it.
+      await until(() => !t.app.engine.queuedTurns(room.id).length);
       expect(await t.app.engine.readNow(room.id)).toBe(true);
       await t.app.engine.whenIdle();
       const rows = t.rows();
@@ -185,7 +186,7 @@ describe("what a reply cost", () => {
     }
   });
 
-  test("a plan sign-in is notional (shown, never counted); a model with no price is unknown, not zero", async () => {
+  test("a account on a plan is notional (shown, never counted); a model with no price is unknown, not zero", async () => {
     const t = hub({ totals: [["0.50", "0.80"], ["0.50"]] });
     try {
       const plan = t.chat("claude", "default");
@@ -275,11 +276,11 @@ describe("the ledger", () => {
     }
   });
 
-  test("plan sign-ins are notional, models on this machine are free, unpriced replies are counted as such, removed accounts still show, asks count with their chat", () => {
+  test("account on a plans are notional, models on this machine are free, unpriced replies are counted as such, removed accounts still show, asks count with their chat", () => {
     const t = hub();
     const spend = t.app.spend;
     const base = { model: "kimi-k2", inputTokens: 1000, outputTokens: 100 };
-    spend.record(entry("claude", "default", 0.2, base)); // a plan sign-in
+    spend.record(entry("claude", "default", 0.2, base)); // a account on a plan
     spend.record(entry("codex", "mine", 0.3, { ...base, basis: "estimated" })); // on this machine
     spend.record(entry("codex", "kimi", null, base)); // online, no price
     spend.record(entry("codex", "gone", 1, { ...base, roomId: "r2" })); // an account since removed
@@ -311,7 +312,7 @@ describe("the ledger", () => {
     expect(spend.priceReply({ ...asked, model: null })).toEqual({ costUsd: null, basis: "unknown" });
   });
 
-  test("an account that was removed is shown as what its replies were billed as: a rotated key's spend isn't a plan sign-in's", () => {
+  test("an account that was removed is shown as what its replies were billed as: a rotated key's spend isn't a account on a plan's", () => {
     const t = hub();
     const spend = t.app.spend;
     const extra = [
@@ -501,7 +502,7 @@ describe("limits", () => {
     expect(t.pushes.map((p) => p.title)).toEqual(["Spending limit reached"]);
   });
 
-  test("nothing is posted in any chat when a limit warns, and plan sign-ins are never held to one", async () => {
+  test("nothing is posted in any chat when a limit warns, and account on a plans are never held to one", async () => {
     const t = hub();
     try {
       const room = t.chat("codex", "key1", { costUsd: 0.85 });
@@ -559,8 +560,8 @@ describe("routes", () => {
         const r = await put("claude", "key1", bad);
         expect([JSON.stringify(bad), r.status]).toEqual([JSON.stringify(bad), 400]);
       }
-      expect((await put("claude", "default", { limitUsd: 5 })).status).toBe(400); // a plan sign-in isn't billed for each reply
-      expect((await put("claude", "default", { limitUsd: 5 })).body.error).toContain("plan sign-in");
+      expect((await put("claude", "default", { limitUsd: 5 })).status).toBe(400); // a account on a plan isn't billed for each reply
+      expect((await put("claude", "default", { limitUsd: 5 })).body.error).toContain("account on a plan");
       expect((await put("claude", "nope", { limitUsd: 5 })).status).toBe(404);
       expect((await put("nothing", "key1", { limitUsd: 5 })).status).toBe(404);
       expect(t.app.store.kvGet("spend.budgets")).toBeNull(); // none of that was kept

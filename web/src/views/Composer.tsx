@@ -14,6 +14,7 @@ import { makeZip } from "../zip";
 import { deskFor, dropEmptyDesk, waitingAttachments, type AttachmentDesk, type Job } from "../jobs";
 import { recipientPreview } from "../teamwork";
 import { ChatControls } from "./ChatControls";
+import type { SheetAt } from "../chatSettings";
 import { useDictation } from "../dictation";
 import { caretPlan, withMention, withQuote, type CaretWish } from "../caret";
 import { afterAsked, askButtonLabel, askButtonName, askProblem, copiedUntil, hasMention, insertQuote, mentionedChoices, sendPlan, withoutMention, withoutMentions, type SendAction, type SendPlan } from "../asks";
@@ -31,7 +32,7 @@ function jobLabel(j: Job | undefined): string {
   switch (j.phase) {
     case "packing": return `Packing ${j.done.toLocaleString()} of ${j.total.toLocaleString()} files`;
     case "uploading": return `Uploading ${j.total ? Math.floor((j.done / j.total) * 100) : 0}% of ${formatBytes(j.total)}`;
-    case "unpacking": return "Unpacking on the hub…";
+    case "unpacking": return "Unpacking on the machine…";
     case "done": return "Ready";
     case "error": return j.error ?? "Upload failed";
   }
@@ -41,7 +42,7 @@ function jobLabel(j: Job | undefined): string {
  * `stoppable`: Stop shows (a chat whose agent is working, even while its history reloads or couldn't load); by default
  * when `busy`. `onSent`: your message is in the chat (the chat scrolls to it).
  */
-export function Composer({ room, members, busy, working, queued, onRoomSettings, stoppable = busy, onSent }: { room: Room; members: Member[]; busy: boolean; working: Member[]; queued: Member[]; onRoomSettings: () => void; stoppable?: boolean; onSent?: () => void }) {
+export function Composer({ room, members, busy, working, queued, onRoomSettings, onChatSettings, stoppable = busy, onSent }: { room: Room; members: Member[]; busy: boolean; working: Member[]; queued: Member[]; onRoomSettings: () => void; /** Opens the chat's settings sheet at a section (the row under the message box). */ onChatSettings?: (at: SheetAt) => void; stoppable?: boolean; onSent?: () => void }) {
   const mobile = useIsMobile();
   // On a touch screen (even unfolded or turned sideways) Enter adds a line: there's a send button, and a half-written
   // message mustn't go to the agent because the screen got wider.
@@ -136,7 +137,7 @@ export function Composer({ room, members, busy, working, queued, onRoomSettings,
         onProgress: (loaded) => { job.done = loaded; repaint(); },
         onSent: () => { job.phase = "unpacking"; repaint(true); },
       }, roomHub());
-      if (!folder.zip && saved.files !== folder.files.length) throw new Error(`The hub received ${saved.files} of ${folder.files.length} files. Retry.`);
+      if (!folder.zip && saved.files !== folder.files.length) throw new Error(`The machine received ${saved.files} of ${folder.files.length} files. Retry.`);
       folder.token = saved.folder;
       return saved.folder;
     });
@@ -187,6 +188,16 @@ export function Composer({ room, members, busy, working, queued, onRoomSettings,
   };
   const [pop, setPop] = useState<{ query: string; start: number; index: number } | null>(null);
   const ta = useRef<HTMLTextAreaElement>(null);
+  // With a keyboard at hand (a computer: a wide screen with a mouse), a chat that opens is ready to type in. Not on a
+  // touch screen, where that would bring the on-screen keyboard up, nor on a phone-wide screen; and never from under
+  // a sheet or away from a field someone is typing in (the chat list's search keeps the keyboard while it's used).
+  useEffect(() => {
+    if (enterAddsLine || !window.matchMedia("(hover: hover) and (pointer: fine)").matches) return;
+    if (document.querySelector('[role="dialog"]')) return;
+    const at = document.activeElement;
+    if (at instanceof HTMLInputElement || at instanceof HTMLTextAreaElement || at instanceof HTMLSelectElement) return;
+    ta.current?.focus({ preventScroll: true });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const textNow = useRef(text);
   textNow.current = text;
   const dictation = useDictation((said) => {
@@ -452,7 +463,10 @@ export function Composer({ room, members, busy, working, queued, onRoomSettings,
     if (!(await stopChat(room.id, { keepWaiting }))) toast("error", STOP_FAILED);
   };
   // (Hubs before "Stop and answer my message" say nothing about what the agent read, and stop everything.)
-  const stop = () => ((chat || group) && (waitingTurn || unreadByReply) && members[0]?.readSeq !== undefined ? setAskStop(true) : void stopNow());
+  // On a machine with the one rule (HubInfo.flowsIn) Stop stops, at once: Interrupt, under the message, is the way to be
+  // answered sooner, and a message left unanswered says so with Try again.
+  const oneRule = useStore((s) => !!s.hub?.flowsIn);
+  const stop = () => (!oneRule && (chat || group) && (waitingTurn || unreadByReply) && members[0]?.readSeq !== undefined ? setAskStop(true) : void stopNow());
 
   const onKey = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (pop && popHandles.length) {
@@ -506,28 +520,62 @@ export function Composer({ room, members, busy, working, queued, onRoomSettings,
   // The accessible name and tooltip say it in full (the machine too); the button's own words are short.
   const askName = chat ? askButtonName(ask.chips, agentName) : answering && askLabel ? sendName(answering) : null;
 
+  // Files and folders dragged from the computer are attached wherever they're dropped on the chat (its messages as
+  // much as the message box), never on a sheet over it.
+  const wrap = useRef<HTMLDivElement>(null);
+  const takeDrop = useRef((_data: DataTransfer) => {});
+  takeDrop.current = (data) => {
+    // Reading a dropped folder takes a while; if the composer closed or the room changed meanwhile, drop the result.
+    const q = jobs;
+    void droppedItems(data)
+      .then(({ files: dropped, folderFiles, truncated }) => {
+        if (!mounted.current || !q.alive || q !== deskRef.current?.jobs) return;
+        addFiles(dropped);
+        addFolderFiles(folderFiles, truncated);
+      })
+      .catch(() => toast("error", "Couldn't read the dropped folder."));
+  };
+  useEffect(() => {
+    const screen = wrap.current?.closest<HTMLElement>(".main") ?? wrap.current;
+    if (!screen) return;
+    const files = (e: DragEvent) => !!e.dataTransfer?.types.includes("Files");
+    const over = (e: DragEvent) => {
+      if (!files(e)) return;
+      e.preventDefault();
+      setDragging(true);
+    };
+    const left = (e: DragEvent) => {
+      if (!screen.contains(e.relatedTarget as Node | null)) setDragging(false);
+    };
+    const dropped = (e: DragEvent) => {
+      if (!files(e) || !e.dataTransfer) return;
+      e.preventDefault();
+      setDragging(false);
+      takeDrop.current(e.dataTransfer);
+    };
+    screen.addEventListener("dragover", over);
+    screen.addEventListener("dragleave", left);
+    screen.addEventListener("drop", dropped);
+    return () => {
+      screen.removeEventListener("dragover", over);
+      screen.removeEventListener("dragleave", left);
+      screen.removeEventListener("drop", dropped);
+    };
+  }, []);
+
   const target = recipientPreview(room, members, text);
   // Send has something to send.
-  const ready = !((!text.trim() && !files.length && !folders.length) || sending || !members.length);
+  const hasDraft = !!text.trim() || files.length > 0 || folders.length > 0;
+  const ready = !(!hasDraft || sending || !members.length);
+  // A group chat at work: each agent's status line, just above the box, has its own Stop. So with something typed the
+  // box keeps its room for the words: no Stop all beside Send, and Send stays its arrow (who it's for is said on the
+  // line above the box, and in the button's name). With nothing typed, Stop all is where Send was, as in any chat.
+  const stopOnLines = group && working.length > 0;
+  const showStop = stoppable && !(stopOnLines && hasDraft);
+  const sendWords = group && stoppable ? null : askLabel;
 
   return (
-    <div className={`composer-wrap ${dragging ? "file-drag" : ""}`}
-      onDragOver={(e) => { if (e.dataTransfer.types.includes("Files")) { e.preventDefault(); setDragging(true); } }}
-      onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false); }}
-      onDrop={(e) => {
-        e.preventDefault();
-        setDragging(false);
-        // Reading a dropped folder takes a while; if the composer closed or the room changed meanwhile, drop the result.
-        const q = jobs;
-        void droppedItems(e.dataTransfer)
-          .then(({ files: dropped, folderFiles, truncated }) => {
-            if (!mounted.current || !q.alive || q !== deskRef.current?.jobs) return;
-            addFiles(dropped);
-            addFolderFiles(folderFiles, truncated);
-          })
-          .catch(() => toast("error", "Couldn't read the dropped folder."));
-      }}
-    >
+    <div ref={wrap} className={`composer-wrap ${dragging ? "file-drag" : ""}`}>
       <div className="composer-work"><WorkingPanel key={room.id} room={room} members={members} /></div>
       {approvals.length > 0 && (
         <Arrive>
@@ -621,7 +669,7 @@ export function Composer({ room, members, busy, working, queued, onRoomSettings,
           <span>{answersLine(answering)}</span>
         </p>
       )}
-      <div className={`composer${askLabel ? " asking" : ""}`}>
+      <div className={`composer${sendWords ? " asking" : ""}`}>
         <input ref={picker} type="file" multiple hidden onChange={(e) => { addFiles(Array.from(e.target.files ?? [])); e.target.value = ""; }} aria-label="Choose attachments" />
         {/* One + for everything: it opens a choice of files, a folder, or a zipped folder (what iPhones can send). */}
         <button className="composer-icon attach-button" onClick={() => setFolderMenu(true)} disabled={sending} aria-label="Attach files or a folder" title="Attach files or a folder"><Plus size={20} /></button>
@@ -655,7 +703,7 @@ export function Composer({ room, members, busy, working, queued, onRoomSettings,
           aria-activedescendant={popActive}
           enterKeyHint={enterAddsLine ? "enter" : "send"}
         />
-        {stoppable && (
+        {showStop && (
           stopping ? (
             <SwapButton className="send stop stopping" disabled aria-label="Stopping…" title="Stopping…">
               <Loader2 size={15} className="spin" />
@@ -666,10 +714,10 @@ export function Composer({ room, members, busy, working, queued, onRoomSettings,
             </SwapButton>
           )
         )}
-        {(!stoppable || text.trim() || files.length > 0 || folders.length > 0) && (
-          <SwapButton className={`send${askLabel ? " ask" : ""}`} onClick={() => void send()} disabled={!ready} aria-label={askName ?? "Send"} title={askName ?? "Send"}>
+        {(!stoppable || hasDraft) && (
+          <SwapButton className={`send${sendWords ? " ask" : ""}`} onClick={() => void send()} disabled={!ready} aria-label={askName ?? "Send"} title={askName ?? "Send"}>
             {/* A new face when it gets something to send: it pops in (motion-chat.css), and only then. */}
-            <SendFace key={ready ? "ready" : "idle"} ready={ready} label={askLabel} />
+            <SendFace key={ready ? "ready" : "idle"} ready={ready} label={sendWords} />
           </SwapButton>
         )}
         {dictation.supported && (
@@ -678,8 +726,8 @@ export function Composer({ room, members, busy, working, queued, onRoomSettings,
           </button>
         )}
       </div>
-      {chat && members[0] && <ChatControls room={room} member={members[0]} />}
-      {group && members.length > 0 && <ChatControls room={room} member={members[0]} members={members} />}
+      {chat && members[0] && <ChatControls room={room} member={members[0]} onOpen={onChatSettings ?? onRoomSettings} />}
+      {group && members.length > 0 && <ChatControls room={room} member={members[0]} members={members} onOpen={onChatSettings ?? onRoomSettings} />}
       {!chat && !group && <div className="composer-hint composer-recipient">
         <span>{target ? `Goes to ${target}` : "Add an agent to send messages"}</span>
         {members.length > 0 && <span className="muted">Type @ to choose an agent</span>}

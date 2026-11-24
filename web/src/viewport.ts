@@ -110,11 +110,39 @@ export function trackVisualViewport() {
     if (typing && height / zoom < before - 1 && !(field as HTMLElement).closest(".composer")) requestAnimationFrame(() => (field as HTMLElement).scrollIntoView({ block: "nearest" }));
     updateSegments();
   };
-  const schedule = () => {
-    if (!frame) frame = requestAnimationFrame(update);
+  // One look per frame, and one all the same when no frame comes (a page that isn't being drawn: a phone switching
+  // from its cover screen to its inner one).
+  let fallback: ReturnType<typeof setTimeout> | undefined;
+  const run = () => {
+    cancelAnimationFrame(frame);
+    clearTimeout(fallback);
+    update();
   };
-  vv.addEventListener("resize", schedule);
+  const schedule = () => {
+    if (frame) return;
+    frame = requestAnimationFrame(run);
+    fallback = setTimeout(run, 250);
+  };
+  // Some browsers settle the visible part a moment after the size changed (their own bars moving out of the way, a
+  // screen switching), with no word of it: looked at again shortly after, so no size is ever left as it was.
+  let again: ReturnType<typeof setTimeout> | undefined;
+  const changed = () => {
+    schedule();
+    clearTimeout(again);
+    again = setTimeout(schedule, 400);
+  };
+  vv.addEventListener("resize", changed);
   vv.addEventListener("scroll", schedule);
+  // The window's own word of a new size, a turn, and coming back to the front: the visible part doesn't always say
+  // so itself when a foldable changes screens.
+  window.addEventListener("resize", changed);
+  window.addEventListener("orientationchange", changed);
+  window.addEventListener("pageshow", changed);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") changed();
+  });
+  // And the page's own box: whatever changed it, the app is sized to it again.
+  if (typeof ResizeObserver !== "undefined") new ResizeObserver(schedule).observe(root);
   // A field taking or losing focus: only whether the keyboard is up (and the room it leaves) is looked at again.
   const typingChanged = () => requestAnimationFrame(() => measure(document.activeElement));
   document.addEventListener("focusin", typingChanged);
@@ -142,7 +170,65 @@ export function onPosture(fn: () => void): () => void {
 
 /** Below this, the lower part isn't worth the message box (the keyboard covers most of it): the usual layout. */
 const TABLETOP_MIN_LOWER = 240;
+/** Narrower than this, a part can't hold the chats or a chat (a fold at the window's edge): the usual layout. */
+const BOOK_MIN_PART = 240;
+/**
+ * A fold counts as half-folded once it has stayed so this long. A phone being opened or closed passes through
+ * half-open on its way (Chrome on Android reports it for the whole swing), and laying the app out in halves for that
+ * moment cuts the screen in two just as it unfolds: only a phone set down or held half-folded gets those layouts.
+ */
+export const POSTURE_STEADY_MS = 1000;
+
+/**
+ * The layouts in two parts are this device's choice, and off until it's made (Settings → This device, offered only on a
+ * device that has reported a fold). Laid out in halves by itself, a foldable looked broken to the people using one: some
+ * report the fold as half-open whenever it isn't perfectly flat, so the chat sat on half the screen for good.
+ */
+export const FOLD_PARTS_KEY = "crosstalk.fold.parts.v1";
+/** Kept once this device has reported a fold, so the choice shows only where it means something. */
+export const FOLD_SEEN_KEY = "crosstalk.fold.seen.v1";
+const kept = (key: string) => {
+  try {
+    return localStorage.getItem(key) === "1";
+  } catch {
+    return false;
+  }
+};
+export const foldParts = () => kept(FOLD_PARTS_KEY);
+export const foldKnown = () => kept(FOLD_SEEN_KEY);
+/** Turns the two-part layouts on or off for this device; a phone held half-folded right now follows at once. */
+export function setFoldParts(on: boolean) {
+  try {
+    if (on) localStorage.setItem(FOLD_PARTS_KEY, "1");
+    else localStorage.removeItem(FOLD_PARTS_KEY);
+  } catch {
+    // storage unavailable: it stays as it is
+  }
+  if (fold) foldSince = -Infinity;
+  if (typeof document !== "undefined") updateSegments();
+}
 const SEG_VARS = ["--seg-l-w", "--seg-r-x", "--seg-r-w", "--seg-t-h", "--seg-b-y", "--seg-b-h"];
+
+/** What the browser says of the fold right now: which way the two parts lie, or none. */
+let fold: "book" | "tabletop" | null = null;
+/** Since when it has said so (performance.now()); -Infinity for how the page started: nothing was passing through. */
+let foldSince = -Infinity;
+let foldSeen = false;
+let steady: ReturnType<typeof setTimeout> | undefined;
+
+/**
+ * Which way two parts of the screen lie, if each has room: side by side ("book") or one above the other ("tabletop").
+ * Anything else (one part, a part with no room, parts that don't fit the window any more) is a flat screen.
+ */
+export function foldOf(segs: ArrayLike<{ x: number; y: number; width: number; height: number }> | null | undefined, zoom: number, screen: { width: number; height: number }): "book" | "tabletop" | null {
+  if (segs?.length !== 2) return null;
+  const [a, b] = [segs[0], segs[1]];
+  // Parts of another screen than this one (the size changed and the fold's word of it hasn't come yet).
+  if (b.x + b.width > screen.width + 1 || b.y + b.height > screen.height + 1) return null;
+  if (b.x > a.x) return Math.min(a.width, b.width) / zoom >= BOOK_MIN_PART ? "book" : null;
+  if (b.y > a.y) return a.height > 0 && b.height > 0 ? "tabletop" : null;
+  return null;
+}
 
 /**
  * A foldable half-folded (or a two-screen phone): where the two parts of the screen are, and the posture, for
@@ -150,17 +236,36 @@ const SEG_VARS = ["--seg-l-w", "--seg-r-x", "--seg-r-w", "--seg-t-h", "--seg-b-y
  * `window.viewport.segments` are in CSS pixels whatever its own page zoom (its env(viewport-segment-*) values aren't);
  * like every size from the screen, they're divided by the app's zoom. Like a laptop only while the lower part has room:
  * with the keyboard up (Android browsers shrink the page for it, so the lower part does too) it's the usual layout.
+ * Only a fold that has stayed half-folded (POSTURE_STEADY_MS) lays the app out in parts; flat again, it's the usual
+ * layout at once.
  */
 function updateSegments() {
   const root = document.documentElement;
   const segs = (window as unknown as { viewport?: { segments?: DOMRectReadOnly[] | null } }).viewport?.segments;
   const zoom = zoomFactor();
   const px = (v: number) => `${Math.round(v) / zoom}px`;
+  const now = performance.now();
+  const seen = foldOf(segs, zoom, { width: window.innerWidth, height: window.innerHeight });
+  if (seen && !foldKnown()) {
+    try {
+      localStorage.setItem(FOLD_SEEN_KEY, "1");
+    } catch {
+      // storage unavailable: Settings just doesn't offer the choice
+    }
+  }
+  if (seen !== fold || !foldSeen) {
+    // How the page starts is how the phone is being held; a fold that comes later has to stay.
+    foldSince = foldSeen ? now : -Infinity;
+    fold = seen;
+    foldSeen = true;
+    clearTimeout(steady);
+    if (fold && foldSince > 0) steady = setTimeout(updateSegments, POSTURE_STEADY_MS + 20);
+  }
   let next: Posture = null;
   const vars: Record<string, string> = {};
-  if (segs?.length === 2) {
+  if (fold && segs && foldParts() && now - foldSince >= POSTURE_STEADY_MS) {
     const [a, b] = segs;
-    if (b.x > a.x) {
+    if (fold === "book") {
       next = "book";
       Object.assign(vars, { "--seg-l-w": px(a.width), "--seg-r-x": px(b.x), "--seg-r-w": px(b.width) });
     } else if (b.height / zoom >= TABLETOP_MIN_LOWER && !root.classList.contains("keyboard-open")) {
@@ -183,7 +288,11 @@ function updateSegments() {
 /** Keeps the posture up to date as the screen folds, turns or resizes (and the keyboard comes and goes, above). */
 export function trackSegments() {
   window.addEventListener("resize", updateSegments);
-  for (const q of ["(horizontal-viewport-segments: 2)", "(vertical-viewport-segments: 2)"]) window.matchMedia(q).addEventListener("change", updateSegments);
+  window.visualViewport?.addEventListener("resize", updateSegments);
+  for (const q of ["(horizontal-viewport-segments: 2)", "(vertical-viewport-segments: 2)", "(device-posture: folded)"]) window.matchMedia(q).addEventListener("change", updateSegments);
+  // Back at the front (the fold may have changed while the page wasn't drawn, and nothing said so).
+  window.addEventListener("pageshow", updateSegments);
+  document.addEventListener("visibilitychange", updateSegments);
   onZoom(updateSegments);
   updateSegments();
 }

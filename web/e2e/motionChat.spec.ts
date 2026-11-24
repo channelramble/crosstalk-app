@@ -1,6 +1,6 @@
 import type { APIRequestContext, Page, WebSocketRoute } from "@playwright/test";
 import type { Activity, Approval, Member, Message, Room, Turn } from "@crosstalk/shared";
-import { test, expect } from "./fixtures";
+import { test, expect, chatSettings } from "./fixtures";
 
 /*
  * The chat screen's motion, its menus and Settings' tabs (web/src/styles/motion-chat.css), on a phone (390 px), in each
@@ -318,30 +318,26 @@ test.describe("with motion", () => {
     }
   });
 
-  test("a menu rises out of its row at its full size and takes taps at once; closed, it's gone and an inert copy fades", async ({ page, request, token }) => {
-    const c = await liveChat(page, request, token, "Motion: a menu");
+  test("a chip under the message box opens the chat's settings on its section: it takes taps while it comes up, its choices a finger's size; closed, it's gone and an inert copy leaves", async ({ page, request, token }) => {
+    const c = await liveChat(page, request, token, "Motion: a chip");
     try {
       await page.goto(`/#/room/${c.room.id}`);
       await expect(page.getByText("Answer 12", { exact: true })).toBeVisible();
       await watch(page);
-      await slow(page, ["--dur-menu-in", "--dur-menu-out"]);
+      await slow(page, ["--dur-sheet-in", "--dur-sheet-out"]);
       const opener = page.getByRole("button", { name: /^Permissions:/ });
       await opener.click();
-      const menu = page.getByRole("dialog", { name: "Permissions", exact: true });
+      const menu = page.getByRole("dialog", { name: "Chat settings", exact: true }).getByRole("region", { name: "May do", exact: true });
       await expect(menu).toBeVisible();
-      // Rising out of its row (a minute here), its choices a finger's size all the way, and where a tap lands meanwhile.
-      expect(await playing(page, ".ctl-pop")).toBe("m-menu-in 60s");
-      const item = await midEntrance(page, ".ctl-pop", "button");
-      expect(item.hit, "a tap on a choice while the menu comes in lands on it").toBe(true);
-      expect(await fullSize(page, ".ctl-pop"), "the menu is its full size while it comes in").toBe(true);
-      expect((await menu.getByRole("menuitemradio").first().boundingBox())!.height, "a choice is a finger's size while the menu comes in").toBeGreaterThanOrEqual(44);
-      // Escape: gone at once, while its copy fades; the copy is out of everyone's reach.
+      // Coming up (a minute here), its section open and its choices a finger's size all the way, and where a tap lands meanwhile.
+      const item = await midEntrance(page, '[role="dialog"]', '[role="radio"]');
+      expect(item.hit, "a tap on a choice while the sheet comes up lands on it").toBe(true);
+      expect((await menu.getByRole("radio").first().boundingBox())!.height, "a choice is a finger's size while the sheet comes up").toBeGreaterThanOrEqual(44);
+      // Escape: gone at once, while its copy leaves; the copy is out of everyone's reach.
       await page.keyboard.press("Escape");
-      await expect(page.locator('[data-ghost="menu"]')).toHaveCount(1);
+      await expect(page.locator('[data-ghost="sheet"]')).toHaveCount(1);
       expect(await menu.count()).toBe(0);
-      expect(await page.locator(".ctl-pop").count()).toBe(0);
-      expect(await copyOf(page, "menu")).toEqual(AS_A_COPY);
-      expect(await page.evaluate(async () => (await import("/src/motion.ts")).ghosts().map((g) => getComputedStyle(g).animationName)), "its copy fades").toEqual(["m-menu-out"]);
+      expect(await copyOf(page, "sheet")).toEqual(AS_A_COPY);
       await expect(page.getByRole("dialog")).toHaveCount(0);
       // The message box, under the leaving copy, takes the tap.
       const box = page.getByRole("textbox", { name: "Message", exact: true });
@@ -524,7 +520,7 @@ test.describe("with motion", () => {
       expect(await drew(), "the hook sees the chat draw").toBeGreaterThanOrEqual(12);
       // The chat drawn twice more: its settings opened and closed.
       const twice = async () => {
-        await page.getByRole("button", { name: "Chat settings", exact: true }).click();
+        await chatSettings(page);
         await expect(page.getByRole("dialog", { name: "Chat settings", exact: true })).toBeVisible();
         await page.keyboard.press("Escape");
         await expect(page.getByRole("dialog")).toHaveCount(0);
@@ -578,7 +574,7 @@ test.describe("with motion", () => {
       c.status("working");
       await expect(page.locator("button.chat-status")).toBeVisible();
       await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeVisible();
-      await page.getByRole("button", { name: "Chat settings", exact: true }).click();
+      await chatSettings(page);
       await expect(page.getByRole("dialog", { name: "Chat settings", exact: true })).toBeVisible();
       const toast = () => page.evaluate(async () => (await import("/src/store.ts")).useStore.getState().toast("info", "Motion check: the setting."));
       await toast();
@@ -589,40 +585,41 @@ test.describe("with motion", () => {
       await page.keyboard.press("Escape");
       await expect(page.getByRole("dialog")).toHaveCount(0);
 
-      // Settings: the tab you went to came in from its side; it stays.
+      // Settings: the page you went to came in from its side; it stays.
       await page.goto("/#/settings");
-      await expect(page.getByRole("tabpanel", { name: "Agents", exact: true })).toBeVisible();
-      await page.getByRole("tab", { name: "Machines", exact: true }).click();
+      await expect(page.getByRole("navigation", { name: "Settings pages", exact: true })).toBeVisible();
+      await page.getByRole("navigation", { name: "Settings pages", exact: true }).locator(".settings-page-row .title").getByText("Machines", { exact: true }).click();
       await expect(page.locator(".page-inner")).toHaveClass(/m-tab-next/);
-      await expect.poll(entrances, { message: "the tab is in" }).toEqual([]);
+      await expect.poll(entrances, { message: "the page is in" }).toEqual([]);
       await flip();
     } finally {
       await c.cleanup();
     }
   });
 
-  test("Settings: the tab you go to comes in from its side, Settings' first draw is still, and nothing ever sticks out sideways", async ({ page }) => {
+  test("Settings: the page you go to comes in from its side, Settings' first draw is still, and nothing ever sticks out sideways", async ({ page }) => {
     await page.goto("/#/settings");
-    await expect(page.getByRole("tabpanel", { name: "Agents", exact: true })).toBeVisible();
+    await expect(page.getByRole("navigation", { name: "Settings pages", exact: true })).toBeVisible();
     await watch(page);
     await expect(page.locator(".page-inner")).not.toHaveClass(/m-tab/);
     const sideways = () => page.evaluate(() => {
       const p = document.querySelector<HTMLElement>(".page")!;
       return { page: p.scrollWidth - p.clientWidth, left: p.scrollLeft, doc: document.documentElement.scrollWidth - innerWidth };
     });
-    await page.getByRole("tab", { name: "Machines", exact: true }).click();
-    // The new tab's panel has the focus at once, while its settings come in.
-    await expect(page.getByRole("tabpanel", { name: "Machines", exact: true })).toBeFocused();
+    await page.getByRole("navigation", { name: "Settings pages", exact: true }).locator(".settings-page-row .title").getByText("Machines", { exact: true }).click();
+    // The page has the focus at once, while its settings come in.
+    await expect(page.getByRole("region", { name: "Machines", exact: true })).toBeFocused();
     await expect(page.locator(".page-inner")).toHaveClass(/m-tab-next/);
     expect(await playing(page, ".page-inner")).toBe("m-tab-next 0.18s");
     for (let i = 0; i < 6; i++) {
       expect(await sideways(), "nothing sticks out sideways while it comes in").toEqual({ page: 0, left: 0, doc: 0 });
       await page.evaluate(() => new Promise(requestAnimationFrame));
     }
-    await page.getByRole("tab", { name: "Agents", exact: true }).click();
+    // Back: the list comes back in from the other side.
+    await page.getByRole("button", { name: "Back to Settings", exact: true }).click();
     await expect(page.locator(".page-inner")).toHaveClass(/m-tab-back/);
     expect(await playing(page, ".page-inner")).toBe("m-tab-back 0.18s");
-    // A section linked from elsewhere lands in its tab, with nothing moved sideways after.
+    // A section linked from elsewhere lands in its page, with nothing moved sideways after.
     await page.goto("/#/settings/storage");
     await expect(page.getByRole("heading", { name: "Storage", exact: true }).first()).toBeInViewport();
     expect(await sideways()).toEqual({ page: 0, left: 0, doc: 0 });
@@ -659,10 +656,9 @@ test.describe("with Reduce Motion", () => {
       c.send({ t: "activity", activity: c.step(2, "running") });
       c.send({ t: "approval", approval: { id: "mc-approval-r", roomId: c.room.id, memberId: c.member.id, turnId: c.turn.id, kind: "command", title: "ls", detail: "ls", status: "pending", decision: null, decidedBy: null, createdAt: Date.now(), decidedAt: null, always: null } });
       await expect(page.locator(".messages .approval")).toBeVisible();
-      // A menu, open and closed; Stop and Send swapping.
+      // The chat's settings from a chip, open and closed; Stop and Send swapping.
       await page.getByRole("button", { name: /^Permissions:/ }).click();
-      await expect(page.getByRole("dialog", { name: "Permissions", exact: true })).toBeVisible();
-      expect(await playing(page, ".ctl-pop"), "the menu fades in").toBe("m-menu-in 0.15s");
+      await expect(page.getByRole("dialog", { name: "Chat settings", exact: true }).getByRole("region", { name: "May do", exact: true })).toBeVisible();
       await page.keyboard.press("Escape");
       await expect(page.getByRole("dialog")).toHaveCount(0);
       c.send({ t: "message", message: { ...reply, text: "Done.", status: "done" } });
@@ -689,12 +685,12 @@ test.describe("with Reduce Motion", () => {
     }
   });
 
-  test("Settings' next tab fades in, without moving", async ({ page }) => {
+  test("Settings' next page fades in, without moving", async ({ page }) => {
     await page.goto("/#/settings");
-    await expect(page.getByRole("tabpanel", { name: "Agents", exact: true })).toBeVisible();
+    await expect(page.getByRole("navigation", { name: "Settings pages", exact: true })).toBeVisible();
     await watch(page);
-    await page.getByRole("tab", { name: "Usage", exact: true }).click();
-    await expect(page.getByRole("tabpanel", { name: "Usage", exact: true })).toBeFocused();
+    await page.getByRole("navigation", { name: "Settings pages", exact: true }).locator(".settings-page-row .title").getByText("Usage & costs", { exact: true }).click();
+    await expect(page.getByRole("region", { name: "Usage & costs", exact: true })).toBeFocused();
     expect(await playing(page, ".page-inner")).toBe("m-tab-next 0.15s");
     await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
     const seen = await watched(page);

@@ -22,7 +22,7 @@ const gb = (n: number) => n >= 1024 ** 3 ? `${(n / 1024 ** 3).toFixed(1)} GB` : 
 function ensureSpace(dir: string, bytes: number): void {
   const free = freeBytes(dir);
   if (free - bytes < diskReserve()) {
-    throw new HttpError(507, `Not enough free space on the hub: this needs ${gb(bytes)}, and ${gb(Math.max(0, free - diskReserve()))} is available (keeping ${gb(diskReserve())} free).`);
+    throw new HttpError(507, `Not enough free space on the machine: this needs ${gb(bytes)}, and ${gb(Math.max(0, free - diskReserve()))} is available (keeping ${gb(diskReserve())} free).`);
   }
 }
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
@@ -178,7 +178,7 @@ function countFiles(dir: string): number {
  */
 async function streamToFile(req: Request, path: string): Promise<void> {
   const dir = path.slice(0, path.lastIndexOf("/"));
-  const lowSpace = () => new HttpError(507, `Not enough free space on the hub for this upload (keeping ${gb(diskReserve())} free).`);
+  const lowSpace = () => new HttpError(507, `Not enough free space on the machine for this upload (keeping ${gb(diskReserve())} free).`);
   ensureSpace(dir, Number(req.headers.get("content-length")) || 0);
   writeFileSync(path, "", { flag: "wx", mode: 0o600 });
   let sink: ReturnType<ReturnType<typeof Bun.file>["writer"]> | null = null;
@@ -296,10 +296,10 @@ export function projectFile(room: Room, requested: string): { path: string; name
   const root = realpathSync(room.cwd);
   const raw = resolve(room.cwd, requested);
   // Refuse anything that points outside the folder before looking at the disk at all.
-  if (!raw.startsWith(resolve(room.cwd) + "/") && !raw.startsWith(root + "/")) throw new HttpError(403, "That file is outside this room's project folder");
+  if (!raw.startsWith(resolve(room.cwd) + "/") && !raw.startsWith(root + "/")) throw new HttpError(403, "That file is outside this chat's folder");
   let real;
   try { real = realpathSync(raw); } catch { throw new HttpError(404, "That file doesn't exist (anymore) in the project folder"); }
-  if (!real.startsWith(root + "/")) throw new HttpError(403, "That file is outside this room's project folder");
+  if (!real.startsWith(root + "/")) throw new HttpError(403, "That file is outside this chat's folder");
   const info = lstatSync(real);
   if (info.isDirectory()) throw new HttpError(400, "That's a folder; ask the agent to zip it and link the .zip");
   if (!info.isFile()) throw new HttpError(400, "Invalid file");

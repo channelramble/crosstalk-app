@@ -124,7 +124,7 @@ export function RoomView({ room }: { room: Room }) {
     <>
       <header className="topbar" data-tauri-drag-region>
         {mobile ? (
-          <button className="icon-btn" onClick={() => openRoom(null)} aria-label="Back to rooms">
+          <button className="icon-btn" onClick={() => openRoom(null)} aria-label="Back to chats">
             <ChevronLeft size={22} />
           </button>
         ) : (
@@ -144,7 +144,7 @@ export function RoomView({ room }: { room: Room }) {
             Team
             {approvals.length > 0 && <span className="count">{approvals.length}</span>}
           </button>
-          <button className="icon-btn" onClick={() => setSettings(true)} aria-label="Room settings" title="Room settings">
+          <button className="icon-btn" onClick={() => setSettings(true)} aria-label="Chat settings" title="Chat settings">
             <Settings size={18} />
           </button>
         </div>
@@ -160,8 +160,8 @@ export function RoomView({ room }: { room: Room }) {
             </button>
           )}
           {data?.error && <div role="alert" className="small" style={{ padding: 12, overflowWrap: "anywhere" }}>
-            <p>Couldn't load the conversation. {data.error}</p>
-            <button className="btn small" disabled={data.loading || !connectionReady} onClick={() => loadHistory(room.id)}>{data.loading ? "Retrying…" : "Retry loading conversation"}</button>
+            <p>Couldn't load the chat. {data.error}</p>
+            <button className="btn small" disabled={data.loading || !connectionReady} onClick={() => loadHistory(room.id)}>{data.loading ? "Retrying…" : "Retry loading the chat"}</button>
           </div>}
           {!data?.loaded && !data?.error && <div className="muted small" style={{ textAlign: "center", padding: 30 }}>Loading…</div>}
           {data?.loaded && messages.length === 0 && unshownFailures.length === 0 && <EmptyRoom room={room} members={members} />}
@@ -263,7 +263,7 @@ function EmptyRoom({ room, members }: { room: Room; members: Member[] }) {
   return (
     <div className="empty" style={{ minHeight: 280 }}>
       <div>
-        <div className="big">{members.length ? "Say hello to your team" : "Add agents to this room"}</div>
+        <div className="big">{members.length ? "Say hello to your team" : "Add agents to this chat"}</div>
         <p className="muted small" style={{ maxWidth: 440, margin: "6px auto 14px" }}>
           {members.length
             ? room.mode === "review"
@@ -408,13 +408,13 @@ export const MessageRow = memo(function MessageRow({
                 <i />
               </span>
             ) : (
-              <span className="muted small">{unknown ? "Reply status unknown until the conversation syncs." : waiting ? "Waiting for the usage limit to reset." : status === "stopped" ? "Stopped before replying." : "(no reply)"}</span>
+              <span className="muted small">{unknown ? "Reply status unknown until the chat syncs." : waiting ? "Waiting for the usage limit to reset." : status === "stopped" ? "Stopped before replying." : "(no reply)"}</span>
             )}
           </div>
         )}
         {/* The reply's own text is often the error already ("⚠️ …"): don't show it twice. */}
         {signInCard ?? (failed && !(turn?.error && text.includes(turn.error.trim())) && <TurnError error={turn?.error} quiet={quiet} announce={announce} />)}
-        {unknown && text && <p className="muted small" role="status">Reply status unknown until the conversation syncs.</p>}
+        {unknown && text && <p className="muted small" role="status">Reply status unknown until the chat syncs.</p>}
         {steps && steps.length > 0 && <ActivityBlock activities={steps} live={streaming} statusUnknown={unknown} thinking={member?.status === "thinking"} />}
         {approvals?.map((a) => (
           <CardArrival key={a.id}>
@@ -490,6 +490,6 @@ export function shownText(text: string): string {
  */
 export function TurnError({ error, quiet = false, announce = true }: { error?: string | null; quiet?: boolean; announce?: boolean }) {
   // Hub errors name commands as `code` (say, the step a frozen agent was stuck on).
-  const text = error?.trim() || "The agent couldn't complete this turn.";
+  const text = error?.trim() || "The agent couldn't finish this reply.";
   return <div className="bubble" role={quiet ? "note" : announce ? "alert" : undefined} style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{text.split("`").map((part, i) => (i % 2 ? <code key={i}>{part}</code> : part))}</div>;
 }

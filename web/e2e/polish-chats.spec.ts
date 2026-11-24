@@ -1,7 +1,7 @@
 import type { APIRequestContext, Locator, Page } from "@playwright/test";
 import type { AgentAccount, Member, Room } from "@crosstalk/shared";
 import { join } from "node:path";
-import { test, expect } from "./fixtures";
+import { test, expect, chatSettingsAll } from "./fixtures";
 import { otherMachine, pong } from "./otherMachine";
 
 // Chats as a person uses them: pinning, renaming, the chat list's groups, and searching when a machine is down.
@@ -43,7 +43,7 @@ async function drawer(page: Page) {
 
 /** Chat settings, from the chat's top bar. */
 async function chatSettings(page: Page) {
-  await page.getByRole("button", { name: "Chat settings", exact: true }).click();
+  await chatSettingsAll(page);
   const dialog = page.getByRole("dialog", { name: "Chat settings", exact: true });
   await expect(dialog).toBeVisible();
   return dialog;
@@ -89,11 +89,11 @@ test("pinning a chat while Pinned is folded keeps it in view, instead of swallow
 
     // Pinned folded away on this device.
     await pinned.getByRole("button", { name: "Hide pinned chats", exact: true }).click();
-    await expect(pinned.locator(".csb-fold-said")).toHaveText("1 chat");
+    await expect(pinned.getByRole("button", { name: "Show pinned chats, 1 chat", exact: true })).toBeVisible();
     await expect(rowOf(pinned, a.room.name)).toHaveCount(0);
 
     // The other chat is pinned from its ⋯, by keyboard, so where focus lands is plain to see.
-    const codex = side.locator(".csb-group").filter({ has: page.locator(".csb-agent-name", { hasText: "Codex" }) });
+    const codex = side.getByRole("region", { name: "Recent", exact: true });
     await moreOf(codex, b.room.name).focus();
     await page.keyboard.press("Enter");
     await rowOf(codex, b.room.name).getByRole("button", { name: "Pin to top", exact: true }).click();
@@ -130,15 +130,10 @@ test("a chat's name can't be emptied by accident: Save doesn't quietly do nothin
     await name.fill("");
     await page.screenshot({ ...shot("polish-chats-empty-name.png"), animations: "disabled" });
 
-    // Nothing to save: an empty name isn't a change the hub will take.
-    await expect(dialog.getByRole("button", { name: "Save", exact: true })).toBeDisabled();
-
-    // And if it is offered, tapping it has to say what's wrong rather than close on a change that never happened.
-    if (await dialog.getByRole("button", { name: "Save", exact: true }).isEnabled()) {
-      await dialog.getByRole("button", { name: "Save", exact: true }).click();
-      await expect(dialog).toBeVisible();
-      await expect(dialog.getByRole("alert")).toContainText(/name/i);
-    }
+    // Nothing to save: an empty name isn't a change the hub will take, and the box says what's wrong with it.
+    await expect(dialog.getByRole("button", { name: "Save name", exact: true })).toHaveCount(0);
+    await expect(name).toHaveAttribute("aria-invalid", "true");
+    await expect(dialog.getByText("A chat needs a name. Type one to rename it.", { exact: true })).toBeVisible();
     expect((await saved(request, token)).get(x.room.id)?.name).toBe(x.room.name);
   } finally {
     await x.cleanup();
@@ -174,13 +169,11 @@ test("Chat settings never undoes a rename made on another device while it's open
     await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
 
     // Nothing was typed here, so there's nothing of this device's to save.
-    await expect(dialog.getByRole("button", { name: "Save", exact: true })).toBeDisabled();
+    await expect(dialog.getByRole("button", { name: "Save name", exact: true })).toHaveCount(0);
     await page.screenshot({ ...shot("polish-chats-remote-rename.png"), animations: "disabled" });
 
     // Something else changed and saved: the new name stays, exactly as a pin made elsewhere does.
     await dialog.getByRole("checkbox", { name: "Pinned", exact: true }).click({ force: true });
-    await dialog.getByRole("button", { name: "Save", exact: true }).click();
-    await expect(dialog).toHaveCount(0);
     await expect.poll(async () => (await saved(request, token)).get(x.room.id)?.pinnedAt ?? 0).toBeGreaterThan(0);
     expect((await saved(request, token)).get(x.room.id)?.name).toBe(renamed);
   } finally {
@@ -189,14 +182,10 @@ test("Chat settings never undoes a rename made on another device while it's open
 });
 
 /**
- * EXPECTED TO FAIL. chatIdentity.ts `chatGroups` tells two services of one name apart by adding the agent that drives
- * them — but it only compares services with each other, never with the agents' own groups, so a model of yours called
- * "Codex" gives the list two headings reading "Codex". ChatSidebar.tsx then works out a `where` for the second one,
- * and ServiceHeader puts it only in the button's `aria-label`: on screen the two headings are the same words. (The
- * same happens, without naming anything after an agent, when two machines each run a model of one name — the hub
- * refuses two accounts of one name on one machine, so that case needs two machines to reach.)
+ * The list is by state now, so there are no group headings to read the same. What tells a chat on a model of yours
+ * from one on the agent's own sign-in is its row's avatar — also when the model is named after the agent.
  */
-test("two chat-list groups never read the same, even when a model of yours is named after an agent", async ({ page, request, token }) => {
+test("a chat on a model of yours named after an agent is still told apart from that agent's own chats", async ({ page, request, token }) => {
   onPhones();
   const width = page.viewportSize()!.width;
   await page.setViewportSize({ width, height: 844 });
@@ -213,10 +202,14 @@ test("two chat-list groups never read the same, even when a model of yours is na
     await expect(rowOf(side, mine.room.name)).toBeVisible();
     await page.screenshot({ ...shot(`polish-chats-two-headings-${width}.png`), animations: "disabled" });
 
-    // Every group in the list is named something of its own: two rows of the same words are two groups a person
-    // can't tell apart (and on a phone both are cut with the same ellipsis).
-    const headings = (await side.locator(".csb-group .csb-agent-name").allTextContents()).map((t) => t.trim());
-    expect(new Set(headings).size, `two groups read the same: ${headings.join(" / ")}`).toBe(headings.length);
+    // No heading says "Codex" twice: there are none. Each row's avatar says what its chat runs on: the agent's own
+    // mark for its sign-in, a service's icon in a service's colour for the model — never the same picture for both.
+    await expect(side.locator(".csb-agent-name")).toHaveCount(0);
+    const signIn = rowOf(side, own.room.name).locator(".csb-chat > .avatar");
+    const model_ = rowOf(side, mine.room.name).locator(".csb-chat > .avatar");
+    await expect(signIn).not.toHaveClass(/svc-avatar/);
+    await expect(model_).toHaveClass(/svc-avatar/);
+    expect(await model_.evaluate((el) => getComputedStyle(el).backgroundColor)).not.toBe(await signIn.evaluate((el) => getComputedStyle(el).backgroundColor));
   } finally {
     await own.cleanup();
     await mine.cleanup();
@@ -277,33 +270,30 @@ test("Cancelling the account question saves nothing at all, instead of half the 
   const [one, two] = [await endpoint(`One ${tag}`), await endpoint(`Two ${tag}`)];
   const x = await chat(request, token, `Fix login ${tag}`, { account: one.id, model: "qwen3-8b" });
   const renamed = `Payments API ${tag}`;
-  const asked: string[] = [];
-  page.on("dialog", (d) => {
-    asked.push(d.message());
-    void d.dismiss();
-  });
   try {
     await page.goto(`/#/room/${x.room.id}`);
     await expect(page.getByRole("heading", { name: x.room.name, exact: true })).toBeVisible();
     const dialog = await chatSettings(page);
 
-    // A rename, a pin and another account, all in one go.
+    // A new name typed (not saved yet), then another account.
     await dialog.getByRole("textbox", { name: "Name", exact: true }).fill(renamed);
-    await dialog.getByRole("checkbox", { name: "Pinned", exact: true }).click({ force: true });
-    await dialog.getByRole("combobox", { name: "Account", exact: true }).selectOption(two.id);
-    await dialog.getByRole("button", { name: "Save", exact: true }).click();
+    await dialog.getByRole("radiogroup", { name: "Account", exact: true }).locator(`[role="radio"][data-value="${two.id}"]`).click();
 
-    // The question is asked, and answered with Cancel.
-    await expect.poll(() => asked.length).toBe(1);
-    expect(asked[0]).toContain("fresh");
+    // The question is asked in the app's own sheet, before anything is written, and answered with Cancel.
+    const ask = page.getByRole("dialog", { name: /^Switch to Two / });
+    await expect(ask).toContainText("starts fresh");
     await page.screenshot({ ...shot("polish-chats-account-cancel.png"), animations: "disabled" });
+    await ask.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(ask).toHaveCount(0);
 
-    // Nothing was written: not the name, not the pin. The dialog stays open with everything still to save.
+    // Nothing was written: not the account, not the name. The sheet stays open with the name still there to save.
     await expect(dialog).toBeVisible();
-    await expect(dialog.getByRole("button", { name: "Save", exact: true })).toBeEnabled();
+    await expect(dialog.getByRole("button", { name: "Save name", exact: true })).toBeEnabled();
+    await expect(dialog.getByRole("radiogroup", { name: "Account", exact: true }).locator(`[role="radio"][data-value="${one.id}"]`)).toHaveAttribute("aria-checked", "true");
     const room = (await saved(request, token)).get(x.room.id);
     expect(room?.name).toBe(x.room.name);
-    expect(room?.pinnedAt ?? 0).toBe(0);
+    const member = (await (await request.get(`${HUB}/api/state`, { headers })).json()).members.find((m: { roomId: string }) => m.roomId === x.room.id);
+    expect(member.config.account).toBe(one.id);
   } finally {
     await x.cleanup();
     await request.delete(`${HUB}/api/accounts/codex/${one.id}`, { headers });

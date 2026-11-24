@@ -47,7 +47,7 @@ export function destinations(machines: Machine[]): Destination[] {
       .sort((a, b) => (KIND_ORDER[a.kind ?? "signin"] ?? 2) - (KIND_ORDER[b.kind ?? "signin"] ?? 2) || a.label.localeCompare(b.label));
     for (const a of others) {
       const name = PROVIDER_INFO[a.provider].name;
-      const detail = a.kind === "endpoint" ? `Custom model · ${name}` : a.kind === "apikey" ? `API key, billed per use · ${name}` : `${name}${a.account ? ` · ${a.account}` : ""}`;
+      const detail = a.kind === "endpoint" ? `Your own model · ${name}` : a.kind === "apikey" ? `API key, billed per use · ${name}` : `${name}${a.account ? ` · ${a.account}` : ""}`;
       out.push({ key: `${m.key}|${a.provider}|${a.id}`, machine: m, provider: a.provider, account: a.id, label: a.label, detail, why: missing(a.provider) ?? (a.signedIn === false ? "Not signed in" : null) });
     }
   }
@@ -314,7 +314,7 @@ export function DuplicateDialog({ room, member, members, onClose }: { room: Room
           ))}
         </div>
         {asGroup && <span className="help">Each agent remembers what it remembers in this chat, and answers the same way there.</span>}
-        {target && <span className="help">{sameAgent ? `It remembers what ${ownName} remembers in this chat.` : `${agentName} reads this conversation (your messages and the replies, without the steps) with your first message there.`}</span>}
+        {target && <span className="help">{sameAgent ? `It remembers what ${ownName} remembers in this chat.` : `${agentName} reads this chat (your messages and the replies, without the steps) with your first message there.`}</span>}
       </div>
 
       {asGroup ? null : target && choice?.key === target.key ? (
@@ -345,7 +345,7 @@ export function DuplicateDialog({ room, member, members, onClose }: { room: Room
             onChange={setFolder}
             options={[
               { id: "same", label: "This chat's folder", help: room.cwd },
-              { id: "new", label: "A new empty folder", help: `In ${target?.machine.hub?.workspaceRoot ?? "the workspaces folder"}. The files here don't come along.` },
+              { id: "new", label: "A new empty folder", help: `In ${target?.machine.hub?.workspaceRoot ?? "Crosstalk's chats folder"}. The files here don't come along.` },
             ]}
           />
         ) : (

@@ -9,6 +9,7 @@ import type { ProviderStatus, SetupChecklist } from "@crosstalk/shared";
 import { App } from "../src/app";
 import { HUB_VERSION } from "../src/config";
 import { HOME, writeSecret } from "../src/config";
+import { localLibraryOf } from "../src/localLibrary";
 import { resetFailureLimits, startServer } from "../src/server";
 import { setupKeyFor } from "../src/setup";
 import { SETUP_ITEM_IDS } from "../src/setup/checklist";
@@ -62,7 +63,7 @@ beforeAll(async () => {
   fake = fakeService({ key: ENDPOINT_KEY });
   other = fakeService();
   accountId = app.providers.setEndpointAccount("codex", { label: "Local", baseUrl: fake.url, apiKey: ENDPOINT_KEY, models: ["model-a"] }).id;
-  app.pool.setHfToken({ token: HF_TOKEN });
+  localLibraryOf(app).setHfToken({ token: HF_TOKEN });
   writeSecret("META_API_KEY", META_KEY);
   const device = (await app.auth.pair((await app.auth.createPairingCode()).code, "Phone", "iPhone"))!;
   deviceToken = device.token;
@@ -87,7 +88,7 @@ beforeAll(async () => {
         `20:01:04.000 INFO  [http] GET /api/ws?token=${deviceToken}&v=2`,
         `20:01:05.000 INFO  [providers] tried ${ENDPOINT_KEY} at ${fake.url}`,
         `20:01:06.000 INFO  [machines] link ${LINK_TOKEN} secret ${app.internalSecret} member ${memberToken}`,
-        `20:01:07.000 INFO  [pool] ${HF_TOKEN} META_API_KEY=${META_KEY} vapid ${vapid}`,
+        `20:01:07.000 INFO  [local-models] ${HF_TOKEN} META_API_KEY=${META_KEY} vapid ${vapid}`,
         `20:01:08.000 INFO  [providers] signed in as ${EMAIL}`,
         "20:01:09.000 ERROR [http] GET /api/setup: the last line",
       ].slice(-n),
@@ -96,7 +97,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   writeSecret("META_API_KEY", null);
-  app.pool.setHfToken({ token: null });
+  localLibraryOf(app).setHfToken({ token: null });
   app.providers.removeAccount("codex", accountId);
   resetFailureLimits();
   fake.stop();
@@ -110,7 +111,7 @@ afterAll(async () => {
 /** The setup MCP server, as an agent CLI launches it, pointed at the test hub. */
 function launch(env: Record<string, string> = {}) {
   const proc = Bun.spawn(["bun", MAIN, "setup-mcp"], {
-    env: { ...process.env, CODEX_SANDBOX: "", CODEX_SANDBOX_NETWORK_DISABLED: "", CROSSTALK_HUB_SOCKET: app.internalSocket, CROSSTALK_SETUP_KEY: setupKeyFor(app.internalSecret), CROSSTALK_PORT: "9", CROSSTALK_HOST: "127.0.0.1", CROSSTALK_LABEL: "com.crosstalk.test-none", ...env },
+    env: { ...process.env, CODEX_SANDBOX: "", CODEX_SANDBOX_NETWORK_DISABLED: "", CROSSTALK_HUB_SOCKET: app.internalSocket, CROSSTALK_SETUP_KEY: setupKeyFor(app.internalSecret), CROSSTALK_PORT: "9", CROSSTALK_HOST: "127.0.0.1", CROSSTALK_LABEL: "com.crosstalk.test-none", CROSSTALK_UNIT: "crosstalk-test-none", ...env },
     stdin: "pipe",
     stdout: "pipe",
     stderr: "pipe",
@@ -182,9 +183,11 @@ test("setup_status and setup_guide: the checklist with a line saying what's left
     const guide = await mcp.call("setup_guide", { item: "agent.codex" });
     expect(guide.text.startsWith("## agent.codex\n")).toBe(true);
     expect(guide.text).toContain("On this machine now: missing");
-    expect(guide.text).toContain('Command: npm install -g --prefix "$HOME/.npm-global" @openai/codex@latest');
+    // No Node.js needed: the command downloads OpenAI's own build.
+    expect(guide.text).toContain("Command: t=$(uname -sm");
+    expect(guide.text).toContain("https://github.com/openai/codex/releases/latest/download/codex-$t.tar.gz");
     // An item that isn't on this checklist still has its guide.
-    expect((await mcp.call("setup_guide", { item: "pool" })).text).toContain("isn't on this machine's checklist now");
+    expect((await mcp.call("setup_guide", { item: "mac.dialogs" })).text).toContain("isn't on this machine's checklist now");
     const unknown = await mcp.call("setup_guide", { item: "Rules" });
     expect(unknown.isError).toBe(true);
     expect(unknown.text).toContain(SETUP_ITEM_IDS.join(", "));

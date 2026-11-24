@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { MachineInfo, MachineInvite, MachineInviteStatus } from "@crosstalk/shared";
@@ -181,7 +181,9 @@ test("the Linux setup command: a script with its token, the installer, and the n
     expect(script).toContain(`HUB='${mac.base}'`);
     expect(script).toContain('CODE="$("$HOME/.local/bin/crosstalk-hub" pair 30 | sed -n \'s/^Pairing code: \\([A-Za-z0-9-]*\\).*/\\1/p\')"');
     expect(script.trimEnd()).toEndWith('main "$@"');
-    expect(await (await fetch(`${mac.base}/api/machines/install/${inv.token}/install.sh`)).text()).toContain("Crosstalk hub installer for Linux");
+    // It's read by bash on the new machine: nothing in it is a mistake bash would stop at.
+    expect(Bun.spawnSync(["bash", "-n"], { stdin: new TextEncoder().encode(script), stderr: "pipe" }).stderr.toString()).toBe("");
+    expect(await (await fetch(`${mac.base}/api/machines/install/${inv.token}/install.sh`)).text()).toContain("Crosstalk for Linux (systemd)");
     expect((await mac.api<MachineInviteStatus>("GET", `/api/machines/invites/${inv.token}`)).data.status).toBe("waiting");
 
     // The installed hub reports its address and a pairing code: the Mac links it.
@@ -200,6 +202,26 @@ test("the Linux setup command: a script with its token, the installer, and the n
   }
 });
 
+test("the setup script reads this machine's Tailscale name without python (a bare Linux server has none)", async () => {
+  const mac = await hub("Mac mini");
+  const bin = mkdtempSync(join(tmpdir(), "ct-machines-bin-"));
+  try {
+    const inv = (await mac.api<MachineInvite>("POST", "/api/machines/invite")).data;
+    const script = await (await fetch(`${mac.base}/api/machines/install/${inv.token}`)).text();
+    const line = script.split("\n").find((l) => l.trim().startsWith('DNS="$(tailscale status --json'));
+    expect(line).toBeDefined();
+    // Tailscale's own answer, as it prints it: on several lines, this machine first, then the others.
+    writeFileSync(join(bin, "tailscale"), `#!/bin/sh\nprintf '{\\n  "Version": "1.80",\\n  "Self": {\\n    "ID": "n1",\\n    "HostName": "box",\\n    "DNSName": "box.example.ts.net.",\\n    "TailscaleIPs": ["100.64.0.1"]\\n  },\\n  "Peer": {"k": {"DNSName": "phone.example.ts.net."}}\\n}\\n'\n`);
+    writeFileSync(join(bin, "python3"), "#!/bin/sh\nexit 127\n");
+    for (const name of ["tailscale", "python3"]) chmodSync(join(bin, name), 0o755);
+    const r = Bun.spawnSync(["bash", "-c", `${line}\necho "name=$DNS"`], { env: { PATH: `${bin}:/usr/bin:/bin` }, stdout: "pipe", stderr: "pipe" });
+    expect(r.stdout.toString()).toBe("name=box.example.ts.net\n");
+  } finally {
+    rmSync(bin, { recursive: true, force: true });
+    await mac.close();
+  }
+});
+
 test("a failed claim keeps its reason in the invite status, and three failures use the command up", async () => {
   const mac = await hub("Mac mini");
   try {
@@ -214,12 +236,12 @@ test("a failed claim keeps its reason in the invite status, and three failures u
     expect(await status()).toEqual({ status: "waiting", error: "The machine's address must be https." });
     await claim("http://plain.example");
     const third = await claim("http://plain.example");
-    expect(await third.text()).toContain("This command was tried 3 times, so it no longer works: make a new one in Crosstalk (Settings → Machines).");
+    expect(await third.text()).toContain("This command was tried 3 times, so it no longer works: make a new one in Crosstalk (Settings → Machines → Set up a Linux machine).");
     expect(await status()).toEqual({ status: "failed", error: "The machine's address must be https." });
     // Used up: running it again only says so.
     const again = await claim("https://linux-box.example");
     expect(again.status).toBe(401);
-    expect(await again.text()).toContain("This setup command has expired. Make a new one in Crosstalk: Settings → Machines.");
+    expect(await again.text()).toContain("This setup command has expired. Make a new one in Crosstalk: Settings → Machines → Set up a Linux machine.");
   } finally {
     await mac.close();
   }

@@ -14,6 +14,7 @@ import { ApprovalCard } from "./ApprovalCard";
 import { SidebarButton } from "./ChatSidebar";
 import { MachinePicker, MachineTag } from "./MachinePicker";
 import { WelcomeCard } from "./WelcomeCard";
+import { UpdateReady } from "./UpdateReady";
 
 /** The first screen: pick the agent to work with. */
 export function HomeScreen() {
@@ -35,7 +36,7 @@ export function HomeScreen() {
           // What each chat is: its AI service and model, or its agent (chatIdentity.ts); a group chat lists its agents.
           return Object.values(m.rooms)
             .filter((r) => r.chat)
-            .map((r) => ({ r, machine: m.name, group: r.chat?.group ? byRoom.get(r.id) ?? [] : null, identity: chatIdentity(r, r.chat?.group ? undefined : byRoom.get(r.id)?.[0], m.accounts, m.poolOffer) }));
+            .map((r) => ({ r, machine: m.name, group: r.chat?.group ? byRoom.get(r.id) ?? [] : null, identity: chatIdentity(r, r.chat?.group ? undefined : byRoom.get(r.id)?.[0], m.accounts) }));
         })
         .sort((a, b) => b.r.updatedAt - a.r.updatedAt)
         .slice(0, 4),
@@ -66,6 +67,7 @@ export function HomeScreen() {
       </header>
       <div className="page">
         <div className="page-inner">
+          <UpdateReady />
           <WelcomeCard />
           <h2 className="picker-title">What agent do you want to use?</h2>
           <div className="agent-picker">
@@ -81,7 +83,7 @@ export function HomeScreen() {
           <StarterList
             rows={starters.yours}
             onPick={setCreating}
-            help="Models of your own. One tap starts a chat on it; a server found running here is added first."
+            help="Models of your own. One tap starts a chat on it; a model found running here is added first."
           />
 
           {approvals.length > 0 && (

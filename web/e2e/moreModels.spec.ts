@@ -1,4 +1,4 @@
-import { test, expect, noHorizontalOverflow } from "./fixtures";
+import { test, expect, chatSettings, closeChatSettings, effortSteps, modelCards, noHorizontalOverflow, pickModel } from "./fixtures";
 import type { APIRequestContext, Page, WebSocketRoute } from "@playwright/test";
 import { join } from "node:path";
 
@@ -56,7 +56,7 @@ test("More models on a phone: the menu opens on the usual models, More models op
   try {
     await s.open();
     await page.locator(".chat-controls .ctl-model").click();
-    const menu = page.getByRole("dialog", { name: "Model", exact: true });
+    const menu = page.getByRole("dialog", { name: "Chat settings", exact: true }).getByRole("region", { name: "Answers with", exact: true });
     const item = (name: string) => menu.getByRole("menuitemradio").filter({ hasText: name });
     const moreButton = menu.getByRole("button", { name: "More models (2)", exact: true });
     const back = menu.getByRole("button", { name: "Back to the usual models", exact: true });
@@ -104,17 +104,14 @@ test("More models on a phone: the menu opens on the usual models, More models op
     await expect.poll(() => s.patches.length).toBe(before + 1);
     expect(s.patches.at(-1)).toMatchObject({ model: "gpt-reserve" });
     expect((s.patches.at(-1)!.config as Record<string, unknown>).effort).toBeUndefined();
-    await expect(menu).toHaveCount(0);
-    await expect(page.locator(".chat-controls .ctl-model .ellipsis")).toHaveText("GPT-Reserve");
-    // Its own effort levels (the button says its default: none is set)…
-    await expect(page.locator(".chat-controls").getByTitle("Effort", { exact: true })).toHaveText("Medium");
-    await page.locator(".chat-controls").getByTitle("Effort", { exact: true }).click();
-    await expect(page.getByRole("dialog", { name: "Effort", exact: true }).locator(".effort-ticks button")).toHaveText(["Low", "Medium"]);
-    await page.keyboard.press("Escape");
+    // Its own effort levels, lit on its default (none is set)…
+    await expect(effortSteps(menu).getByRole("radio")).toHaveText(["Low", /^Medium/]);
+    await expect(effortSteps(menu).getByRole("radio", { name: "Medium (default)", exact: true })).toHaveAttribute("aria-checked", "true");
     // …and what it holds.
-    await page.locator(".chat-controls").getByRole("button", { name: /context and plan limits/ }).click();
-    await expect(page.getByRole("dialog", { name: "Context and plan limits", exact: true })).toContainText("Holds 258k.");
-    await page.keyboard.press("Escape");
+    await expect(await chatSettings(page, "Memory")).toContainText("GPT-Reserve remembers up to 258k of a chat.");
+    // The sheet stays open after a pick; the row behind it says the model and the effort in force.
+    await closeChatSettings(page);
+    await expect(page.locator(".chat-controls .ctl-model .ellipsis")).toHaveText("GPT-Reserve · Medium");
     // Opened again, the menu has it in view at once, checked.
     await page.locator(".chat-controls .ctl-model").click();
     await expect(item("GPT-Reserve")).toHaveAttribute("aria-checked", "true");
@@ -147,10 +144,10 @@ test("an agent that names nothing more (Claude Code) shows no More models", asyn
   try {
     await s.open();
     await page.locator(".chat-controls .ctl-model").click();
-    const menu = page.getByRole("dialog", { name: "Model", exact: true });
+    const menu = page.getByRole("dialog", { name: "Chat settings", exact: true }).getByRole("region", { name: "Answers with", exact: true });
     await expect(menu.getByRole("menuitemradio")).toHaveCount(2);
     await expect(menu.getByRole("button", { name: /^More models/ })).toHaveCount(0);
-    await expect(menu.getByRole("combobox", { name: "Helper agents use", exact: true }).locator("optgroup")).toHaveCount(0);
+    await expect((await chatSettings(page, "Helpers")).getByRole("combobox", { name: "Helper agents use", exact: true }).locator("optgroup")).toHaveCount(0);
   } finally {
     await s.cleanup();
   }
@@ -163,16 +160,16 @@ test("New chat: the Model list has a More models group, and a chat starts on one
   await page.goto("/#/agent/codex");
   await page.getByRole("button", { name: "New chat", exact: true }).last().click();
   const dialog = page.getByRole("dialog", { name: "New chat with Codex", exact: true });
-  const model = dialog.getByRole("combobox", { name: "Model", exact: true });
-  // The usual ones, then the group (a phone's picker shows its name as a heading), then a name of your own.
-  await expect(model.locator(":scope > option")).toHaveText(["Default (GPT-6.1-Sol)", "GPT-6.1-Sol · 500k", "GPT-6-Astra · 272k", "Other…"]);
-  await expect(model.locator("optgroup")).toHaveAttribute("label", "More models");
-  await expect(model.locator("optgroup > option")).toHaveText(["GPT-Reserve · 272k", "Codex Auto Review · 272k"]);
-  await model.selectOption("gpt-reserve");
-  // What Codex says of it, under the list (a drop-down's choices can't show it), and its own effort levels. The `has` locator is
-  // looked for inside each field, so it starts at the page: one that starts at the dialog finds no dialog in a field, and no field.
-  await expect(dialog.locator(".field").filter({ has: page.getByRole("combobox", { name: "Model", exact: true }) }).locator(".help")).toHaveText("Fast and affordable agentic coding model. · 272k context, up to 872k");
-  await expect(dialog.getByRole("combobox", { name: "Effort", exact: true }).locator("option")).toHaveText(["Default (Medium)", "Low", "Medium"]);
+  const cards = modelCards(dialog);
+  // The usual ones as cards (the default lit), then More models, then a name of your own.
+  await expect(cards.getByRole("menuitemradio").locator(".pop-item-title")).toHaveText([/^GPT-6\.1-Sol/, "GPT-6-Astra"]);
+  await expect(cards.getByRole("menuitemradio").first()).toHaveAttribute("aria-checked", "true");
+  await expect(cards.getByRole("button", { name: "More models (2)", exact: true })).toBeVisible();
+  await expect(cards.getByRole("button", { name: "Another model, by name…", exact: true })).toBeVisible();
+  await pickModel(dialog, "GPT-Reserve");
+  // What Codex says of it, on its card, and its own effort levels.
+  await expect(cards.getByRole("menuitemradio", { checked: true })).toContainText("Fast and affordable agentic coding model. · 272k context, up to 872k");
+  await expect(effortSteps(dialog).getByRole("radio")).toHaveText(["Low", /^Medium/]);
   // Helper agents can use the other one; the chat's own model isn't offered again.
   await expect(dialog.getByRole("combobox", { name: "Helper agents use", exact: true }).locator("optgroup > option")).toHaveText(["Codex Auto Review"]);
   await noHorizontalOverflow(page);
@@ -186,7 +183,7 @@ test("New chat: the Model list has a More models group, and a chat starts on one
   try {
     expect(body).toMatchObject({ provider: "codex", model: "gpt-reserve", effort: null });
     // The chat opens on it.
-    await expect(page.locator(".chat-controls .ctl-model .ellipsis")).toHaveText("GPT-Reserve");
+    await expect(page.locator(".chat-controls .ctl-model .ellipsis")).toHaveText("GPT-Reserve · Medium");
   } finally {
     await request.delete(`${hub}/api/rooms/${room.id}`, { headers: { authorization: `Bearer ${token}` } });
   }

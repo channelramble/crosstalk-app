@@ -3,7 +3,7 @@ import { Trash2 } from "lucide-react";
 import type { HubSettings, StorageItem, StorageReport, StorageSettings } from "@crosstalk/shared";
 import { api } from "../api";
 import { useStore } from "../store";
-import { AskTwiceDialog, Stepper, Switch, formatBytes, timeAgo } from "../ui";
+import { AskTwiceDialog, formatBytes, timeAgo } from "../ui";
 import { useReconnected } from "../useReconnected";
 import { useMachineName } from "./MachinePicker";
 
@@ -156,25 +156,23 @@ export function StorageSection() {
             </button>
           </div>
         )}
+        {/* Fixed now: caches clear on their own, and the warning comes at 15 GB. A machine that saved something else
+            before keeps it, and the line says what it really does. */}
         {settings && (
-          <>
-            <div className="row" style={{ marginTop: 14 }}>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontWeight: 600 }}>Clear caches on its own</div>
-                <div className="help">
-                  Every few hours, clears tool caches (Xcode build data, npm, pip, Homebrew and others: all of them when space is low) and installed dependencies like node_modules in chats unused for 2 weeks. They're downloaded or rebuilt again when needed.
-                </div>
-              </div>
-              <Switch checked={settings.autoClean} onChange={(v) => void put({ ...settings, autoClean: v })} label="Clear caches on its own" />
-            </div>
-            <div className="row" style={{ marginTop: 12 }}>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontWeight: 600 }}>Warn me below</div>
-                <div className="help">Shows a warning in the sidebar and sends a notification. Agents are told to clean up once it's half that.</div>
-              </div>
-              <Stepper label="Warn below" value={Math.round(settings.lowSpaceGb / 5)} min={1} max={20} unit={(n) => `${n * 5} GB`} onChange={(v) => void put({ ...settings, lowSpaceGb: v * 5 })} />
-            </div>
-          </>
+          <p className="help storage-fixed">
+            {settings.autoClean
+              ? "Every few hours Crosstalk clears tool caches and unused installed dependencies on its own: they're downloaded or rebuilt again when needed."
+              : `Caches aren't cleared on their own on ${machine}.`}{" "}
+            You're warned when less than {settings.lowSpaceGb} GB is free.
+            {!settings.autoClean && (
+              <>
+                {" "}
+                <button className="link-btn" onClick={() => void put({ ...settings, autoClean: true })}>
+                  Clear them on its own
+                </button>
+              </>
+            )}
+          </p>
         )}
         <div className="storage-foot">
           <button className="btn small" onClick={clean} disabled={!!report.busy}>

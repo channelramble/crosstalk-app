@@ -42,6 +42,9 @@ export const CACHES: CacheRule[] = [
   { what: "Simulator caches", path: "Library/Developer/CoreSimulator/Caches", whenLow: true },
   { what: "Homebrew downloads", path: "Library/Caches/Homebrew/downloads", olderThanDays: 14, whenLow: true },
   { what: "pip downloads", path: "Library/Caches/pip", whenLow: true },
+  // Where Linux keeps the same two (a path that isn't there is skipped, so each machine has its own).
+  { what: "Homebrew downloads", path: ".cache/Homebrew/downloads", olderThanDays: 14, whenLow: true },
+  { what: "pip downloads", path: ".cache/pip", whenLow: true },
   { what: "uv downloads", path: ".cache/uv", whenLow: true },
   { what: "npm downloads", path: ".npm/_cacache", whenLow: true },
   { what: "Bun downloads", path: ".bun/install/cache", whenLow: true },
@@ -439,8 +442,9 @@ export class Storage {
       const bytes = cacheSizes.get(join(this.home, c.path));
       if (bytes !== undefined) caches.push({ what: c.what, bytes });
     }
-    const trashPath = join(this.home, ".Trash");
-    const trash = isDir(trashPath) ? (await du([trashPath], ["-s"], 30_000)).get(trashPath) ?? null : null;
+    // A Mac's Trash, or a Linux desktop's.
+    const trashPath = [".Trash", ".local/share/Trash"].map((p) => join(this.home, p)).find(isDir);
+    const trash = trashPath ? (await du([trashPath], ["-s"], 30_000)).get(trashPath) ?? null : null;
     log.info(`measured ${chats.length} chat folder(s) in ${Math.round((Date.now() - started) / 1000)} s: ${items.length} item(s) to review`);
     return { at: Date.now(), chats, items: items.slice(0, 200), trash, caches };
   }
@@ -504,7 +508,7 @@ export class Storage {
         if (now - mtime(p) < 30 * DAY) continue;
         const bytes = statSync(p).size;
         await rm(p, { force: true });
-        cleared.push({ at: now, what: `Old hub version (${basename(p)})`, bytes, auto: true });
+        cleared.push({ at: now, what: `Old Crosstalk version (${basename(p)})`, bytes, auto: true });
       }
     }
 
@@ -568,7 +572,7 @@ export class Storage {
    */
   remove(ids: unknown): StorageReport {
     if (!Array.isArray(ids) || !ids.length || ids.some((i) => typeof i !== "string")) throw new HttpError(400, "Pick what to delete");
-    if (this.deleting || this.scanning || this.cleaning) throw new HttpError(409, "The hub is busy with storage right now: try again in a moment");
+    if (this.deleting || this.scanning || this.cleaning) throw new HttpError(409, "Crosstalk is busy with storage right now: try again in a moment");
     const items = this.last?.items ?? [];
     const picked = [...new Set(ids as string[])].map((id) => items.find((i) => i.id === id));
     if (picked.some((i) => !i)) throw new HttpError(409, "The list changed: scan again and pick again");

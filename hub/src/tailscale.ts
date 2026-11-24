@@ -98,16 +98,16 @@ export function jsonObject(text: string | null | undefined, emptyOk = false): Re
   }
 }
 
-const STATUS_ARGS = (peers: boolean) => ["status", "--json", ...(peers ? [] : ["--self", "--peers=false"])];
+const STATUS_ARGS = ["status", "--json", "--self", "--peers=false"];
 const SERVE_ARGS = ["serve", "status", "--json"];
-const statusPath = (peers: boolean) => `/localapi/v0/status${peers ? "" : "?peers=false"}`;
+const STATUS_PATH = "/localapi/v0/status?peers=false";
 const SERVE_PATH = "/localapi/v0/serve-config";
 
 /**
- * What Tailscale says about this machine. `peers` asks about the whole tailnet (the model pool picking a computer);
- * without it only this machine, so nothing is sent anywhere. `serve` also asks where https goes.
+ * What Tailscale says about this machine, and only this machine (never the rest of the tailnet), so nothing is sent
+ * anywhere. `serve` also asks where https goes.
  */
-export async function askTailscale(opts: { peers?: boolean; serve?: boolean } = {}, deps: TailscaleDeps = {}): Promise<TailscaleAnswers> {
+export async function askTailscale(opts: { serve?: boolean } = {}, deps: TailscaleDeps = {}): Promise<TailscaleAnswers> {
   const bin = (deps.bin ?? tailscaleBin)();
   const dir = deps.appDir ?? tailscaleAppDir();
   const ms = deps.timeoutMs ?? 5000;
@@ -120,7 +120,7 @@ export async function askTailscale(opts: { peers?: boolean; serve?: boolean } = 
   if (bin) {
     tried.push("cli");
     const [s, v] = await Promise.all([
-      run(bin, STATUS_ARGS(!!opts.peers), ms).then((r) => jsonObject(r?.out)),
+      run(bin, STATUS_ARGS, ms).then((r) => jsonObject(r?.out)),
       // Nothing served prints nothing, so an empty answer counts here — but only when the command itself succeeded.
       opts.serve ? run(bin, SERVE_ARGS, ms).then((r) => (r ? jsonObject(r.out, r.code === 0) : null)) : Promise.resolve(null),
     ]);
@@ -136,7 +136,7 @@ export async function askTailscale(opts: { peers?: boolean; serve?: boolean } = 
     // One client for both questions: the check that tailscaled is what listens happens once, before any token is sent.
     const api = await appClient(dir, ms);
     const [s, v] = api
-      ? await Promise.all([status ? Promise.resolve(null) : api(statusPath(!!opts.peers)), opts.serve && !serve ? api(SERVE_PATH, true) : Promise.resolve(null)])
+      ? await Promise.all([status ? Promise.resolve(null) : api(STATUS_PATH), opts.serve && !serve ? api(SERVE_PATH, true) : Promise.resolve(null)])
       : [null, null];
     if (s) {
       status = s;
@@ -146,6 +146,19 @@ export async function askTailscale(opts: { peers?: boolean; serve?: boolean } = 
   }
   if (tried.length && !status) log.debug(`Tailscale didn't answer (tried ${tried.join(", ")})`);
   return { cli: bin, tried, from, status, serve };
+}
+
+/**
+ * This machine's Tailscale IPv4 (`tailscale ip -4`), or null when Tailscale isn't installed, up or signed in. Its
+ * status is the fallback, for an install where only the app's own API answers.
+ */
+export async function tailscaleIPv4(): Promise<string | null> {
+  const bin = tailscaleBin();
+  const r = bin ? await runTailscaleCli(bin, ["ip", "-4"]) : null;
+  // Only ever an address in Tailscale's range.
+  const own = r?.code === 0 ? (r.out.split(/\s+/).find(isTailscaleIPv4) ?? null) : null;
+  if (own) return own;
+  return selfTailscaleIPv4((await askTailscale()).status);
 }
 
 /** This machine's Tailscale IPv4 from its status (`Self.TailscaleIPs`), when it has one. */
@@ -245,7 +258,7 @@ async function appClient(dir: string, timeoutMs: number): Promise<((path: string
  */
 async function tailscaledRefuses(port: number, timeoutMs: number): Promise<boolean> {
   try {
-    const r = await appFetch(port, statusPath(false), timeoutMs, null);
+    const r = await appFetch(port, STATUS_PATH, timeoutMs, null);
     if (r.status !== 401) {
       log.debug(`what listens on port ${port} isn't Tailscale's local API (${r.status}), so the proof token wasn't sent`);
       return false;

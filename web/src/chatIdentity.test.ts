@@ -94,9 +94,9 @@ test("the chat list keeps a group per service, beside the agents' own", () => {
 });
 
 test("two services of one name, one under each agent, get headings you can tell apart", () => {
-  // The model pool saves its account under both agents with the same name, every time it runs.
-  const pool = { codex: endpoint("pc", "Model pool", "http://100.64.0.3:8080", ["pool-qwen3"]), claude: account({ provider: "claude", id: "pl", label: "Model pool", kind: "endpoint", plan: "Custom model", endpoint: { baseUrl: "http://100.64.0.3:8080", models: ["pool-qwen3"], contextWindow: null, hasKey: false } }) };
-  const both = { "codex:pc": pool.codex, "claude:pl": pool.claude };
+  // The same account under both agents, with the same name (what a hub that once ran a model pool still has).
+  const twins = { codex: endpoint("pc", "Model pool", "http://100.64.0.3:8080", ["big-qwen3"]), claude: account({ provider: "claude", id: "pl", label: "Model pool", kind: "endpoint", plan: "Custom model", endpoint: { baseUrl: "http://100.64.0.3:8080", models: ["big-qwen3"], contextWindow: null, hasKey: false } }) };
+  const both = { "codex:pc": twins.codex, "claude:pl": twins.claude };
   const groups = chatGroups([
     { identity: chatIdentity(room(), member({ config: { account: "pc" } }), both), machine: "" },
     { identity: chatIdentity(room({ id: "r2", chat: { provider: "claude", origin: "web" } }), member({ provider: "claude", config: { account: "pl" } }), both), machine: "" },

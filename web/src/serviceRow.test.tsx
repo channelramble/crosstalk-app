@@ -3,8 +3,8 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { AgentAccount } from "@crosstalk/shared";
 
-// A service's own row in Settings → AI services. It could be tested there and changed nowhere: the key a check says was
-// refused ("Paste one in the key field") had no field anywhere near it, and nothing on the row said where to go.
+// An account's own row in Settings → Accounts: what it is, its state in words, and its own actions right there (it
+// once said "Press Sign in under Codex below", a long scroll away from the button).
 
 // The app's store reads a few browser globals when it loads; give it just enough to import in a test.
 const g = globalThis as Record<string, unknown>;
@@ -14,7 +14,7 @@ g.localStorage ??= { getItem: () => null, setItem() {}, removeItem() {} };
 g.navigator ??= { userAgent: "test" };
 g.document ??= { addEventListener() {}, removeEventListener() {}, visibilityState: "visible", querySelector: () => null };
 g.matchMedia ??= () => ({ matches: false, addEventListener() {}, removeEventListener() {} });
-const { ServiceRow } = await import("./views/AiServices");
+const { AccountRow } = await import("./views/AccountsList");
 
 /** The words on screen: tags stripped, entities read. */
 const words = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, "&").replace(/&#x2192;/g, "→").replace(/\s+/g, " ").trim();
@@ -35,21 +35,21 @@ const account = (over: Partial<AgentAccount> = {}): AgentAccount => ({
 });
 const service = (over: Partial<AgentAccount> = {}): AgentAccount =>
   account({ id: "qwen1", label: "Qwen here", kind: "endpoint", account: null, plan: "Custom model", endpoint: { baseUrl: "http://127.0.0.1:8080", models: ["qwen3-8b"], contextWindow: 16_384, hasKey: true, protocol: "chat" }, ...over });
-const row = (a: AgentAccount) => words(renderToStaticMarkup(createElement(ServiceRow, { account: a })));
+const row = (a: AgentAccount) => words(renderToStaticMarkup(createElement(AccountRow, { account: a })));
 
-test("a service you added can be changed on its own row, and says where it is removed", () => {
+test("an account you added has its own actions on its row: nothing sends you to another card", () => {
   const shown = row(service());
-  expect(shown).toContain("Change");
-  expect(shown).toContain("Change its address, key or models with Change. Remove it under Codex → Accounts below.");
-  // Still testable and refreshable, as before.
-  expect(shown).toContain("Test");
-  expect(shown).toContain("Refresh models");
+  for (const action of ["Test", "Rename", "Remove", "Set a spending limit", "More", "Change", "Refresh models"]) expect(shown).toContain(action);
+  // What it is and its state, in words.
+  expect(shown).toContain("127.0.0.1:8080 · runs with Codex");
+  expect(shown).toContain("Not tested yet");
+  expect(shown).not.toContain("below");
 });
 
 test("a service on either agent that runs only on services is changed and removed on its row, and moves to the other", () => {
   const on = (provider: AgentAccount["provider"], baseUrl: string) => service({ provider, label: "Refuseless", endpoint: { baseUrl, models: ["m"], contextWindow: null, hasKey: true, protocol: "chat" } });
   for (const shown of [row(on("opencode", "https://api.refuseless.com")), row(on("builtin", "https://api.refuseless.com")), row(on("opencode", "https://nano-gpt.com/api"))]) {
-    expect(shown).toContain("Change its address, key or models with Change, or take it away with Remove.");
+    expect(shown).toContain("Change");
     expect(shown).toContain("Remove");
     expect(shown).toContain("Test");
   }
@@ -59,14 +59,26 @@ test("a service on either agent that runs only on services is changed and remove
   // Only those two services, and only those two agents.
   expect(row(on("builtin", "https://api.deepseek.com"))).not.toContain("Run it with");
   expect(row(on("codex", "https://api.refuseless.com"))).not.toContain("Run it with");
-  expect(row(on("codex", "https://api.refuseless.com"))).not.toContain("take it away with Remove");
 });
 
-test("a plan sign-in and an API key keep their own words, and no Change of their own", () => {
-  // Nothing to fix while they work.
-  expect(row(account())).not.toContain("below.");
-  expect(row(account({ signedIn: false }))).toContain("Press Sign in under Codex below.");
-  expect(row(account({ kind: "apikey", provider: "claude", plan: null, account: null, signedIn: false }))).toContain("Replace the key under Claude Code below.");
-  // Their address and key aren't Crosstalk's to change: only a custom model has a Change here.
-  expect(row(account({ signedIn: false }))).not.toContain("Refresh models");
+test("a plan account and an API key say their state in words, with the way to fix it right there", () => {
+  const signedIn = row(account());
+  expect(signedIn).toContain("Signed in");
+  // Signing out is there, under More; nothing to sign in to.
+  expect(signedIn).toContain("Sign out");
+  expect(signedIn).not.toContain("Sign in");
+  const out = row(account({ signedIn: false }));
+  expect(out).toContain("Not signed in");
+  expect(out).toContain("Sign in");
+  expect(out).not.toContain("below");
+  // A plan isn't billed per use: no spending limit, and nothing of a server's.
+  expect(out).not.toContain("spending limit");
+  expect(out).not.toContain("Refresh models");
+  const refused = row(account({ kind: "apikey", provider: "claude", plan: null, account: null, signedIn: false }));
+  expect(refused).toContain("Key was refused");
+  expect(refused).toContain("Key & workspace");
+  expect(refused).toContain("Set a spending limit");
+  // The main account stays: only an account you added can be removed.
+  expect(row(account())).not.toContain("Remove");
+  expect(row(account({ id: "work", label: "Work" }))).toContain("Remove");
 });

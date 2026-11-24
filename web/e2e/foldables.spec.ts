@@ -13,8 +13,13 @@ const hub = "http://127.0.0.1:8451";
 const FOLDED = { width: 344, height: 882 };
 const UNFOLDED = { width: 882, height: 1104 };
 
-test.beforeEach(() => {
+test.beforeEach(async ({ page }) => {
   test.skip(!["chromium-390", "webkit-390"].includes(test.info().project.name), "Sizes are set by the test itself.");
+  // The two-part layouts for a half-folded phone are a device's own choice, off until made: this is a device that
+  // made it (one test below takes it back to see the default).
+  await page.addInitScript(() => {
+    if (!sessionStorage.getItem("ct-test-fold-default")) localStorage.setItem("crosstalk.fold.parts.v1", "1");
+  });
 });
 
 /**
@@ -241,12 +246,12 @@ test("half-folded like a laptop: the messages above the fold, the message box ju
     await expect.poll(() => fromBottom(page)).toBeLessThan(2);
     await noHorizontalOverflow(page);
     await shot(page, "fold-5-tabletop-flip.png", cdp);
-    // The pickers open down into the lower half, and sheets stay in it.
+    // The chips under the message box open the chat's settings, a sheet that stays in the lower half.
     await page.getByRole("button", { name: /^Permissions:/ }).click();
-    const picker = page.locator(".ctl-pop").first();
-    await expect(picker).toBeVisible();
-    expect((await box(page, ".ctl-pop")).top).toBeGreaterThanOrEqual(502);
-    expect((await box(page, ".ctl-pop")).bottom).toBeLessThanOrEqual(1004);
+    await expect(page.getByRole("dialog", { name: /Chat settings/ })).toBeVisible();
+    await page.evaluate(() => Promise.all(document.getAnimations().map((a) => a.finished.catch(() => {}))));
+    expect((await box(page, '[role="dialog"]')).top).toBeGreaterThanOrEqual(502);
+    expect((await box(page, '[role="dialog"]')).bottom).toBeLessThanOrEqual(1004);
     await page.keyboard.press("Escape");
     await page.getByRole("button", { name: "Chat settings" }).click();
     await expect(page.getByRole("dialog", { name: /Chat settings/ })).toBeVisible();

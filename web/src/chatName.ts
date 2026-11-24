@@ -1,4 +1,4 @@
-// The Name box of a chat's settings (ChatScreen.tsx) and of a group chat's (GroupSettings.tsx): what it may send, and
+// The Name box of a chat's settings (ChatSettingsSheet.tsx, a group chat's too): what it may send, and
 // what it has to say when it's left empty.
 
 /** What the Name box holds, judged against the name it opened with and the chat's name right now. */

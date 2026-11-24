@@ -1,0 +1,123 @@
+# Checks Crosstalk on Linux, where most of its development doesn't happen: the tests, the built program end to end,
+# the real installers (the one-line one and the systemd user service it sets up, restarted, updated and removed), and the
+# agents' own installers. Windows runs Crosstalk in WSL2's Ubuntu, so this is its check too, apart from install.ps1
+# itself, which is only read for mistakes here: nothing runs it.
+# It runs for every change to the public repo, and elsewhere on branches named ci/… or when started by hand.
+name: Test
+
+on:
+  push:
+    branches: [main, "ci/**"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  linux:
+    if: github.repository == 'channelramble/crosstalk-app' || startsWith(github.ref, 'refs/heads/ci/') || github.event_name != 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      # hub/test/opencode-real.test.ts drives OpenCode itself (against a stand-in model service: no key, no request to
+      # anyone) and is skipped where OpenCode isn't installed. Installed here the way Settings installs it, it runs on
+      # Linux too: paths, links and file names behave differently there.
+      - name: OpenCode itself, at the version Crosstalk installs, for the tests that drive the real program
+        run: |
+          cd hub
+          bun -e '
+            import { opencodeProvider } from "./src/providers/opencode";
+            const cmd = opencodeProvider.installCommand.map((c) => (c === "-lc" ? "-c" : c));
+            process.exit(Bun.spawnSync(cmd, { stdout: "inherit", stderr: "inherit" }).exitCode ?? 1);'
+          ~/.npm-global/bin/opencode --version
+          # What that wrote is on the disk before the tests start: their first database waited on it for seconds once.
+          sync
+      - name: Hub tests
+        run: |
+          # The restart scripts' tests run them for real, and those read the database with sqlite3 (skipped without it).
+          command -v sqlite3 >/dev/null || sudo apt-get install -y sqlite3
+          cd hub && bun test
+      - name: App tests
+        run: cd web && bun test src
+      - name: Build for Linux
+        run: bun hub/scripts/build.ts linux-x64
+      - name: The built program, end to end
+        run: cd hub && bun run e2e
+      - name: Install it for real (a systemd user service), then stop it, restart it, update it and remove it
+        run: |
+          set -euo pipefail
+          HEALTH=http://127.0.0.1:7420/api/health
+          # A hosted runner has no login session: linger starts this user's systemd, which is then asked through its folder.
+          sudo loginctl enable-linger "$USER"
+          export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+          for i in $(seq 1 30); do systemctl --user show-environment >/dev/null 2>&1 && break; sleep 1; done
+          systemctl --user show-environment >/dev/null
+
+          # A first install the way people do it: the one-line installer downloads a release (here a folder laid out as
+          # .github/workflows/release.yml lays one out), checks it against SHA256SUMS and runs the Linux installer in it.
+          mkdir dist
+          cp hub/out/crosstalk-hub-linux-x64 dist/
+          cp deploy/install.sh dist/install-linux.sh
+          (cd dist && sha256sum * > SHA256SUMS)
+          CROSSTALK_DOWNLOAD_BASE="file://$PWD/dist" CROSSTALK_NO_TAILSCALE=1 bash install.sh | tee install.log
+          curl -fsS "$HEALTH"
+          grep -q "Installed version" install.log
+          grep -q "Pairing code:" install.log
+          systemctl --user is-enabled crosstalk-hub
+          systemctl --user is-active crosstalk-hub
+          test "$(loginctl show-user "$USER" --property=Linger --value)" = yes
+
+          # Crosstalk itself knows it runs under systemd (it reads /proc for that), and its log is in the journal.
+          ~/.local/bin/crosstalk-hub setup | tee setup.txt
+          grep -q "Runs as a systemd user service (crosstalk-hub)" setup.txt
+          ~/.local/bin/crosstalk-hub setup --json | jq -e '.hub.service == "systemd" and ([.items[] | select(.id == "service")][0].state == "done")'
+          journalctl --user -u crosstalk-hub -o cat --no-pager | tee journal.txt | tail -n 5
+          grep -q "listening on" journal.txt
+          # …and Crosstalk reads it from there itself: the setup tools' hub_log, asked the way an agent's program asks.
+          { printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"check","version":"1"}}}' '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"hub_log","arguments":{"lines":200}}}'; sleep 8; } | ~/.local/bin/crosstalk-hub setup-mcp > hub-log.txt || true
+          grep -q "listening on" hub-log.txt || { cat hub-log.txt; echo "hub_log didn't give the journal's lines"; exit 1; }
+
+          # It comes back by itself when it stops.
+          was="$(systemctl --user show crosstalk-hub --property=MainPID --value)"
+          kill -9 "$was"
+          back=""
+          for i in $(seq 1 30); do
+            sleep 1
+            now="$(systemctl --user show crosstalk-hub --property=MainPID --value)"
+            if [ "$now" != "$was" ] && [ "$now" != 0 ] && curl -fsS "$HEALTH" >/dev/null 2>&1; then back=1; break; fi
+          done
+          test -n "$back"
+
+          # A restart asked for now, by the script a Linux machine uses for it: it waits for 30 quiet seconds, restarts
+          # the service and sees the installed version answer.
+          was="$(systemctl --user show crosstalk-hub --property=MainPID --value)"
+          CROSSTALK_RESTART_LOG="$PWD/restart.log" sh deploy/restart-when-turns-end.sh || { cat restart.log; exit 1; }
+          cat restart.log
+          grep -q "restarting hub now" restart.log
+          grep -q "hub is back: $(~/.local/bin/crosstalk-hub version)" restart.log
+          test "$(systemctl --user show crosstalk-hub --property=MainPID --value)" != "$was"
+
+          # An update keeps the pairing as it is.
+          CROSSTALK_NO_TAILSCALE=1 bash deploy/install.sh hub/out/crosstalk-hub-linux-x64 | tee update.log
+          grep -q "the same as before" update.log
+          if grep -q "Pairing code:" update.log; then echo "an update made a pairing code"; exit 1; fi
+          curl -fsS "$HEALTH"
+
+          # Removing it stops the service and takes its unit away; the data stays.
+          bash deploy/install.sh --uninstall
+          if systemctl --user is-active --quiet crosstalk-hub; then echo "still running after --uninstall"; exit 1; fi
+          if curl -fsS --max-time 3 "$HEALTH" >/dev/null 2>&1; then echo "still answering after --uninstall"; exit 1; fi
+          test ! -e ~/.config/systemd/user/crosstalk-hub.service
+          test -f ~/.crosstalk/crosstalk.db
+      - name: install.ps1 is valid PowerShell (only read, never run, which needs Windows)
+        shell: pwsh
+        run: |
+          $errors = $null; $tokens = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path ./install.ps1), [ref]$tokens, [ref]$errors)
+          if ($errors.Count) { $errors | ForEach-Object { Write-Host "install.ps1:$($_.Extent.StartLineNumber) $($_.Message)" }; exit 1 }
+      - name: The agents' installers (Claude Code, Codex, Gemini CLI, OpenCode), with and without Node.js on the machine
+        run: cd hub && bun scripts/agents-check.ts

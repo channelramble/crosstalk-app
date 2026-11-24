@@ -8,17 +8,17 @@ import { Pairing } from "./views/Pairing";
 import { RoomView } from "./views/RoomView";
 import { TerminalPage } from "./views/TerminalPage";
 import { BookmarksPage } from "./views/BookmarksPage";
+import { ScreenPage } from "./views/ScreenPage";
 import { HomeScreen } from "./views/HomeScreen";
 import { AgentScreen } from "./views/AgentScreen";
 import { ChatScreen } from "./views/ChatScreen";
-import { UsagePage } from "./views/UsagePage";
 import { AppSettings } from "./views/AppSettings";
-import { ChatSidebar, SidebarButton } from "./views/ChatSidebar";
+import { ChatSidebar, SidebarButton, SidebarResizer } from "./views/ChatSidebar";
 import { NewChatDialog } from "./views/AgentScreen";
 import { NewGroupDialog } from "./views/NewGroupDialog";
-import { PoolChatDialog } from "./views/PoolChatDialog";
 import { SignInHost } from "./views/SignInHost";
 import { useSidebar } from "./sidebar";
+import { useShortcuts } from "./shortcuts";
 import { showInSettings } from "./navigation";
 import { thisDevice, timeShort, useBookPosture, useIsMobile } from "./ui";
 import { EntranceScope, FlipGroup, leave } from "./motion";
@@ -66,13 +66,15 @@ function Shell() {
       case "settings":
       case "setup":
       case "devices":
-        return <AppSettings key={active} />;
+      // Usage was a screen of its own: its meters are drawn in Settings → Usage & costs now, and #/usage lands there.
       case "usage":
-        return <UsagePage />;
+        return <AppSettings key={active} />;
       case "terminal":
         return <TerminalPage />;
       case "bookmarks":
         return <BookmarksPage />;
+      case "screen":
+        return <ScreenPage />;
       default:
         return <HomeScreen />;
     }
@@ -88,6 +90,8 @@ function Shell() {
   const creating = useSidebar((s) => s.creating);
   const setCreating = useSidebar((s) => s.setCreating);
   const docked = book || (!mobile && !collapsed);
+  // ⌘K / Ctrl+K searches the chats and ⌥N / Alt+N starts one, wherever the list is.
+  useShortcuts({ docked, mobile });
   // Each screen starts its own clock: what's drawn with it comes in still, what appears on it later can move in.
   const screenKey = `${view}|${roomId ?? ""}|${agent ?? ""}|${active}`;
   const since = useMemo(() => performance.now(), [screenKey]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -102,6 +106,8 @@ function Shell() {
     <div className={`app mobile single ${docked ? "docked" : ""}`}>
       <div className="shell">
         {docked && <ChatSidebar />}
+        {/* Half-folded like a book the list is its half of the screen: nothing to drag. */}
+        {docked && !book && <SidebarResizer />}
         <div className="main">
           <EntranceScope since={since}>
             {main}
@@ -116,15 +122,6 @@ function Shell() {
       {!docked && drawer && <Drawer onClose={() => setDrawer(false)} />}
       {creating?.kind === "group" ? (
         <NewGroupDialog
-          onClose={() => {
-            setCreating(null);
-            setDrawer(false);
-          }}
-        />
-      ) : creating?.kind === "pool" ? (
-        /* The model pool: its own dialog until it's running (it can start the pool first), then New chat on it. */
-        <PoolChatDialog
-          target={creating}
           onClose={() => {
             setCreating(null);
             setDrawer(false);
@@ -163,6 +160,19 @@ function Drawer({ onClose }: { onClose: () => void }) {
       if (list?.matches(".chat-sidebar.drawer")) leave(list, "drawer", { unless: docked, only: ".csb-scroll" });
     };
   }, []);
+  // Esc closes it, as the phone's Back does: once whatever is open in it (New chat's menu, a row's options, a search
+  // with words in it) has had its own Esc, and never from under a sheet. Looked at before those hear the key (the
+  // capture phase): by the time it has bubbled, what they closed is already gone from the page.
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || document.querySelector('[role="dialog"], .csb-new-menu, .csb-row-tray')) return;
+      const at = e.target;
+      if (at instanceof HTMLInputElement && at.value && at.closest(".chat-sidebar")) return;
+      onClose();
+    };
+    window.addEventListener("keydown", key, true);
+    return () => window.removeEventListener("keydown", key, true);
+  }, [onClose]);
   return (
     <>
       <div ref={scrim} className="drawer-scrim" onClick={onClose} aria-hidden="true" />
@@ -339,7 +349,7 @@ function ConnStrip() {
   const syncError = useStore((s) => s.syncError);
   const downSince = useStore((s) => s.downSince);
   const updateReady = useStore((s) => s.updateReady);
-  const name = useStore((s) => (s.conn ? machineName(s.conn, s.hub) : "the hub"));
+  const name = useStore((s) => (s.conn ? machineName(s.conn, s.hub) : "the machine"));
   const local = useStore((s) => isLocal(s.conn));
   const reconnectNow = useStore((s) => s.reconnectNow);
   const [now, setNow] = useState(() => Date.now());

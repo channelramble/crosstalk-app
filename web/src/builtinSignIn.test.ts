@@ -1,7 +1,7 @@
 // Crosstalk's own agent and OpenCode beside signing agents in (signIn.ts, hubStore.ts, services.ts, usageWords.ts; the hub's
 // side is hub/test/builtin-signin.test.ts). They have no sign-in: they run on an AI service's key. So no chat, Settings card,
 // setup checklist item or notice ever offers to sign them in, whatever list a hub sends, and a key the service refused is
-// said in the reply, with Open AI services, where the service's row checks the key for real. Where agents are listed
+// said in the reply, with Open Accounts, where the service's row checks the key for real. Where agents are listed
 // (Settings → AI services' Agents line, Settings → Usage) they're listed as what they are: agents that run a service.
 import { afterEach, expect, test } from "bun:test";
 import {
@@ -21,12 +21,13 @@ import {
   type SignInNeed,
 } from "@crosstalk/shared";
 import { PHONE_SIGN_IN, SHEET_ACTIONS, agentNeeds, chatNeeds, checklistAgent, sheetView, signInsShown } from "./signIn";
-import { agentsLine, serviceFixLine, statusOf, testBody } from "./services";
+import { accountAbout, accountState } from "./accountsList";
+import { testBody } from "./services";
 import { usageCards } from "./usageWords";
 
 const AT = Date.UTC(2026, 10, 1, 9, 40, 0);
 const MACHINE = { id: "h_mini", name: "Mac mini" };
-const REFUSED = "NanoGPT refused the key — check it in Settings → AI services, then tap Try again.";
+const REFUSED = "NanoGPT refused the key — check it in Settings → Accounts, then tap Try again.";
 const need = (over: Partial<SignInNeed> = {}): SignInNeed => ({ provider: "claude", account: "default", accountLabel: null, machine: MACHINE, since: AT, rooms: ["r1"], words: "Claude Code is signed out on Mac mini…", ...over });
 /** What a hub would send if it ever said Crosstalk's agent was signed out (none does: SignIns.covers). */
 const agentNeed = need({ provider: "builtin", account: "nano1", accountLabel: "NanoGPT", rooms: ["r2"], words: "Crosstalk agent (NanoGPT) is signed out…" });
@@ -63,21 +64,21 @@ test("a sign-in need for an agent that runs only on services, from any hub, show
   expect(agentNeeds(needs, "claude")).toEqual([claude]);
 });
 
-test("the sheet, if ever opened for it, says it has no sign-in and offers Open AI services, never a terminal", () => {
+test("the sheet, if ever opened for it, says it has no sign-in and offers Open Accounts, never a terminal", () => {
   const view = sheetView({ session: null, problem: { status: 409, code: "not_signin", message: NO_SIGN_IN_WORDS }, agent: "Crosstalk agent", machine: "Mac mini" });
   expect(view).toMatchObject({ phase: "problem", tone: "alert", words: NO_SIGN_IN_WORDS, actions: ["close", "settings"] });
-  expect(view.actions.map((a) => SHEET_ACTIONS[a])).toEqual(["Close", "Open AI services"]);
+  expect(view.actions.map((a) => SHEET_ACTIONS[a])).toEqual(["Close", "Open Accounts"]);
   expect(view.words).not.toMatch(/terminal/i);
   // OpenCode's own answer, in its own name.
   const its = sheetView({ session: null, problem: { status: 409, code: "not_signin", message: noSignInWords("opencode") }, agent: "OpenCode", machine: "Mac mini" });
-  expect(its).toMatchObject({ phase: "problem", words: "OpenCode has no sign-in: it runs on an AI service's key. Check that key in Settings → AI services.", actions: ["close", "settings"] });
+  expect(its).toMatchObject({ phase: "problem", words: "OpenCode has no sign-in: it runs on an account's key. Check that key in Settings → Accounts.", actions: ["close", "settings"] });
 });
 
 test("a refused key in words: one sentence with where to fix it, told apart from every other failure", () => {
   expect(serviceKeyWords("NanoGPT")).toBe(REFUSED);
-  expect(serviceKeyWords("NanoGPT", true)).toBe("NanoGPT needs a key — add it in Settings → AI services, then tap Try again.");
+  expect(serviceKeyWords("NanoGPT", true)).toBe("NanoGPT needs a key — add it in Settings → Accounts, then tap Try again.");
   // As the reply shows it, with the error mark; and as a hub before 0.6.7 says it, so a phone reading that hub's chats
-  // offers Open AI services there too. OpenCode's reply says the same.
+  // offers Open Accounts there too. OpenCode's reply says the same.
   const older = "NanoGPT refused the key. Check it in Settings → AI services, then try again.";
   expect([REFUSED, `⚠️ ${REFUSED}`, serviceKeyWords("Venice", true), older, `⚠️ ${older}`].map(isServiceKeyRefusal)).toEqual([true, true, true, true, true]);
   // Not a sign-in, money, a limit, the chat adapter's words for Codex, a model server's list, or nothing.
@@ -85,7 +86,7 @@ test("a refused key in words: one sentence with where to fix it, told apart from
     signInNeededWords({ provider: "claude", account: "default" }, "Mac mini"),
     "NanoGPT says there isn't enough money in the account for deepseek: Insufficient balance. Add money on its website, or pick another model in this chat's settings (on NanoGPT, one its subscription covers).",
     "NanoGPT has had too many requests from this account just now. Wait a moment, then tap Try again.",
-    "NanoGPT refused this key. Paste a working key in Settings → AI services, then try again.",
+    "NanoGPT refused this key. Paste a working key in Settings → Accounts, then try again.",
     "The server refused the key. Check it in this account's settings.",
     "",
     null,
@@ -93,7 +94,7 @@ test("a refused key in words: one sentence with where to fix it, told apart from
   ])
     expect({ other, key: isServiceKeyRefusal(other) }).toEqual({ other, key: false });
   // Sign-in words asked for it anyway (nothing does): never "signed out", a sign-in that failed or a Sign in it doesn't
-  // have, but its key's own words, which its reply shows with Open AI services.
+  // have, but its key's own words, which its reply shows with Open Accounts.
   const asked = (["builtin", "opencode"] as const).flatMap((provider) => {
     const who = { provider, account: "nano1", accountLabel: "NanoGPT" };
     return [
@@ -108,29 +109,10 @@ test("a refused key in words: one sentence with where to fix it, told apart from
     expect(isServiceKeyRefusal(words)).toBe(true);
   }
   // Without the service's name it still says the key, never the agent's sign-in.
-  expect(signInNeededWords({ provider: "builtin", account: "nano1" }, "Mac mini")).toBe("Its AI service refused the key — check it in Settings → AI services, then tap Try again.");
+  expect(signInNeededWords({ provider: "builtin", account: "nano1" }, "Mac mini")).toBe("Its account refused the key — check it in Settings → Accounts, then tap Try again.");
   // The agents that do sign in keep their words.
-  expect(signInNeededWords({ provider: "claude", account: "default" }, "Mac mini")).toBe("Claude Code is signed out on Mac mini, so it couldn't answer. Sign in to it again (Settings → Agents → Claude Code → Sign in), then tap Try again.");
+  expect(signInNeededWords({ provider: "claude", account: "default" }, "Mac mini")).toBe("Claude Code is signed out on Mac mini, so it couldn't answer. Sign in to it again (Settings → Accounts → Claude Code → Sign in), then tap Try again.");
   expect(signInNeededWords({ provider: "gemini", account: "default" }, "Mac mini")).toBe("Gemini CLI is signed out on Mac mini, so it couldn't answer. Sign in to it again with Sign in in the chat, then tap Try again.");
-});
-
-test("Settings → AI services' Agents line: the agents that run on a service's key need no sign-in, and the sign-in there is Claude Code's and Codex's", () => {
-  const nano = { provider: "builtin" as const, label: "NanoGPT" };
-  const refuseless = { provider: "opencode" as const, label: "Refuseless" };
-  const claude = { provider: "claude" as const, label: "Main" };
-  expect(agentsLine([])).toBe("Claude Code and Codex run every service above. Install them, sign in to your plan or add accounts here.");
-  expect(agentsLine([claude])).toBe("Claude Code and Codex run every service above. Install them, sign in to your plan or add accounts here.");
-  expect(agentsLine([nano])).toBe("Crosstalk's own agent runs NanoGPT itself, with the key above: no sign-in, and no Claude Code or Codex needed. To use those too, install them, sign in to your plan or add accounts here.");
-  expect(agentsLine([nano, { ...nano, label: "NanoGPT work" }])).toBe("Crosstalk's own agent runs NanoGPT and NanoGPT work itself, with the keys above: no sign-in, and no Claude Code or Codex needed. To use those too, install them, sign in to your plan or add accounts here.");
-  expect(agentsLine([claude, nano])).toBe("Claude Code and Codex run the other services above. Crosstalk's own agent runs NanoGPT itself, with the key above, and needs no sign-in. Install Claude Code or Codex, sign in to your plan or add accounts here.");
-  // Wherever "sign in to your plan" comes, Claude Code and Codex are named just before it, never Crosstalk's agent alone.
-  expect(agentsLine([claude, refuseless])).toBe("Claude Code and Codex run the other services above. OpenCode runs Refuseless, with the key above, and needs no sign-in. Install Claude Code or Codex, sign in to your plan or add accounts here.");
-  for (const list of [[nano], [claude, nano], [refuseless], [claude, refuseless], [refuseless, nano], [claude, refuseless, nano]]) {
-    const line = agentsLine(list);
-    const [before] = line.split("sign in to your plan");
-    expect(before.split(". ").at(-1)).toMatch(/^(?:To use those too|Install Claude Code or Codex)/);
-    expect(line).toContain("no sign-in");
-  }
 });
 
 test("Settings → Usage: each agent's plan in the agents' order, then each service, and no card for an agent that has no plan of its own", () => {
@@ -177,12 +159,13 @@ test("its service's row in Settings → AI services: Test checks the key for rea
   expect(testBody({ ...nano, provider: "opencode", id: "rl1" })).toEqual({ baseUrl: "https://nano-gpt.com/api", accountId: "rl1" });
   // Claude Code's and Codex's custom models still say which agent they're for.
   expect(testBody({ ...nano, provider: "codex", id: "c1" })).toEqual({ baseUrl: "https://nano-gpt.com/api", accountId: "c1", provider: "codex" });
-  // The row's words: Change for its key, never Sign in, whatever its status says.
+  // The row's words: its key, never Sign in, whatever its status says.
   for (const provider of SERVICE_ONLY_AGENTS)
     for (const signedIn of [true, false, null]) {
       const row = { ...nano, provider, signedIn };
-      expect(serviceFixLine(row)).toBe("Change its address, key or models with Change, or take it away with Remove.");
-      expect(statusOf(row, null, null).text).not.toMatch(/sign/i);
+      // Its state is about its key, never a sign-in.
+      expect(accountState(row, null, null).text).not.toMatch(/sign/i);
+      expect(accountAbout(row)).not.toMatch(/sign/i);
     }
 });
 

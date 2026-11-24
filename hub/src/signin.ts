@@ -16,10 +16,13 @@
 //   read). Only the person's own devices may use these routes: never another machine's hub, a peer sign-in or a setup
 //   key. The contract is at SignInSession in shared/src/protocol.ts.
 
-import { existsSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, statSync } from "node:fs";
+import { RUN_DIR } from "./config";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import {
+  agentSettingsPath,
+  settingsPath,
   DEFAULT_ACCOUNT,
   PROVIDER_INFO,
   agentHasSignIn,
@@ -75,7 +78,7 @@ export function isPersonDevice(d: Pick<Device, "scope" | "hubId" | "platform">):
 }
 
 function personOnly(device: Device) {
-  if (!isPersonDevice(device)) throw new HttpError(403, "Only your own devices can sign agents in. This sign-in belongs to another machine's hub.", "person_only");
+  if (!isPersonDevice(device)) throw new HttpError(403, "Only your own devices can sign agents in. This came from a linked machine.", "person_only");
 }
 
 // ---------------------------------------------------------------------------------------------- reading a sign-in screen
@@ -96,6 +99,11 @@ interface ScreenRead {
   failed?: string | null;
   /** The code or link ran out before anyone finished. */
   expired?: boolean;
+  /**
+   * It asks something before the sign-in that has one right answer, which Crosstalk gives itself: the keys to send, once
+   * for each `id` (Gemini CLI's "trust this folder?" and "how would you like to authenticate?").
+   */
+  press?: { id: string; keys: string };
 }
 
 interface PtyRecipe {
@@ -112,6 +120,8 @@ interface PtyRecipe {
   refusal?: RegExp;
   /** For an agent that goes on into its own screen once signed in (Gemini CLI): whether it has saved a sign-in since `t`. */
   savedSince?: (t: number) => boolean;
+  /** The folder it runs in, when not the home folder. */
+  cwd?: string;
 }
 
 interface CodexRecipe {
@@ -191,6 +201,18 @@ export function readGeminiScreen(raw: string, afterRaw: string | null, refused =
   const url = signInLink(raw, /authorize the application:/);
   const text = screenText(raw);
   if (/Authorization timed out/i.test(text)) return { url, expired: true };
+  if (!url) {
+    // A Gemini CLI that has never run here asks two things first (0.71; neither in 0.62, which went straight to the
+    // link once Google was the saved choice). Whether to trust the folder it's in: it's a folder of Crosstalk's own,
+    // and "Trust folder" is the answer it has ready. Then how to sign in: Google's is the first, and each has a number.
+    const lines = text.split("\n").map((l) => l.replace(/[│╭╮╰╯─●○•\s]+/g, " ").trim()).filter(Boolean).join(" ");
+    if (/How would you like to authenticate/i.test(lines)) {
+      const google = /(\d)\. (?:Sign in|Login|Log in) with Google/i.exec(lines);
+      if (google) return { url, wantsCode: false, press: { id: "auth", keys: google[1]! } };
+    } else if (/Do you trust the files in this folder\?/i.test(lines)) {
+      return { url, wantsCode: false, press: { id: "trust", keys: "\r" } };
+    }
+  }
   if (afterRaw !== null) {
     const after = screenText(afterRaw);
     const prompt = /Enter the authorization code:/i.test(after);
@@ -237,6 +259,8 @@ interface Live {
   raw: string;
   after: string | null;
   pastedAt: number;
+  /** The questions before the sign-in that Crosstalk has answered itself (ScreenRead.press), each once. */
+  pressed: Set<string>;
   /** The link when the last code was pasted: an agent that turns a code down may make a new one (Gemini CLI does). */
   urlAtPaste: string | null;
   /** It turned the last paste down (its refusal, seen before anything was taken out of what it printed). */
@@ -409,18 +433,18 @@ export class SignIns implements SignInHooks {
     const account = typeof accountIn === "string" && accountIn ? accountIn : DEFAULT_ACCOUNT;
     const name = PROVIDER_INFO[p].name;
     if (!this.app.providers.hasAccount(p, account)) throw new HttpError(404, `There's no ${name} account like that on ${this.app.machineName()} any more.`, "account");
-    if (this.app.providers.isApiKeyAccount(p, account) || this.app.providers.endpointOf(p, account)) throw new HttpError(409, "This account runs on an API key or a model server of your own: there's nothing to sign in to. Change its key in Settings → AI services.", "not_signin");
-    if (p === "antigravity") throw new HttpError(409, "Antigravity CLI asks how to sign in on a screen of its own first, so it signs in from its terminal: Settings → AI services → Antigravity CLI → Sign in.", "terminal");
+    if (this.app.providers.isApiKeyAccount(p, account) || this.app.providers.endpointOf(p, account)) throw new HttpError(409, `This account runs on an API key or one of your own models: there's nothing to sign in to. Change its key in ${settingsPath("ai-services")}.`, "not_signin");
+    if (p === "antigravity") throw new HttpError(409, `Antigravity CLI asks how to sign in on a screen of its own first, so it signs in from its terminal: ${agentSettingsPath("antigravity", "Sign in")}.`, "terminal");
     const bin = this.app.providers.which(p);
-    if (!bin) throw new HttpError(409, `${name} isn't installed on ${this.app.machineName()}. Install it under Settings → AI services first.`, "not_installed");
+    if (!bin) throw new HttpError(409, `${name} isn't installed on ${this.app.machineName()}. Install it under ${agentSettingsPath(p)} first.`, "not_installed");
     const env = this.app.providers.agentEnv(p, account);
     // A Muse Code without `muse login` signs in from its own screen (and `muse login` would be a prompt to it).
     if (p === "muse") {
       const { museHelp } = await import("./providers/muse");
-      if (!/^\s+login\b/m.test(await museHelp(bin, env))) throw new HttpError(409, "This Muse Code signs in from its own screen: Settings → AI services → Muse Code → Sign in.", "terminal");
+      if (!/^\s+login\b/m.test(await museHelp(bin, env))) throw new HttpError(409, `This Muse Code signs in from its own screen: ${agentSettingsPath("muse", "Sign in")}.`, "terminal");
     }
     const recipe = this.recipe(p, account, env);
-    if (!recipe) throw new HttpError(409, `${name} signs in from its terminal: Settings → AI services → ${name} → Sign in.`, "terminal");
+    if (!recipe) throw new HttpError(409, `${name} signs in from its terminal: ${agentSettingsPath(p, "Sign in")}.`, "terminal");
     // One sign-in per agent and account: a new one replaces the one that's open, and one Settings started the older
     // way (its terminal, or Codex's device code there) ends too, so two never write the same sign-in at once.
     for (const l of this.live.values()) if (!l.ended && l.session.provider === p && l.session.account === account) this.end(l, "cancelled", "A newer sign-in replaced this one.");
@@ -452,6 +476,7 @@ export class SignIns implements SignInHooks {
       raw: "",
       after: null,
       pastedAt: 0,
+      pressed: new Set(),
       urlAtPaste: null,
       refusedRaw: false,
       ended: false,
@@ -547,11 +572,18 @@ export class SignIns implements SignInHooks {
     }
     if (p === "gemini") {
       const creds = join(account === DEFAULT_ACCOUNT ? homedir() : this.app.providers.accountDir("gemini", account), ".gemini", "oauth_creds.json");
+      // A folder of Crosstalk's own to run in: a new Gemini CLI asks whether to trust the folder it starts in, and
+      // the home folder isn't one to answer that for.
+      const cwd = join(RUN_DIR, "gemini-signin");
+      mkdirSync(cwd, { recursive: true, mode: 0o700 });
       return {
         kind: "pty",
         method: "paste",
         argv: (bin) => ["/bin/sh", "-c", 'stty -echo 2>/dev/null; exec "$0" "$@"', bin],
-        env: { ...env, NO_BROWSER: "true" },
+        // Trusting that folder and Google's sign-in, said up front where this Gemini CLI listens (readGeminiScreen
+        // answers the same two questions on screen for one that doesn't).
+        env: { ...env, NO_BROWSER: "true", GEMINI_CLI_TRUST_WORKSPACE: "true", GEMINI_DEFAULT_AUTH_TYPE: "oauth-personal" },
+        cwd,
         read: readGeminiScreen,
         refusal: GEMINI_REFUSAL,
         // Only its time is looked at, never what's in it.
@@ -581,7 +613,7 @@ export class SignIns implements SignInHooks {
     for (const [k, v] of Object.entries({ ...recipe.env, TERM: "xterm-256color" })) if (v !== undefined) full[k] = v;
     let proc: ReturnType<typeof Bun.spawn>;
     try {
-      proc = Bun.spawn(recipe.argv(bin), { terminal: term, cwd: homedir(), env: full });
+      proc = Bun.spawn(recipe.argv(bin), { terminal: term, cwd: recipe.cwd ?? homedir(), env: full });
     } catch (e) {
       term.close();
       throw e;
@@ -630,6 +662,12 @@ export class SignIns implements SignInHooks {
     if (r.expired) return this.end(live, "expired", `The sign-in ran out of time before it was finished. Start again when you're ready.`);
     if (r.succeeded) return this.finish(live);
     if (live.finishing) return;
+    if (r.press && !live.pressed.has(r.press.id)) {
+      live.pressed.add(r.press.id);
+      // A moment for its screen to be ready for keys (it draws the question before it listens).
+      const keys = r.press.keys;
+      live.timers.push(setTimeout(() => !live.ended && live.write?.(keys), 400));
+    }
     const url = r.url ?? s.url;
     const userCode = r.userCode ?? s.userCode;
     if (r.confirmCode) live.confirmCode = true;

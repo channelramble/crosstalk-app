@@ -1,4 +1,4 @@
-import { test, expect, noHorizontalOverflow } from "./fixtures";
+import { test, expect, chatSettings, noHorizontalOverflow } from "./fixtures";
 import type { APIRequestContext, Page, WebSocketRoute } from "@playwright/test";
 import { join } from "node:path";
 
@@ -52,7 +52,7 @@ test("the model menu says what each model holds, marks new ones, and keeps up wi
   try {
     await s.open();
     await page.locator(".chat-controls .ctl-model").click();
-    const menu = page.getByRole("dialog", { name: "Model", exact: true });
+    const menu = page.getByRole("dialog", { name: "Chat settings", exact: true }).getByRole("region", { name: "Answers with", exact: true });
     const item = (name: string) => menu.getByRole("menuitemradio").filter({ hasText: name });
     await expect(item("GPT-6.1-Sol")).toContainText("Default");
     await expect(item("GPT-6.1-Sol")).toContainText("Latest workhorse model. · 500k context, up to 872k");
@@ -68,7 +68,7 @@ test("the model menu says what each model holds, marks new ones, and keeps up wi
 
     // A model typed in by name (never in Codex's list) is just shown as set.
     s.send({ t: "member", member: { ...s.member, model: "my-own-model" } });
-    await expect(item("my-own-model")).toContainText("Set in chat settings.");
+    await expect(item("my-own-model")).toContainText("Typed in by name.");
     await expect(item("my-own-model")).not.toHaveClass(/warn/);
     // The chat's model was in Codex's list and isn't any more: the menu says so, with the models to pick from right there.
     s.send({ t: "models", catalog: { provider: "codex", accountId: "default", live: true, error: null, models, gone: ["gpt-5.5-old"] } });
@@ -87,21 +87,21 @@ test("the context panel: what the chat's model holds before a reply, Codex's lon
   await page.route("**/api/providers/codex/models**", (r) => r.fulfill({ json: { provider: "codex", accountId: "default", live: true, error: null, models: [sol, astra] } }));
   try {
     await s.open();
-    await page.locator(".chat-controls").getByRole("button", { name: /context and plan limits/ }).click();
-    const pop = page.getByRole("dialog", { name: "Context and plan limits", exact: true });
+    await page.locator(".chat-controls .ring-btn").click();
+    const pop = page.getByRole("dialog", { name: "Chat settings", exact: true }).getByRole("region", { name: "Memory", exact: true });
     // Before the first reply: what the model holds, from Codex's list.
-    await expect(pop).toContainText("Holds 258k. Shows how full it is after Codex's next reply.");
-    await expect(pop).toContainText("GPT-6-Astra has 272k; Codex keeps 5% of it for its instructions and the reply.");
+    await expect(pop).toContainText("GPT-6-Astra remembers up to 258k of a chat. How full that is shows after Codex's next reply.");
+    await expect(pop).toContainText("GPT-6-Astra holds 272k; Codex keeps 5% of it for its instructions and the reply.");
     const compact = pop.locator("select");
     await expect(compact.locator("option")).toHaveText(["Codex's default (245k)", "100k tokens", "200k tokens"]);
 
     // Long context: the most Codex allows this model, and compaction moves with it.
-    const long = pop.locator(".ultracode-row").filter({ hasText: "Long context" });
-    await expect(long).toContainText("Up to 872k instead of 272k, so it compacts less often. Long chats use your plan faster.");
+    const long = (await chatSettings(page, "Answers with")).locator(".cs-switch").filter({ hasText: "Long context" });
+    await expect(long).toContainText("Remembers up to 872k of the chat instead of 272k, so it summarizes less often. Long chats use your plan faster.");
     await long.locator("label.switch").click();
     await expect.poll(() => (s.patches.at(-1)?.config as Record<string, unknown> | undefined)?.longContext).toBe(true);
-    await expect(pop).toContainText("Holds 828k.");
-    await expect(pop).toContainText("GPT-6-Astra has 872k with long context; Codex keeps 5% of it");
+    await expect(pop).toContainText("GPT-6-Astra remembers up to 828k of a chat.");
+    await expect(pop).toContainText("GPT-6-Astra holds 872k with long context; Codex keeps 5% of it");
     await expect(compact.locator("option")).toHaveText(["Codex's default (785k)", "100k tokens", "200k tokens", "400k tokens", "600k tokens"]);
 
     // A reply's reading: how full it is, against the long window.
@@ -116,13 +116,11 @@ test("the context panel: what the chat's model holds before a reply, Codex's lon
     await expect.poll(() => (s.patches.at(-1)?.config as Record<string, unknown> | undefined)?.autoCompact).toBe(600_000);
     // …and another model that can be given more keeps both.
     const before = s.patches.length;
-    await page.locator(".chat-controls .ctl-model").click();
-    await page.getByRole("dialog", { name: "Model", exact: true }).getByRole("menuitemradio").filter({ hasText: "GPT-6.1-Sol" }).click();
+    await page.getByRole("dialog", { name: "Chat settings", exact: true }).getByRole("region", { name: "Answers with", exact: true }).getByRole("menuitemradio").filter({ hasText: "GPT-6.1-Sol" }).click();
     await expect.poll(() => s.patches.length).toBe(before + 1);
     expect(s.patches.at(-1)).toMatchObject({ model: "gpt-6.1-sol", config: { longContext: true, autoCompact: 600_000 } });
     // Off again: Codex's own window, and the 600k it no longer reaches goes back to Codex's own compaction point.
-    await page.locator(".chat-controls").getByRole("button", { name: /context and plan limits/ }).click();
-    await page.getByRole("dialog", { name: "Context and plan limits", exact: true }).locator(".ultracode-row label.switch").click();
+    await long.locator("label.switch").click();
     await expect.poll(() => s.patches.length).toBe(before + 2);
     const off = s.patches.at(-1)!.config as Record<string, unknown>;
     expect(off.longContext).toBeUndefined();
@@ -147,15 +145,14 @@ test("a Claude chat: each model's own window, and the context ring follows a mod
   try {
     await page.goto(`/#/room/${room.id}`);
     const ring = page.locator(".chat-controls .ring-btn");
-    await expect(ring).toHaveAttribute("aria-label", /^Context 15% full/);
+    await expect(ring).toHaveAttribute("aria-label", /^Memory 15% full/);
     await page.locator(".chat-controls .ctl-model").click();
-    const menu = page.getByRole("dialog", { name: "Model", exact: true });
+    const menu = page.getByRole("dialog", { name: "Chat settings", exact: true }).getByRole("region", { name: "Answers with", exact: true });
     await expect(menu.getByRole("menuitemradio").filter({ hasText: "Sonnet 4.6" })).toContainText("Efficient for routine tasks · 200k context");
     await menu.getByRole("menuitemradio").filter({ hasText: "Sonnet 4.6" }).click();
     // 150k of Sonnet 4.6's 200k: the ring says so without waiting for a reply on it.
-    await expect(ring).toHaveAttribute("aria-label", /^Context 75% full/);
-    await ring.click();
-    const pop = page.getByRole("dialog", { name: "Context and plan limits", exact: true });
+    await expect(ring).toHaveAttribute("aria-label", /^Memory 75% full/);
+    const pop = await chatSettings(page, "Memory");
     await expect(pop.locator(".usage-line").first()).toContainText("150k of 200k");
     await expect(pop.locator("select option").first()).toHaveText("Claude Code's default (167k)");
     // Claude Code has no long context to turn on.

@@ -1,3 +1,4 @@
+import { agentSettingsPath } from "@crosstalk/shared";
 import type { PermissionMode } from "@crosstalk/shared";
 import type { AgentDriver, DriverContext, TurnInput, TurnResult, TurnSink } from "./driver";
 import { logger } from "../util/log";
@@ -80,7 +81,7 @@ export class AntigravityDriver implements AgentDriver {
       const signIn = /authenticat|sign in|log in/i.test(this.stderrTail);
       // Never a stale sign-in from what it printed on the way out (agyAuthHit reads only a result's error): its stderr
       // says "not authenticated" about other things too, an MCP server it skipped, say.
-      t.done({ ok: false, error: signIn ? "Antigravity CLI isn't signed in. Sign in under Settings → AI services." : `Antigravity CLI exited (code ${code})${tail ? `: ${tail}` : ""}` });
+      t.done({ ok: false, error: signIn ? `Antigravity CLI isn't signed in. Sign in under ${agentSettingsPath("antigravity")}.` : `Antigravity CLI exited (code ${code})${tail ? `: ${tail}` : ""}` });
     });
     return proc;
   }
@@ -179,7 +180,7 @@ export class AntigravityDriver implements AgentDriver {
         const err = String(r.error || "Antigravity CLI reported an error");
         // "Authentication expired. Please log back in." (1.3.3+): the engine starts it again once, then checks the sign-in.
         const auth = agyAuthHit(err);
-        t.done({ ok: false, error: /authenticat|sign in/i.test(err) ? "Antigravity CLI isn't signed in. Sign in under Settings → AI services." : err, ...(auth ? { auth } : {}) });
+        t.done({ ok: false, error: /authenticat|sign in/i.test(err) ? `Antigravity CLI isn't signed in. Sign in under ${agentSettingsPath("antigravity")}.` : err, ...(auth ? { auth } : {}) });
         return;
       }
       // Without Full access agy can't run commands headless: it declines them, lists them in denied_actions and
@@ -191,7 +192,7 @@ export class AntigravityDriver implements AgentDriver {
         if (!t.denied) {
           t.denied = names;
           t.sink.status("Answering without the declined action", "thinking");
-          this.write({ event: "user", message: { content: `(Crosstalk) ${names} was declined: your permission setting in this room doesn't allow it and nobody can approve it. Don't try it again this turn. Reply now with what you can do without it, and say briefly what you'd have used it for.` } });
+          this.write({ event: "user", message: { content: `(Crosstalk) ${names} was declined: your permission setting in this chat doesn't allow it and nobody can approve it. Don't try it again this turn. Reply now with what you can do without it, and say briefly what you'd have used it for.` } });
           return;
         }
         t.done({ ok: false, error: `Antigravity stopped because it wanted to use ${names}, which its permission setting doesn't allow (it can't ask you in Crosstalk). Choose Full access in its agent settings, or ask it to answer without that.` });
@@ -276,6 +277,10 @@ export class AntigravityDriver implements AgentDriver {
     const failed = /ERROR|FAIL|CANCEL/.test(state) || !!error;
     t.sink.updateActivity(act, { appendDetail: output || String(error), status: failed ? "error" : "done" });
     t.sink.status("Thinking", "thinking");
+  }
+
+  pids(): number[] {
+    return this.proc?.pid ? [this.proc.pid] : [];
   }
 
   /** Stops `turn` (default: the current one). Stopping a turn that already finished does nothing. */

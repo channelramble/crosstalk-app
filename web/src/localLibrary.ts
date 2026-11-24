@@ -1,6 +1,5 @@
 import type { FitKind, LocalDownload, LocalFolder, LocalMachine, LocalModelFile, LocalStarted } from "@crosstalk/shared";
 import { bytesText, capacity, fitOf, needOf } from "@crosstalk/shared";
-import { contextLabel, downloadText, fileName, modelName, parseHfLink } from "./pool";
 
 // Settings → Local models, getting models and starting servers (views/LocalModelsGet.tsx, LocalModelsLibrary.tsx): the
 // suggested file, room on the disk and the words for downloads and servers, as pure functions so they can be tested.
@@ -9,6 +8,97 @@ import { contextLabel, downloadText, fileName, modelName, parseHfLink } from "./
 
 export { capacity, FALLBACK_KV, fitOf, needOf, OVERHEAD, ramRoom, roomFor, TIGHT } from "@crosstalk/shared";
 export type { Fit, FitKind, Need } from "@crosstalk/shared";
+
+/** A file or download size, like the rest of the app shows them (ui.tsx formatBytes): "15.6 GB", "640 MB". It lives in shared because the hub's memory guard writes the same sizes. */
+export { bytesText };
+
+/** A Hugging Face repo's model name: "unsloth/Qwen3.8-27B-GGUF" is "Qwen3.8-27B", bartowski's "org_Model-GGUF" "Model". */
+export function modelName(repo: string): string {
+  let name = repo.split("/").pop() ?? repo;
+  name = name.replace(/[-_.]?gguf$/i, "");
+  const unprefixed = /^[a-z0-9-]+_(.{3,})$/.exec(name);
+  return (unprefixed ? unprefixed[1] : name) || repo;
+}
+
+/** A file's own name, without its folder in the repo. */
+export const fileName = (path: string) => path.split("/").pop() ?? path;
+
+export const hfModelUrl = (repo: string) => `https://huggingface.co/${repo}`;
+
+const NAME = "[A-Za-z0-9][A-Za-z0-9._-]*";
+
+/**
+ * A Hugging Face model from what was pasted: "owner/repo", its page (huggingface.co or hf.co, any tab), a file's link
+ * (blob/resolve) or llama.cpp's "owner/repo:Q4_K_M". Null for anything else, datasets and Spaces included.
+ */
+export function parseHfLink(input: string): { repo: string; file: string | null; quant: string | null } | null {
+  let s = input.trim();
+  if (!s) return null;
+  let quant: string | null = null;
+  const fromUrl = /^(?:https?:\/\/)?(?:www\.)?(?:huggingface\.co|hf\.co)\/(.*)$/i.exec(s);
+  // huggingface.co/models/owner/repo is the same page.
+  if (fromUrl) s = fromUrl[1].replace(/^models\//i, "");
+  else if (/^[a-z]+:\/\//i.test(s)) return null;
+  s = s.replace(/[?#].*$/, "").replace(/\/+$/, "");
+  if (/^(datasets|spaces|collections|docs|settings|papers)\//i.test(s)) return null;
+  const parts = s.split("/");
+  if (parts.length < 2) return null;
+  const owner = parts[0];
+  let repo = parts[1];
+  const tagged = /^(.*):([A-Za-z0-9_.-]+)$/.exec(repo);
+  if (tagged && parts.length === 2) {
+    repo = tagged[1];
+    quant = tagged[2];
+  }
+  if (!new RegExp(`^${NAME}$`).test(owner) || !new RegExp(`^${NAME}$`).test(repo)) return null;
+  let file: string | null = null;
+  if (parts.length > 2) {
+    // …/blob/main/sub/file.gguf, …/resolve/main/file.gguf, …/tree/main/folder: the branch is skipped.
+    if (!["blob", "resolve", "tree"].includes(parts[2])) return null;
+    const rest = parts.slice(4).map((p) => {
+      try {
+        return decodeURIComponent(p);
+      } catch {
+        return p;
+      }
+    }).join("/");
+    if (rest && /\.gguf$/i.test(rest)) file = rest;
+  }
+  return { repo: `${owner}/${repo}`, file, quant };
+}
+
+export function timeLeftText(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) return "";
+  if (seconds < 60) return "under a minute left";
+  const min = Math.round(seconds / 60);
+  if (min < 60) return `about ${min} min left`;
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  return m ? `about ${h} h ${m} min left` : `about ${h} h left`;
+}
+
+/** "42% · 7.1 GB of 16.8 GB · 38 MB/s · about 4 min left". */
+export function downloadText(d: { doneBytes: number; totalBytes: number; bytesPerSec: number | null }): string {
+  const pct = d.totalBytes > 0 ? `${Math.min(100, Math.floor((d.doneBytes / d.totalBytes) * 100))}%` : null;
+  const of = d.totalBytes > 0 ? `${bytesText(d.doneBytes)} of ${bytesText(d.totalBytes)}` : bytesText(d.doneBytes);
+  const speed = d.bytesPerSec && d.bytesPerSec > 0 ? `${bytesText(d.bytesPerSec)}/s` : null;
+  const left = speed && d.totalBytes > d.doneBytes ? timeLeftText((d.totalBytes - d.doneBytes) / d.bytesPerSec!) : null;
+  return [pct, of, speed, left].filter(Boolean).join(" · ");
+}
+
+/** "16k", "128k", "1M". */
+export function contextLabel(n: number): string {
+  if (n >= 1024 * 1024 && n % (1024 * 1024) === 0) return `${n / (1024 * 1024)}M`;
+  if (n < 1024) return String(n);
+  return `${Math.round(n / 1024)}k`;
+}
+
+/** Why a port can't be used for a server, or null. */
+export function portProblem(port: string): string | null {
+  const n = Number(port);
+  if (!/^\d+$/.test(port) || n < 1024 || n > 65535) return "Use a port from 1024 to 65535.";
+  return null;
+}
 
 /** The contexts offered (tokens): Claude Code needs about 20k just to start. */
 export const CONTEXTS = [32768, 65536, 131072];
@@ -74,7 +164,7 @@ export function downloadLine(d: LocalDownload): string {
   if (d.state === "stopped") return pct !== null ? `Stopped at ${pct}% · ${bytesText(d.doneBytes)} of ${bytesText(d.totalBytes)}` : "Stopped";
   if (d.step && STEPS[d.step]) return STEPS[d.step];
   if (d.totalBytes <= 0) return "Starting…";
-  return downloadText({ file: "", doneBytes: d.doneBytes, totalBytes: d.totalBytes, bytesPerSec: d.bytesPerSec });
+  return downloadText(d);
 }
 
 /** How far a download is, for its bar (0 to 100). */

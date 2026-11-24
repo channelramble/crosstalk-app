@@ -330,7 +330,7 @@ describe("Codex chats open without waiting for Codex", () => {
   afterAll(() => {
     // Back to what providers/all.ts registers.
     registerDriver("codex", (ctx) => {
-      if (!ctx.bin) throw new Error("Codex isn't installed on the hub. Install it under Agents & sign-ins.");
+      if (!ctx.bin) throw new Error("Codex isn't installed on the machine. Install it under Agents & sign-ins.");
       return new CodexDriver(ctx, ctx.bin);
     });
   });

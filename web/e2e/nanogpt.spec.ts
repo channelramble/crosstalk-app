@@ -1,6 +1,6 @@
 import type { Page, Route } from "@playwright/test";
 import type { CatalogFilter, CatalogModel, CatalogSearch, ServiceFunds, ServiceTestResult } from "@crosstalk/shared";
-import { test, expect, noHorizontalOverflow } from "./fixtures";
+import { test, expect, noHorizontalOverflow, addAnotherService, moreOf, effortSteps, modelInForce } from "./fixtures";
 
 // Adding NanoGPT and finding an uncensored model in its list, on a phone screen (390px). The hub's answers are played
 // here: the shared test hub's accounts and settings stay as they were, and nothing reaches the real NanoGPT.
@@ -110,17 +110,17 @@ async function hub(page: Page) {
 
 const settings = async (page: Page) => {
   await phone(page);
-  await page.goto("/#/settings");
-  await expect(page.getByRole("heading", { name: "AI services", exact: true })).toBeVisible();
+  await page.goto("/#/settings/accounts");
+  await expect(page.getByRole("button", { name: "Add an account", exact: true })).toBeVisible();
 };
-const sheet = (page: Page) => page.getByRole("dialog", { name: "Add an AI service", exact: true });
+const sheet = (page: Page) => page.getByRole("dialog", { name: /^Add (another service|a model on this machine)$/ });
 /** Scrolls so the element starts at the top of the screen (a phone screenshot of just what's being shown). */
 const atTop = (target: ReturnType<Page["getByRole"]>) => target.evaluate((el) => el.scrollIntoView({ block: "start" }));
 
 test("NanoGPT: a key, its balance, an uncensored model found by its price and tags, and the account's balance after", async ({ page }) => {
   const h = await hub(page);
   await settings(page);
-  await page.getByRole("button", { name: "Add an AI service", exact: true }).click();
+  await addAnotherService(page);
   const dialog = sheet(page);
   await dialog.getByRole("button", { name: /^NanoGPT/ }).click();
 
@@ -200,17 +200,18 @@ test("NanoGPT: a key, its balance, an uncensored model found by its price and ta
   await expect(page.getByText("Added. Start a chat on NanoGPT from New chat.", { exact: true })).toBeVisible();
   // Its row in Settings says what runs it and what the account has left to spend, and can remove it (no agent card below).
   const added = page.getByRole("group", { name: "Crosstalk agent · NanoGPT", exact: true });
-  await expect(added.getByText("Crosstalk agent · Custom model · nano-gpt.com", { exact: true })).toBeVisible();
+  await expect(added.getByText("nano-gpt.com · runs with Crosstalk agent", { exact: true })).toBeVisible();
   await expect(added.getByRole("button", { name: "Remove", exact: true })).toBeVisible();
   await expect(added.getByText("Balance $5.00 · Subscription active: 2.5M of 60M tokens used this week", { exact: true })).toBeVisible();
   expect(h.fundsReads).toBeGreaterThan(0);
   // It can move to OpenCode with its key, and a Test on it is the service's own check.
+  await moreOf(added);
   await expect(added.getByRole("button", { name: "Run it with OpenCode", exact: true })).toBeEnabled();
   await added.getByRole("button", { name: "Test", exact: true }).click();
   await expect(added.getByText("Key works", { exact: true })).toBeVisible();
   expect(h.tests.at(-1)).toEqual({ baseUrl: "https://nano-gpt.com/api", accountId: "nano1" });
-  // The Agents part below doesn't say Claude Code or Codex run it.
-  await expect(page.getByText(/Crosstalk's own agent runs NanoGPT itself/)).toBeVisible();
+  // It's listed under Other services, not under an agent that doesn't run it.
+  await expect(page.getByRole("region", { name: "Other services", exact: true }).getByRole("group", { name: "Crosstalk agent · NanoGPT", exact: true })).toBeVisible();
   await atTop(added);
   await noHorizontalOverflow(page);
   await page.screenshot({ ...shot("n5-nanogpt-row.png"), animations: "disabled" });
@@ -246,8 +247,8 @@ test("a NanoGPT service on Crosstalk's agent is a row in New chat, and its chat 
 
     const dialog = page.getByRole("dialog", { name: "New chat with NanoGPT", exact: true });
     await expect(dialog).toBeVisible();
-    await expect(dialog.getByRole("combobox", { name: "Model", exact: true })).toHaveValue(PICK);
-    await expect(dialog.getByRole("combobox", { name: "Effort", exact: true })).toHaveCount(0);
+    await expect(modelInForce(dialog)).toHaveAttribute("data-value", PICK);
+    await expect(effortSteps(dialog)).toHaveCount(0);
     await noHorizontalOverflow(page);
     await page.screenshot({ ...shot("n7-nanogpt-new-chat-dialog.png"), animations: "disabled" });
     // A service already added starts like any chat (POST /api/chats), on its account and with Crosstalk's own agent.

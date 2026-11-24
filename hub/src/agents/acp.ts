@@ -1,3 +1,4 @@
+import { settingsPath } from "@crosstalk/shared";
 import type { ApprovalDecision, PermissionMode, Provider } from "@crosstalk/shared";
 import type { AgentDriver, DriverContext, TurnInput, TurnResult, TurnSink } from "./driver";
 import { RpcError, StdioRpc } from "./jsonrpc";
@@ -98,7 +99,7 @@ export class AcpDriver implements AgentDriver {
   protected async startFailed(e: unknown): Promise<TurnResult> {
     const msg = e instanceof Error ? e.message : String(e);
     const auth = acpAuthHit(e instanceof Error && e.cause ? e.cause : e);
-    return { ok: false, error: auth || /auth|login|credential/i.test(msg) ? `${this.opts.name} isn't signed in on the hub. Open Settings → AI services.` : `${this.opts.name} didn't start: ${msg}`, ...(auth ? { auth } : {}) };
+    return { ok: false, error: auth || /auth|login|credential/i.test(msg) ? `${this.opts.name} isn't signed in on this machine. Open ${settingsPath("ai-services")}.` : `${this.opts.name} didn't start: ${msg}`, ...(auth ? { auth } : {}) };
   }
 
   /** How a prompt that failed ends the reply. These agents send no typed error: only an unmistakable limit waits for a reset (limits.ts). */
@@ -160,7 +161,7 @@ export class AcpDriver implements AgentDriver {
     if (sink.signal.aborted) return;
     this.sessionId = res.sessionId;
     sink.saveSession({ acpSessionId: this.sessionId });
-    if (lost) sink.activity({ kind: "notice", title: `${this.opts.name} has lost this chat's earlier conversation`, detail: `${this.opts.name} couldn't find it (the chat's folder changed, or its files were deleted), so this reply starts a new one. The messages above are all still here, but it doesn't remember them: tell it anything it needs to know.`, status: "done" });
+    if (lost) sink.activity({ kind: "notice", title: `${this.opts.name} no longer remembers this chat's earlier messages`, detail: `${this.opts.name} couldn't find it (the chat's folder changed, or its files were deleted), so this reply starts a new one. The messages above are all still here, but it doesn't remember them: tell it anything it needs to know.`, status: "done" });
     await this.sessionOpened(rpc, res, sink, true);
     this.openOn = rpc;
   }
@@ -190,7 +191,7 @@ export class AcpDriver implements AgentDriver {
         if (!rpc.alive || timedOut || sink.signal.aborted || Date.now() >= until || acpAuthHit(e) || /auth|login|credential/i.test(msg)) {
           if (this.rpc === rpc) this.rpc = null;
           void rpc.kill();
-          throw new Error(`it couldn't open this chat's session (${msg}). Nothing is lost: try again.`, { cause: e });
+          throw new Error(`it couldn't pick this chat up where it left off (${msg}). Nothing is lost: try again.`, { cause: e });
         }
         log.warn(`opening the saved session failed, asking again: ${msg}`);
       } finally {
@@ -377,6 +378,10 @@ export class AcpDriver implements AgentDriver {
     const optionId = d === "approve_always" ? pick(["allow_always"]) ?? pick(["allow_once"]) : d === "approve" ? pick(["allow_once"]) ?? pick(["allow_always"]) : pick(["reject_once"]) ?? pick(["reject_always"]);
     if (!optionId) return { outcome: { outcome: "cancelled" } };
     return { outcome: { outcome: "selected", optionId } };
+  }
+
+  pids(): number[] {
+    return this.rpc?.proc.pid ? [this.rpc.proc.pid] : [];
   }
 
   async interrupt() {

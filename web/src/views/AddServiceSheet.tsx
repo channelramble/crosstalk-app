@@ -50,7 +50,7 @@ function ModelPicker({ choices, selected, onChange }: { choices: ModelChoice[]; 
     <fieldset className="svc-models">
       <legend>Models</legend>
       <p className="help">
-        Pick the ones you want in the model menu, up to {MAX_MODELS}. The first one is the default.
+        Pick the ones you want to choose from in chats, up to {MAX_MODELS}. The first one is the default.
         {choices.some((m) => m.contextWindow) ? " The number beside a model is how much of a chat it can read at once." : ""}
       </p>
       {choices.some(noTools) && <p className="help">A model marked “No tools” can't run commands or edit files, so an agent can't work with it. Those aren't picked for you.</p>}
@@ -367,9 +367,9 @@ export function AddServiceSheet({ start, onClose }: { start: SheetStart; onClose
   const addressField = (
     <div className="field">
       <div className="svc-label">
-        <label htmlFor={addressId}>Server address</label>
-        <HelpTip label="What's a server address?">
-          {hosted ? "Where the service lives. The preset fills it in; change it only if the service tells you to." : "Where the server listens, as this machine reaches it, like http://127.0.0.1:11434."}
+        <label htmlFor={addressId}>Address</label>
+        <HelpTip label="What's the address?">
+          {hosted ? "Where the service lives. The preset fills it in; change it only if the service tells you to." : "Where it answers, as this machine reaches it, like http://127.0.0.1:11434."}
         </HelpTip>
       </div>
       <input id={addressId} className="input mono" inputMode="url" value={baseUrl} onChange={(e) => { setBaseUrl(e.target.value); forget(); }} onKeyDown={enterTests} placeholder="http://127.0.0.1:8080" autoCapitalize="off" autoCorrect="off" spellCheck={false} />
@@ -381,13 +381,13 @@ export function AddServiceSheet({ start, onClose }: { start: SheetStart; onClose
         <label htmlFor={keyId}>{hosted ? "API key" : "API key (optional)"}</label>
         <HelpTip label="What's an API key?">A long password from the service's website. Crosstalk keeps it on this machine and sends it only to that service.</HelpTip>
       </div>
-      <input id={keyId} className="input mono" type="password" value={apiKey} onChange={(e) => { setApiKey(e.target.value); forget(); }} onKeyDown={enterTests} autoComplete="off" autoCapitalize="off" spellCheck={false} placeholder={hosted ? "Paste your key" : "Only if the server asks for one"} />
+      <input id={keyId} className="input mono" type="password" value={apiKey} onChange={(e) => { setApiKey(e.target.value); forget(); }} onKeyDown={enterTests} autoComplete="off" autoCapitalize="off" spellCheck={false} placeholder={hosted ? "Paste your key" : "Only if it asks for one"} />
     </div>
   );
 
   return (
     <Dialog
-      title="Add an AI service"
+      title={preset?.id === "local" ? "Add a model on this machine" : "Add another service"}
       dirty={dirty}
       onClose={() => !busy && onClose()}
       footer={(requestClose) => (
@@ -454,7 +454,7 @@ export function AddServiceSheet({ start, onClose }: { start: SheetStart; onClose
             </ol>
             {hosted && (
               <details className="field-details" open={addressOpen} onToggle={(e) => setAddressOpen(e.currentTarget.open)}>
-                <summary>Server address</summary>
+                <summary>Address</summary>
                 {addressField}
               </details>
             )}
@@ -489,7 +489,7 @@ export function AddServiceSheet({ start, onClose }: { start: SheetStart; onClose
               )}
               {agent && agent !== "opencode" && !installed && (
                 <p role="alert" className="svc-problem">
-                  {PROVIDER_INFO[agent].name} isn't installed on this machine yet. Close this, press Install under {PROVIDER_INFO[agent].name} below, then add the service.
+                  {PROVIDER_INFO[agent].name} isn't installed on this machine yet. Close this, tap Install on {PROVIDER_INFO[agent].name}'s line in Accounts, then add the service.
                 </p>
               )}
               {agent &&

@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { CODEX_LEAN_TOOLS_BELOW, leanToolsWords, smallWindowWords, type AgentAccount, type LocalServer, type ModelOption } from "@crosstalk/shared";
-import { agentStarters, chatStarters, foldStarters, noToolsWords, serverModelOptions, STARTERS_SHOWN, targetChoice } from "./newChat";
+import { accountAnswers, agentStarters, answeringChoice, chatStarters, firstChatTarget, foldStarters, noToolsWords, serverModelOptions, STARTERS_SHOWN, targetChoice } from "./newChat";
 
 const account = (over: Partial<AgentAccount> = {}): AgentAccount => ({ provider: "codex", id: "default", label: "Main", signedIn: true, account: null, plan: null, authMethod: null, error: null, checkedAt: 0, ...over });
 const endpoint = (label: string, baseUrl: string, models: string[], over: Partial<AgentAccount> = {}): AgentAccount =>
@@ -119,15 +119,15 @@ test("a tap on a service on OpenCode keeps the effort empty until a level of its
 });
 
 test("two services with the same name are told apart by the agent that drives them", () => {
-  // What the model pool makes every time it runs: the same account under both agents, with the same name.
-  const pool = (provider: "codex" | "claude") => endpoint("Model pool", "http://100.64.0.3:8080", ["pool-qwen3"], { provider, id: `pool-${provider}` });
-  const starters = chatStarters({ ready: ["claude", "codex"], accounts: [pool("codex"), pool("claude")] });
+  // The same account under both agents, with the same name (what a hub that once ran a model pool still has).
+  const twin = (provider: "codex" | "claude") => endpoint("Model pool", "http://100.64.0.3:8080", ["big-qwen3"], { provider, id: `twin-${provider}` });
+  const starters = chatStarters({ ready: ["claude", "codex"], accounts: [twin("codex"), twin("claude")] });
   expect(starters.services.map((r) => [r.id, r.help])).toEqual([
-    ["service:claude:pool-claude", "pool-qwen3 · 100.64.0.3:8080 · Claude Code"],
-    ["service:codex:pool-codex", "pool-qwen3 · 100.64.0.3:8080 · Codex"],
+    ["service:claude:twin-claude", "big-qwen3 · 100.64.0.3:8080 · Claude Code"],
+    ["service:codex:twin-codex", "big-qwen3 · 100.64.0.3:8080 · Codex"],
   ]);
   // A name of its own says all it needs to: the agent is in the chat's settings, not on the row.
-  expect(chatStarters({ ready: ["codex"], accounts: [pool("codex")] }).services[0].help).toBe("pool-qwen3 · 100.64.0.3:8080");
+  expect(chatStarters({ ready: ["codex"], accounts: [twin("codex")] }).services[0].help).toBe("big-qwen3 · 100.64.0.3:8080");
 });
 
 test("a tap on a service or a server drops the effort and helper model of the account it replaces", () => {
@@ -207,4 +207,57 @@ test("a found server's models make a picker of their own, the first being the on
   expect([starters.servers[0].target, starters.servers[0].help]).toMatchObject([{ model: "good" }, "good · add it and start"]);
   // A server whose every name is unusable isn't offered at all: there would be nothing to save.
   expect(chatStarters({ ready: [], accounts: [], servers: [server({ models: [messy[0]] })] }).servers).toEqual([]);
+});
+
+// Someone with no Claude or ChatGPT plan who added an AI service used to get New chat on "Main · not signed in", and a
+// raw 401 for a first reply.
+test("New chat for an agent never opens on a signed-out account while another of its accounts can answer", () => {
+  const mine = { account: "default", model: "gpt-5.5", effort: "high", permissionMode: "ask", helperModel: "gpt-mini" };
+  const out = account({ signedIn: false });
+  const venice = endpoint("Venice", "https://api.venice.ai/api", ["venice-uncensored"]);
+  // The service takes the signed-out sign-in's place, without the model and effort picked for the plan's models.
+  expect(answeringChoice(mine, "codex", [out, venice])).toEqual({ account: "venice", model: "", effort: "", permissionMode: "ask", helperModel: "" });
+  // An API key or a second sign-in does too: the first that can answer, in the order they're listed.
+  const key = account({ id: "key", label: "Work key", kind: "apikey" });
+  expect(answeringChoice(mine, "codex", [out, account({ id: "second", label: "Second", signedIn: false }), key, venice]).account).toBe("key");
+  // Another agent's accounts are no help.
+  expect(answeringChoice(mine, "codex", [out, account({ provider: "claude", id: "c", label: "Claude key", kind: "apikey" })])).toBe(mine);
+});
+
+test("an account that can answer, or isn't known not to, is left as you saved it", () => {
+  const mine = { account: "default", model: "gpt-5.5", effort: "high" };
+  const venice = endpoint("Venice", "https://api.venice.ai/api", ["venice-uncensored"]);
+  expect(answeringChoice(mine, "codex", [account(), venice])).toBe(mine);
+  // Not checked yet: nothing is known against it.
+  expect(answeringChoice(mine, "codex", [account({ signedIn: null }), venice])).toBe(mine);
+  // Your default is the service, signed-out Main or not.
+  const onVenice = { account: "venice", model: "venice-uncensored", effort: "" };
+  expect(answeringChoice(onVenice, "codex", [account({ signedIn: false }), venice])).toBe(onVenice);
+  // Nothing can answer: yours stays (New chat then offers the sign-in instead of Start).
+  expect(answeringChoice(mine, "codex", [account({ signedIn: false })])).toBe(mine);
+});
+
+test("whether an account can answer: as the hub lists it, or for the agent's own sign-in as its status says", () => {
+  const list = [account({ signedIn: false }), account({ id: "key", label: "Work key", kind: "apikey" }), account({ id: "new", label: "New", signedIn: null })];
+  expect(accountAnswers(list, "codex", "default", true)).toBe(false);
+  expect(accountAnswers(list, "codex", "key")).toBe(true);
+  expect(accountAnswers(list, "codex", "new")).toBeNull();
+  // A hub that doesn't list the agent's own sign-in: its status says.
+  expect(accountAnswers([], "codex", "default", false)).toBe(false);
+  expect(accountAnswers([], "codex", "default", true)).toBe(true);
+  expect(accountAnswers([], "codex", "default")).toBeNull();
+  // An account that isn't there isn't known to be signed out.
+  expect(accountAnswers([], "codex", "gone", false)).toBeNull();
+});
+
+test("a first chat starts with an agent that's signed in, else with an AI service of yours", () => {
+  const { services } = chatStarters({ ready: ["codex"], accounts: [account({ signedIn: false }), endpoint("Venice", "https://api.venice.ai/api", ["venice-uncensored"])] });
+  // No plan, one service: the chat is the service's, exactly as a tap on it in the New chat menu.
+  expect(firstChatTarget({ own: [], services, ready: ["codex"] })).toEqual({ kind: "service", provider: "codex", account: "venice", model: "venice-uncensored", label: "Venice", noTools: false });
+  // A signed-in agent comes first, the first of them.
+  expect(firstChatTarget({ own: ["claude", "codex"], services, ready: ["claude", "codex"] })).toEqual({ kind: "agent", provider: "claude" });
+  expect(firstChatTarget({ own: ["codex"], services: [], ready: ["codex"] })).toEqual({ kind: "agent", provider: "codex" });
+  // Ready some other way (a service whose row isn't offered on this machine): the agent, whose New chat picks the account.
+  expect(firstChatTarget({ own: [], services: [], ready: ["codex"] })).toEqual({ kind: "agent", provider: "codex" });
+  expect(firstChatTarget({ own: [], services: [], ready: [] })).toBeNull();
 });

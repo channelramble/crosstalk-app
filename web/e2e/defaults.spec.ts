@@ -1,10 +1,10 @@
-import { test, expect, noHorizontalOverflow, openGroupSettings } from "./fixtures";
+import { test, expect, noHorizontalOverflow, openGroupSettings, effortInForce, modelCards, modelInForce, pickEffort, pickModel } from "./fixtures";
 
 const defaults = { mode: "review", agents: [], maxHops: 5, rounds: 1, parallel: false, agent: {} };
 // The row says what new chats start with (its summary changes with the saved picks), so it's found by its name.
 const card = (page: import("@playwright/test").Page, name = "Codex") => page.getByRole("group", { name: `New ${name} chat defaults`, exact: true });
 async function openDefaults(page: import("@playwright/test").Page, name = "Codex") {
-  await page.goto("/#/settings");
+  await page.goto("/#/settings/new-chats");
   const row = card(page, name);
   // Settled: it says the saved picks, or (when they couldn't be read) it's open already, to show why.
   await expect.poll(async () => (await row.getAttribute("open")) !== null || !(await row.locator("summary").innerText()).trim().endsWith("…")).toBe(true);
@@ -27,10 +27,10 @@ test("Defaults retries failed loads and protects edits during a save", async ({ 
   await section.getByRole("button", { name: "Retry defaults", exact: true }).click();
   await section.getByRole("radio", { name: "Full access", exact: true }).click();
   await section.getByRole("button", { name: "Save", exact: true }).click();
-  await expect(section.getByRole("combobox", { name: "Model", exact: true })).toBeDisabled();
+  await expect(modelCards(section).getByRole("menuitemradio").first()).toBeDisabled();
   await expect.poll(() => !!finishSave).toBe(true);
   await finishSave!();
-  await expect(section.getByRole("combobox", { name: "Model", exact: true })).toBeEnabled();
+  await expect(modelCards(section).getByRole("menuitemradio").first()).toBeEnabled();
   await expect(section.getByRole("button", { name: "Save", exact: true })).toBeDisabled();
 });
 
@@ -43,11 +43,12 @@ test("Defaults navigation can keep edits or explicitly discard them", async ({ p
   page.on("dialog", async (dialog) => { confirmations++; if (discard) await dialog.accept(); else await dialog.dismiss(); });
   await page.evaluate(() => { location.hash = "#/usage"; });
   await expect.poll(() => confirmations).toBe(1);
-  await expect(page).toHaveURL(/#\/settings$/);
+  // Still on the page being edited, under its own address (a reload opens it again).
+  await expect(page).toHaveURL(/#\/settings\/new-chats$/);
   await expect(section.getByRole("button", { name: "Save", exact: true })).toBeEnabled();
   discard = true;
   await page.evaluate(() => { location.hash = "#/usage"; });
-  await expect(page.locator(".topbar h1")).toHaveText("Usage");
+  await expect(page.locator(".topbar h1")).toHaveText("Usage & costs");
 });
 
 test("new chat waits for defaults, applies them and respects explicit choices", async ({ page, request, token }) => {
@@ -96,9 +97,9 @@ test("adding an agent preserves custom defaults, switches catalogs and explicitl
     await settings.getByRole("button", { name: "Add an agent", exact: true }).click();
     const dialog = page.getByRole("dialog", { name: "Add an agent", exact: true });
     await dialog.getByText("Advanced: name, model, effort, instructions", { exact: true }).click();
-    await expect(dialog.getByPlaceholder("Model name, as the agent's CLI takes it")).toHaveValue("custom-claude-model");
+    await expect(dialog.getByPlaceholder("Model name, as the agent takes it")).toHaveValue("custom-claude-model");
     await dialog.getByRole("button", { name: /^Codex / }).click();
-    await expect(dialog.getByPlaceholder("Model name, as the agent's CLI takes it")).toHaveCount(0);
+    await expect(dialog.getByPlaceholder("Model name, as the agent takes it")).toHaveCount(0);
     const effort = dialog.getByText("Effort", { exact: true }).locator("..").locator("select");
     await expect(effort.locator("option")).toHaveText(["Default", "Low"]);
     await effort.selectOption("");
@@ -131,8 +132,8 @@ test("creating a chat saves its selected model and effort without starting an ag
   await page.goto("/#/agent/codex");
   await page.getByRole("button", { name: "New chat", exact: true }).last().click();
   const dialog = page.getByRole("dialog", { name: "New chat with Codex", exact: true });
-  await dialog.getByRole("combobox", { name: "Model", exact: true }).selectOption("chosen-model");
-  await dialog.getByRole("combobox", { name: "Effort", exact: true }).selectOption("high");
+  await pickModel(dialog, "chosen-model");
+  await pickEffort(dialog, "high");
   const created = page.waitForResponse((r) => r.url().endsWith("/api/chats") && r.request().method() === "POST");
   await dialog.getByRole("button", { name: "Start chat", exact: true }).click();
   const room = await (await created).json();
@@ -149,7 +150,7 @@ test("legacy room teamwork defaults do not add obsolete controls to new chats", 
   await page.goto("/#/agent/codex");
   await page.getByRole("button", { name: "New chat", exact: true }).last().click();
   const dialog = page.getByRole("dialog", { name: "New chat with Codex", exact: true });
-  await expect(dialog.getByRole("combobox", { name: "Model", exact: true })).toBeVisible();
+  await expect(modelCards(dialog)).toBeVisible();
   await expect(dialog.getByText("Hand-off limit", { exact: true })).toHaveCount(0);
   await expect(dialog.getByText("Rounds", { exact: true })).toHaveCount(0);
   await expect(dialog.getByRole("radiogroup", { name: "Agent teamwork", exact: true })).toHaveCount(0);
@@ -182,7 +183,7 @@ test("switching machines reloads defaults and asks before discarding edits", asy
   page.once("dialog", (d) => d.accept());
   await page.getByRole("combobox", { name: "Machine", exact: true }).selectOption(remote);
   await card(page).locator("summary").click();
-  await expect(card(page).getByRole("combobox", { name: "Model", exact: true })).toHaveValue("other-model");
+  await expect(modelInForce(card(page))).toHaveAttribute("data-value", "other-model");
   await expect(card(page).getByRole("radio", { name: "Read-only", exact: true })).toHaveAttribute("aria-checked", "true");
   await page.unrouteAll({ behavior: "wait" });
 });
@@ -200,22 +201,22 @@ test("a failed defaults read says so, keeps Start chat disabled, and Retry bring
     ws.onMessage((data) => { if (JSON.parse(String(data)).t === "ping") ws.send(JSON.stringify({ t: "pong" })); });
   });
   await page.route("**/api/providers/codex/models*", (route) => route.fulfill({ json: codexModels }));
-  await page.route("**/api/settings/defaults", (route) => route.fulfill(fail ? { status: 503, json: { error: "The hub is restarting." } } : { json: { ...defaults, agent: { codex: { permissionMode: "auto", model: "gpt-saved", effort: "high" } } } }));
+  await page.route("**/api/settings/defaults", (route) => route.fulfill(fail ? { status: 503, json: { error: "Crosstalk is restarting." } } : { json: { ...defaults, agent: { codex: { permissionMode: "auto", model: "gpt-saved", effort: "high" } } } }));
   await page.goto("/#/agent/codex");
   await page.getByRole("button", { name: "New chat", exact: true }).last().click();
   const dialog = page.getByRole("dialog", { name: "New chat with Codex", exact: true });
   const failed = dialog.getByRole("alert");
   await expect(failed).toContainText(/Couldn't read your Codex defaults from .+\./);
-  await expect(failed).toContainText("The hub is restarting.");
+  await expect(failed).toContainText("Crosstalk is restarting.");
   // Nothing is filled in in their place, so a chat can't start on another model by accident.
-  await expect(dialog.getByRole("combobox", { name: "Model", exact: true })).toHaveCount(0);
+  await expect(modelCards(dialog)).toHaveCount(0);
   await expect(dialog.getByRole("button", { name: "Start chat", exact: true })).toBeDisabled();
   await noHorizontalOverflow(page);
   await page.screenshot({ ...shot("new-chat-defaults-failed.png"), animations: "disabled" });
   fail = false;
   await failed.getByRole("button", { name: "Retry", exact: true }).click();
-  await expect(dialog.getByRole("combobox", { name: "Model", exact: true })).toHaveValue("gpt-saved");
-  await expect(dialog.getByRole("combobox", { name: "Effort", exact: true })).toHaveValue("high");
+  await expect(modelInForce(dialog)).toHaveAttribute("data-value", "gpt-saved");
+  await expect(effortInForce(dialog)).toHaveAttribute("data-value", "high");
   await expect(dialog.getByRole("radio", { name: "Can edit & run", exact: true })).toHaveAttribute("aria-checked", "true");
   await expect(dialog.getByRole("button", { name: "Start chat", exact: true })).toBeEnabled();
 
@@ -223,24 +224,24 @@ test("a failed defaults read says so, keeps Start chat disabled, and Retry bring
   await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
   fail = true;
   await page.getByRole("button", { name: "New chat", exact: true }).last().click();
-  await expect(dialog.getByRole("alert")).toContainText("The hub is restarting.");
+  await expect(dialog.getByRole("alert")).toContainText("Crosstalk is restarting.");
   fail = false;
   await expect.poll(() => !!socket).toBe(true);
   await socket!.close({ code: 1012, reason: "Browser test restart" });
-  await expect(dialog.getByRole("combobox", { name: "Model", exact: true })).toHaveValue("gpt-saved");
+  await expect(modelInForce(dialog)).toHaveAttribute("data-value", "gpt-saved");
   await expect(dialog.getByRole("alert")).toHaveCount(0);
 });
 
 test("Use Codex's own defaults sends no model", async ({ page, request, token }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.route("**/api/providers/codex/models*", (route) => route.fulfill({ json: codexModels }));
-  await page.route("**/api/settings/defaults", (route) => route.fulfill({ status: 503, json: { error: "The hub is restarting." } }));
+  await page.route("**/api/settings/defaults", (route) => route.fulfill({ status: 503, json: { error: "Crosstalk is restarting." } }));
   await page.goto("/#/agent/codex");
   await page.getByRole("button", { name: "New chat", exact: true }).last().click();
   const dialog = page.getByRole("dialog", { name: "New chat with Codex", exact: true });
   await dialog.getByRole("button", { name: "Use Codex's own defaults", exact: true }).click();
   // Said as what it is: Codex's default model, the main sign-in, asking first.
-  await expect(dialog.getByRole("combobox", { name: "Model", exact: true })).toHaveValue("");
+  await expect(modelInForce(dialog)).toContainText("Default");
   await expect(dialog.getByRole("radio", { name: "Read-only", exact: true })).toHaveAttribute("aria-checked", "true");
   const created = page.waitForRequest((r) => r.url().endsWith("/api/chats") && r.method() === "POST");
   const answered = page.waitForResponse((r) => r.url().endsWith("/api/chats") && r.request().method() === "POST");
@@ -259,11 +260,11 @@ test("the defaults row shows the saved model and effort while closed", async ({ 
   await page.route("**/api/providers/codex/models*", (route) => route.fulfill({ json: codexModels }));
   await page.route("**/api/providers/claude/models*", (route) => route.fulfill({ json: { provider: "claude", live: true, models: [{ id: "claude-opus", label: "Opus 5.5", isDefault: true, efforts: ["low", "high"] }] } }));
   await page.route("**/api/settings/defaults", (route) => route.fulfill({ json: { ...defaults, agent: { codex: { permissionMode: "ask", model: "gpt-saved", effort: "high" }, claude: { permissionMode: "auto", model: null, effort: null } } } }));
-  await page.goto("/#/settings");
+  await page.goto("/#/settings/new-chats");
   const codex = card(page);
   await expect(codex.locator(".defaults-picks")).toHaveText("GPT Saved · High · Read-only");
   await expect(codex).not.toHaveAttribute("open", "");
-  await expect(codex.getByRole("combobox", { name: "Model", exact: true })).toBeHidden();
+  await expect(modelCards(codex)).toBeHidden();
   // Nothing saved for the model: it says whose default that is, and what it is today.
   await expect(card(page, "Claude Code").locator(".defaults-picks")).toHaveText("Claude Code's default model (Opus 5.5) · Auto");
   await codex.scrollIntoViewIfNeeded();

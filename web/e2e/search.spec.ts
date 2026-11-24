@@ -1,7 +1,7 @@
 // Search across chats and Markdown export on the phone (docs/SPEC-0.4.md section 14, track T8). The hubs' answers are
 // mocked (the shared test hub's state stays as it was, and no agent ever runs); the hub's own answers are checked in
 // hub/test/search.test.ts, and once here over the wire.
-import { test, expect, noHorizontalOverflow } from "./fixtures";
+import { test, expect, noHorizontalOverflow, chatSettingsAll } from "./fixtures";
 import type { APIRequestContext, Page } from "@playwright/test";
 import type { Member, Room, SearchHit, SearchResponse } from "@crosstalk/shared";
 import { readFileSync } from "node:fs";
@@ -313,7 +313,7 @@ async function exportScenario(page: Page, request: APIRequestContext, token: str
   });
   await page.goto(`/#/room/${room.id}`);
   await expect(page.getByRole("textbox", { name: "Message", exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Chat settings", exact: true }).click();
+  await chatSettingsAll(page);
   const dialog = page.getByRole("dialog", { name: "Chat settings", exact: true });
   await expect(dialog).toBeVisible();
   return { room, dialog, asked, answers, button: dialog.getByRole("button", { name: "Export as Markdown", exact: true }), cleanup: () => request.delete(`${HUB}/api/rooms/${room.id}`, { headers }) };

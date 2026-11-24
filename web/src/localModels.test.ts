@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import type { LocalModel } from "@crosstalk/shared";
-import { endMove, failMove, moveKey, poolLine, rowView, serverMemory, sortModels, startMove, unloadText, whyNotes } from "./localModels";
+import { endMove, failMove, moveKey, rowView, serverMemory, sortModels, startMove, unloadText, whyNotes } from "./localModels";
 
 const GB = 1024 ** 3;
 const NOW = 1_800_000_000_000;
@@ -73,9 +73,8 @@ test("models in memory come first, and a reason a server can't be switched is sa
   expect(whyNotes([model(), model()])).toEqual([]);
 });
 
-test("the server's memory and the model pool's state, in a word", () => {
+test("the server's memory, in a word", () => {
   expect(serverMemory({ memoryBytes: 6.4 * GB })).toBe("6.4 GB");
   expect(serverMemory({ memoryBytes: 300 * 1024 ** 2 })).toBe("300 MB");
   expect(serverMemory({ memoryBytes: null })).toBe("not known");
-  expect([undefined, "off", "running", "preparing", "downloading", "starting", "stopping", "error"].map((s) => poolLine(s as never))).toEqual([null, "Off", "On", "Starting…", "Starting…", "Starting…", "Turning off…", "Problem"]);
 });

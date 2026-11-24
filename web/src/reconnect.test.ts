@@ -243,3 +243,51 @@ test("the hub's word that comes while a state fetch is on its way isn't undone b
     store.getState().stop();
   }
 });
+
+test("back after ten seconds in the background: what's on screen counts as out of date at once, and the state is asked for again", async () => {
+  // A phone woken from sleep. Its socket may have died meanwhile, which is only found out when a ping goes unanswered
+  // (three seconds), and a reply that ended while it slept would say it's working until then. So the moment the page is
+  // back the store is catching up (the status line says so instead of "working"), and asks for the state over HTTP.
+  const { counts, control } = hub();
+  const { createHubStore } = await import("./hubStore");
+  const store = createHubStore({ baseUrl: "http://hub", token: "t", deviceName: "Phone" }, hooks(() => {}));
+  const now = Date.now;
+  let passed = 0;
+  Date.now = () => now() + passed;
+  const doc = document as unknown as { visibilityState: string };
+  const awayFor = (ms: number) => {
+    doc.visibilityState = "hidden";
+    document.dispatchEvent(new Event("visibilitychange"));
+    passed += ms;
+    doc.visibilityState = "visible";
+    document.dispatchEvent(new Event("visibilitychange"));
+  };
+  try {
+    const started = store.getState().start();
+    Socket.instances[0].open();
+    await started;
+    for (let i = 0; i < 60 && !store.getState().roomData.r1?.loaded; i++) await Bun.sleep(5);
+    expect(counts.state).toBe(1);
+    // A glance at another app: nothing is asked, nothing is said.
+    awayFor(4_000);
+    await Bun.sleep(10);
+    expect(store.getState().syncing).toBe(false);
+    expect(counts.state).toBe(1);
+    // Asleep for a minute, on a slow link: catching up at once, with the socket's own answer still out.
+    let land = () => {};
+    control.stateLands = new Promise((resolve) => (land = resolve));
+    awayFor(60_000);
+    expect(store.getState().syncing).toBe(true);
+    // Not said on screen yet: a quick catch-up shows nothing (SLOW_SYNC_MS).
+    expect(store.getState().syncSlow).toBe(false);
+    await Bun.sleep(10);
+    expect(counts.state).toBe(2);
+    land();
+    for (let i = 0; i < 60 && store.getState().syncing; i++) await Bun.sleep(5);
+    expect(store.getState().syncing).toBe(false);
+    expect(store.getState().status).toBe("open");
+  } finally {
+    Date.now = now;
+    store.getState().stop();
+  }
+});
