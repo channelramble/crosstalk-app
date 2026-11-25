@@ -179,7 +179,7 @@ test("the Linux setup command: a script with its token, the installer, and the n
     expect(script).toStartWith("#!/usr/bin/env bash");
     expect(script).toContain(`TOKEN='${inv.token}'`);
     expect(script).toContain(`HUB='${mac.base}'`);
-    expect(script).toContain('CODE="$("$HOME/.local/bin/crosstalk-hub" pair 30 | sed -n \'s/^Pairing code: \\([A-Za-z0-9-]*\\).*/\\1/p\')"');
+    expect(script).toContain('CODE="$("$HOME/.local/bin/crosstalk-hub" pair 30 --for-machine | sed -n \'s/^Pairing code: \\([A-Za-z0-9-]*\\).*/\\1/p\')"');
     expect(script.trimEnd()).toEndWith('main "$@"');
     // It's read by bash on the new machine: nothing in it is a mistake bash would stop at.
     expect(Bun.spawnSync(["bash", "-n"], { stdin: new TextEncoder().encode(script), stderr: "pipe" }).stderr.toString()).toBe("");

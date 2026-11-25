@@ -149,7 +149,7 @@ export interface SetupFacts {
   /** undefined: not a Mac, or not checked here; null: couldn't check. */
   mac: MacStatus | null | undefined;
   machines: MachineInfo[] | null;
-  /** Linked machines' versions, from their /api/health (null: no answer). */
+  /** Linked machines' versions, from their /api/health (null: no answer, or a hub that didn't say). */
   machineVersions: Record<string, string | null>;
   /**
    * BrowserOS neo, the person's browser for agents (hub/src/browseros.ts). undefined: not checked here (an in-memory

@@ -1,4 +1,5 @@
 import { StrictMode } from "react";
+import { ErrorScreen } from "./ErrorScreen";
 import { createRoot } from "react-dom/client";
 import "@xterm/xterm/css/xterm.css";
 import "./styles.css";
@@ -55,7 +56,9 @@ initTooltips();
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <App />
+    <ErrorScreen>
+      <App />
+    </ErrorScreen>
   </StrictMode>,
 );
 

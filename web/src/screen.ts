@@ -4,9 +4,12 @@
 import type { ScreenStatus, ScreenWindow } from "@crosstalk/shared";
 import type { Connection } from "./api";
 
-/** The live view's address on a machine: its own WebSocket, with this device's sign-in. */
-export function screenSocketUrl(conn: Pick<Connection, "baseUrl" | "token">, origin: string): string {
-  return `${(conn.baseUrl || origin).replace(/^http/, "ws")}/api/screen/ws?token=${encodeURIComponent(conn.token)}`;
+/**
+ * The live view's address on a machine: its own WebSocket. This device's sign-in goes beside the connection's name
+ * (api.ts socketAuth); only for a machine on a version before 0.11 (`inAddress`) is it in the address, as it was.
+ */
+export function screenSocketUrl(conn: Pick<Connection, "baseUrl" | "token">, origin: string, inAddress = false): string {
+  return `${(conn.baseUrl || origin).replace(/^http/, "ws")}/api/screen/ws${inAddress ? `?token=${encodeURIComponent(conn.token)}` : ""}`;
 }
 
 /** How far the view can be zoomed: from the whole screen in the view to twice life size. */

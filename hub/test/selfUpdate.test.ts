@@ -2,13 +2,14 @@
 // shell script that says a version) in a temporary folder. Nothing here asks GitHub anything or touches a real install.
 
 import { afterEach, expect, test } from "bun:test";
+import { createPublicKey, generateKeyPairSync, sign } from "node:crypto";
 import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { compareVersions, installWords, type HubUpdate, type UpdateInstall } from "@crosstalk/shared";
 import { App } from "../src/app";
 import { startServer } from "../src/server";
-import { CantUpdate, SelfUpdate, programName, pruneBackups, releaseSource, signLikeTheInstaller, type SelfUpdateDeps } from "../src/selfUpdate";
+import { CantUpdate, RELEASE_KEYS, SelfUpdate, programName, pruneBackups, releaseSource, signLikeTheInstaller, signedByOne, type SelfUpdateDeps } from "../src/selfUpdate";
 import { nextBuildPath, stagedBuild, takeNextBuild } from "../src/setup/system";
 import { Updater } from "../src/update";
 
@@ -21,7 +22,15 @@ const sha256 = (text: string) => new Bun.CryptoHasher("sha256").update(text).dig
 /** The made-up program: all it can do is say its version. */
 const program = (version: string) => `#!/bin/sh\necho ${version}\n# ${"padding ".repeat(4000)}\n`;
 
+/** The made-up releases' own signing key (the real one's private half is nowhere near a test), and somebody else's. */
+const KEY = generateKeyPairSync("ed25519");
+const OTHER = generateKeyPairSync("ed25519");
+const publicHalf = (k: typeof KEY) => k.publicKey.export({ type: "spki", format: "der" }).toString("base64");
+const signed = (text: string, k: typeof KEY = KEY) => sign(null, Buffer.from(text), k.privateKey).toString("base64") + "\n";
+
 interface Release {
+  /** Its list of checksums is signed by someone else, isn't signed at all, or was changed after it was signed. */
+  signature?: "another key" | "none" | "list changed";
   tag: string;
   notes?: string;
   /** What the program in the release says its version is (the tag's, unless a test wants a wrong one). */
@@ -58,7 +67,13 @@ function releases(first: Release) {
         return Response.json({ tag_name: state.release.tag, body: state.release.notes ?? "", prerelease: !!state.release.prerelease, assets: names.map((name) => ({ name, size: body(name).length })) });
       }
       const name = url.pathname.replace(/^\/files\//, "");
-      if (name === "SHA256SUMS") return new Response(names.map((n) => `${state.release.wrongSum ? sha256("something else") : sha256(body(n))}  ${n}`).join("\n") + "\n");
+      const sums = names.map((n) => `${state.release.wrongSum ? sha256("something else") : sha256(body(n))}  ${n}`).join("\n") + "\n";
+      if (name === "SHA256SUMS") return new Response(sums);
+      if (name === "SHA256SUMS.sig") {
+        const how = state.release.signature;
+        if (how === "none") return new Response("Not Found", { status: 404 });
+        return new Response(signed(how === "list changed" ? sums.replace(/^./, "0") + "\n" : sums, how === "another key" ? OTHER : KEY));
+      }
       if (!names.includes(name)) return new Response("Not Found", { status: 404 });
       const text = body(name);
       if (!state.hold && !state.cut) return new Response(text);
@@ -116,6 +131,7 @@ function installed(server: ReturnType<typeof releases> | null, over: Partial<Sel
     arch: "x64",
     latestUrl: server ? `${server.base}/latest` : "http://127.0.0.1:9/latest",
     fileUrl: (_tag, name) => (server ? `${server.base}/files/${name}` : `http://127.0.0.1:9/files/${name}`),
+    keys: [publicHalf(KEY)],
     run,
     restarts: async () => true,
     ready: () => t.ready,
@@ -228,7 +244,7 @@ test("Update downloads this machine's program, checks it, and leaves it where th
   await u.done();
 
   // Only what this machine needs was fetched: the newest release (again, at the tap), its checksums, its program.
-  expect(server.files()).toEqual(["/latest", "/latest", "/files/SHA256SUMS", "/files/crosstalk-hub-linux-x64"]);
+  expect(server.files()).toEqual(["/latest", "/latest", "/files/SHA256SUMS", "/files/SHA256SUMS.sig", "/files/crosstalk-hub-linux-x64"]);
   // It waits beside the running program, which hasn't changed; nothing else is left.
   expect(files()).toEqual(["crosstalk-hub", "crosstalk-hub.next"]);
   expect(readFileSync(path, "utf8")).toBe(program("0.9.1"));
@@ -301,6 +317,47 @@ test("a download that doesn't match its checksum is refused, in plain words, and
   await u.done();
   expect(u.brief().install).toBeNull();
   expect(files()).toEqual(["crosstalk-hub", "crosstalk-hub.next"]);
+});
+
+test("a release whose checksums don't carry Crosstalk's signature is refused before its program is fetched", async () => {
+  for (const [signature, error] of [
+    ["another key", "Crosstalk 0.10.0 on GitHub isn't signed with Crosstalk's key, so nothing was downloaded."],
+    ["list changed", "Crosstalk 0.10.0 on GitHub isn't signed with Crosstalk's key, so nothing was downloaded."],
+    ["none", "That release has no signature, so nothing was downloaded. If it was published minutes ago, try again in a few."],
+  ] as const) {
+    const server = releases({ tag: "v0.10.0", signature });
+    const { u, files, ran } = installed(server);
+    await u.install();
+    await u.done();
+    expect(u.brief().install, signature).toMatchObject({ version: "0.10.0", step: "failed", error });
+    // The program was never asked for, let alone run.
+    expect(server.files().filter((p) => p.includes("crosstalk-hub")), signature).toEqual([]);
+    expect(ran, signature).toEqual([]);
+    expect(files(), signature).toEqual(["crosstalk-hub"]);
+  }
+});
+
+test("a signature counts only when one of the known keys made it over exactly those bytes", () => {
+  const list = `${"a".repeat(64)}  crosstalk-hub-linux-x64\n`;
+  const mine = [publicHalf(KEY)];
+  expect(signedByOne(mine, list, signed(list))).toBe(true);
+  // While a key is being replaced, either one will do.
+  expect(signedByOne([publicHalf(OTHER), publicHalf(KEY)], list, signed(list))).toBe(true);
+  expect(signedByOne(mine, list, signed(list, OTHER))).toBe(false);
+  expect(signedByOne(mine, list.replace("a", "b"), signed(list))).toBe(false);
+  expect(signedByOne(mine, list + " ", signed(list))).toBe(false);
+  for (const junk of ["", "not base64 at all", "AAAA", signed(list).slice(0, 40)]) expect(signedByOne(mine, list, junk)).toBe(false);
+  expect(signedByOne([], list, signed(list))).toBe(false);
+  expect(signedByOne(["not a key", ""], list, signed(list))).toBe(false);
+});
+
+test("the keys this Crosstalk trusts are Ed25519 public keys, and an installed copy checks against them", () => {
+  expect(RELEASE_KEYS.length).toBeGreaterThan(0);
+  for (const key of RELEASE_KEYS) expect(createPublicKey({ key: Buffer.from(key, "base64"), format: "der", type: "spki" }).asymmetricKeyType).toBe("ed25519");
+  expect(releaseSource({}).keys).toEqual(RELEASE_KEYS);
+  // A fork or a mirror names its own key.
+  expect(releaseSource({ CROSSTALK_REPO: "someone/their-fork", CROSSTALK_RELEASE_KEY: ` ${publicHalf(OTHER)} ` }).keys).toEqual([publicHalf(OTHER)]);
+  expect(releaseSource({ CROSSTALK_REPO: "someone/their-fork" }).keys).toEqual(RELEASE_KEYS);
 });
 
 test("a download that says it's another version is refused, and one that doesn't run at all too", async () => {

@@ -7,6 +7,7 @@ import {
   settingsPath,
   FACTORY_DEFAULTS,
   FACTORY_HUB_SETTINGS,
+  IDLE_SIGN_OUT_DAYS, idleSignOutDays,
   FACTORY_STORAGE,
   FACTORY_TEAMWORK,
   PERMISSION_MODES,
@@ -404,6 +405,17 @@ export class App {
     // Tidy uploads that were never sent, now and every 6 hours.
     this.cleanupUploads();
     setInterval(() => this.cleanupUploads(), 6 * 60 * 60_000).unref?.();
+    // A person's device that has sent no message for a month (Settings → This device → Paired devices) is signed out:
+    // looked at a minute after the start, then every hour.
+    const quiet = () => {
+      try {
+        this.signOutIdleDevices();
+      } catch (e) {
+        log.warn(`signing out quiet devices: ${e instanceof Error ? e.message : e}`);
+      }
+    };
+    this.quietTimers = [setTimeout(quiet, 60_000), setInterval(quiet, 60 * 60_000)];
+    for (const t of this.quietTimers) t.unref?.();
     // Watch free space and clear caches on a schedule (never in tests, which run against this Mac's real caches).
     if (this.opts.dbPath !== ":memory:") {
       this.storage.start();
@@ -838,14 +850,36 @@ export class App {
     return { ...FACTORY_HUB_SETTINGS, ...saved, machineName: typeof saved.machineName === "string" ? saved.machineName : "", teamwork, storage, screen: { ...FACTORY_SCREEN, ...(saved.screen ?? {}) } };
   }
 
+  /** The timers that look for quiet devices (start), ended at shutdown. */
+  private quietTimers: ReturnType<typeof setTimeout>[] = [];
+
+  /** Signs out the people's devices that have said nothing for as long as the settings allow; returns how many. */
+  signOutIdleDevices(now = Date.now()): number {
+    const gone = this.auth.signOutIdle(idleSignOutDays(this.hubSettings()), now);
+    for (const d of gone) log.info(`signed out "${d.name}": no message from it for ${idleSignOutDays(this.hubSettings())} days`);
+    return gone.length;
+  }
+
   setHubSettings(input: Partial<HubSettings>): HubSettings {
     const next = this.hubSettings();
     if (input.machineName !== undefined) next.machineName = String(input.machineName ?? "").replace(/\s+/g, " ").trim().slice(0, 40);
     const crossBefore = next.agentsAcrossChats;
     if (input.agentsAcrossChats !== undefined) next.agentsAcrossChats = !!input.agentsAcrossChats;
+    // Off is what an unsaved setting means, so off is saved as nothing.
+    if (input.agentsFromMachinesAct !== undefined) {
+      if (input.agentsFromMachinesAct) next.agentsFromMachinesAct = true;
+      else delete next.agentsFromMachinesAct;
+    }
     if (input.pauseNearLimit !== undefined) next.pauseNearLimit = !!input.pauseNearLimit;
     if (input.priceLookup !== undefined) next.priceLookup = !!input.priceLookup;
     if (input.carryOnAfterLimit !== undefined) next.carryOnAfterLimit = !!input.carryOnAfterLimit;
+    // Days without a message before a person's device is signed out: 0 turns it off, and it's at most a year.
+    // The usual 30 is what an unsaved setting means, so it's saved as nothing.
+    if (input.idleSignOutDays !== undefined) {
+      const days = idleSignOutDays({ idleSignOutDays: Number(input.idleSignOutDays) });
+      if (days === IDLE_SIGN_OUT_DAYS) delete next.idleSignOutDays;
+      else next.idleSignOutDays = days;
+    }
     const actBefore = next.memoryAct !== false;
     if (input.memoryAct !== undefined) next.memoryAct = input.memoryAct !== false;
     // "Keep going while helpers work" went in 0.8 (a message always goes to a working agent by itself): what an older app
@@ -1468,6 +1502,8 @@ export class App {
   }
 
   async shutdown() {
+    // Nothing looks at the devices after this: the database is about to close.
+    for (const t of this.quietTimers.splice(0)) clearTimeout(t);
     log.info("shutting down");
     // First, so a shutdown that macOS cuts short (it's restarting) still counts as stopping on purpose (see mac.ts).
     this.mac.stop();

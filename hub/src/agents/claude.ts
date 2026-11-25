@@ -7,7 +7,7 @@ import { describeToolCall } from "../mcp/describe";
 import { claudeProjectsDir, claudeSessionsInUse, claudeTranscriptPath } from "../local-sessions";
 import { closeSync, fstatSync, mkdirSync, openSync, readSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { RUN_DIR } from "../config";
+import { HOME, RUN_DIR } from "../config";
 import { logger } from "../util/log";
 import { endProcess } from "../util/process";
 import { HELPER_TOOL, baseModel, helperNote, isModelAlias, modelName, sameModel, shellCommand } from "./model-lock";
@@ -318,7 +318,11 @@ export class ClaudeDriver implements AgentDriver {
     // per process, and this one may be a restart (ended while idle, or after a freeze).
     const kept = (this.ctx.latestSession?.() ?? this.ctx.session).allowRules;
     const allow = Array.isArray(kept) ? kept.filter((r): r is string => typeof r === "string" && r.length <= 2000) : [];
-    if (allow.length) settings.permissions = { allow };
+    // Crosstalk's own private files (its keys, its database, its sign-ins on other machines, the agents' own sign-ins)
+    // are nothing a chat's work needs: reading and editing them is refused, whatever the chat may do. It can't make
+    // them unreachable (a command the person approves, or a chat with full access, runs as the person), but a chat that
+    // reads files without asking can't be talked into fetching them.
+    settings.permissions = { ...(allow.length ? { allow } : {}), deny: privateFileRules(HOME) };
     // Workflow options can override effort; refuse explicit overrides and check helper transcripts as a backstop.
     const hook = this.ctx.mcp.hook;
     if (hook?.length) settings.hooks = { PreToolUse: [{ matcher: "Workflow|Agent|Task|Skill", hooks: [{ type: "command", command: shellCommand([...hook, "workflow"]), timeout: 30 }] }] };
@@ -1737,4 +1741,15 @@ export function helperDetails(path: string, windowOf?: (model: string) => number
   // The window Claude Code gives that model (from its model list): models differ (Sonnet 4.6 has 200k, Opus 5.5 1M).
   const contextWindow = (model && windowOf?.(model)) || null;
   return { model, effort, contextTokens: tokens, contextWindow };
+}
+
+/**
+ * Claude Code rules that keep its file tools out of Crosstalk's private files under `home` (the data folder): the keys
+ * and tokens, the database, what the hub generates for each agent, the keys for other computers, backups, and each
+ * extra account's saved sign-in. Not all of `accounts/`: an extra account's own Claude Code keeps its notes there.
+ */
+export function privateFileRules(home: string): string[] {
+  const at = (p: string) => `/${home.replace(/\\/g, "/").replace(/\/+$/, "")}/${p}`;
+  const files = ["secrets.json", "vapid.json", "config.json", "crosstalk.db*", "run/**", "ssh/**", "computers/**", "backups/**", "accounts/**/.credentials.json", "accounts/**/auth.json", "accounts/**/.claude.json"];
+  return files.flatMap((p) => [`Read(${at(p)})`, `Edit(${at(p)})`]);
 }

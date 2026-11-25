@@ -8,7 +8,8 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Keyboard, Maximize2, Minimize2, Minus, MonitorSmartphone, Plus, RefreshCw, SlidersHorizontal } from "lucide-react";
 import type { ScreenStatus, ScreenWindow } from "@crosstalk/shared";
-import { api, currentConnection } from "../api";
+import { api, currentConnection, socketAuth } from "../api";
+import { olderThan } from "../version";
 import { KEY, MAX_ZOOM, fitZoom, keysFor, screenHeading, screenSocketUrl, windowButtons, windowLabel, windowPlace } from "../screen";
 import { machineName, useStore } from "../store";
 import { Switch } from "../ui";
@@ -311,7 +312,9 @@ function LiveScreen({ status, machine, busy, onAgents, onForget, onLost, onSave 
     setWhy("");
     void import("@novnc/novnc").then(({ default: RFB }) => {
       if (gone || !target.current) return;
-      rfb = new RFB(target.current, screenSocketUrl(conn, location.origin)) as Viewer;
+      // The sign-in goes beside the connection's name; a machine before 0.11 takes it only in the address.
+      const inAddress = olderThan(useStore.getState().hub?.version, "0.11.0");
+      rfb = new RFB(target.current, screenSocketUrl(conn, location.origin, inAddress), inAddress ? undefined : { wsProtocols: socketAuth(conn.token) }) as Viewer;
       rfb.viewOnly = true;
       rfb.scaleViewport = true;
       rfb.resizeSession = false;

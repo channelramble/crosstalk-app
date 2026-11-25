@@ -7,7 +7,12 @@
     <!-- AndroidTV support -->
     <uses-feature android:name="android.software.leanback" android:required="false" />
 
+    <!-- The app keeps this device's sign-in to each machine. It stays on the device: not in a cloud backup, and not
+         in a copy to another phone, where it would be a second device signed in without ever pairing. -->
     <application
+        android:allowBackup="false"
+        android:fullBackupContent="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:theme="@style/Theme.crosstalk"

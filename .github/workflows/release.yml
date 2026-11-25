@@ -1,5 +1,11 @@
 # Builds the hub for every platform and publishes a GitHub Release when a version tag (v1.2.3) is pushed.
-# The release has what install.sh and install.ps1 download: the hub per platform, both platform installers, and SHA256SUMS.
+# The release has what install.sh and install.ps1 download: the hub per platform, both platform installers, SHA256SUMS,
+# and SHA256SUMS.sig: the list of checksums signed with Crosstalk's release key, which the app's own Update button
+# insists on (hub/src/selfUpdate.ts RELEASE_KEYS has the public half).
+#
+# Building and publishing are separate jobs. The jobs that build run the repo's code and everything it depends on, and
+# may only read the repo. The jobs that publish run none of it: they take the finished files, sign the list, and are
+# the only ones that may write a release or see the signing key. Every action is named by its exact commit.
 name: Release
 
 on:
@@ -8,15 +14,17 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
     # macOS: Apple silicon hubs must carry a signature, and codesign is only here. Everything else cross-compiles.
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.2
       - run: bun install --frozen-lockfile
@@ -25,7 +33,7 @@ jobs:
         run: bun hub/scripts/build.ts darwin-arm64 darwin-x64 linux-x64 linux-arm64
       - name: Collect the release files
         run: |
-          mkdir dist
+          mkdir dist meta
           cp hub/out/crosstalk-hub-* dist/
           # An ad-hoc signature, so the download runs on Apple silicon (install-macos.sh signs it again on your Mac).
           for f in dist/crosstalk-hub-darwin-*; do codesign --force --sign - --identifier com.crosstalk.hub "$f"; done
@@ -33,15 +41,58 @@ jobs:
           cp deploy/install.sh dist/install-linux.sh
           cp install.sh install.ps1 dist/
           cd dist && shasum -a 256 * > SHA256SUMS && cat SHA256SUMS
-      - name: Publish the release
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: What the release says, and the keys this version trusts
         run: |
           TAG="${GITHUB_REF_NAME}"
           # The release says what's new in this version: its own section of the changelog, not the whole history.
-          awk -v v="## ${TAG#v}" '$0 == v { on = 1; next } on && /^## / { exit } on' CHANGELOG.md > notes.md
-          [ -s notes.md ] || cp CHANGELOG.md notes.md
-          gh release create "$TAG" dist/* --title "Crosstalk ${TAG#v}" --notes-file notes.md --verify-tag || gh release upload "$TAG" dist/* --clobber
+          awk -v v="## ${TAG#v}" '$0 == v { on = 1; next } on && /^## / { exit } on' CHANGELOG.md > meta/notes.md
+          [ -s meta/notes.md ] || cp CHANGELOG.md meta/notes.md
+          cd hub && bun -e 'import { RELEASE_KEYS } from "./src/selfUpdate"; console.log(RELEASE_KEYS.join("\n"));' > ../meta/release-keys
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release
+          path: |
+            dist
+            meta
+          if-no-files-found: error
+          retention-days: 3
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release
+      - name: Sign the list of checksums
+        env:
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          [ -n "$RELEASE_SIGNING_KEY" ] || { echo "This repo has no RELEASE_SIGNING_KEY secret, so the release can't be signed and isn't published."; exit 1; }
+          umask 077
+          KEY="$RUNNER_TEMP/release-key.pem"
+          printf '%s\n' "$RELEASE_SIGNING_KEY" > "$KEY"
+          trap 'rm -f "$KEY"' EXIT
+          # The key that signs must be one the version being released knows, or its own Update button would refuse the
+          # release after it.
+          PUB="$(openssl pkey -in "$KEY" -pubout -outform DER | base64 -w0)"
+          grep -qxF "$PUB" meta/release-keys || { echo "The signing key isn't one of this version's RELEASE_KEYS."; exit 1; }
+          openssl pkeyutl -sign -inkey "$KEY" -rawin -in dist/SHA256SUMS -out "$RUNNER_TEMP/sums.sig"
+          base64 -w0 "$RUNNER_TEMP/sums.sig" > dist/SHA256SUMS.sig
+          echo >> dist/SHA256SUMS.sig
+          # Read back the way the app reads it.
+          openssl pkey -in "$KEY" -pubout -out "$RUNNER_TEMP/pub.pem"
+          base64 -d dist/SHA256SUMS.sig > "$RUNNER_TEMP/check.sig"
+          openssl pkeyutl -verify -pubin -inkey "$RUNNER_TEMP/pub.pem" -rawin -in dist/SHA256SUMS -sigfile "$RUNNER_TEMP/check.sig"
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        # A release that exists already is left as it is: nothing here replaces a published file.
+        run: gh release create "${GITHUB_REF_NAME}" dist/* --title "Crosstalk ${GITHUB_REF_NAME#v}" --notes-file meta/notes.md --verify-tag
 
   # Crosstalk Hub, the menu-bar app for Apple silicon Macs: the Mac installer adds it when this release has one.
   # It's an extra: if it doesn't build, the release above still stands and installs go on without it.
@@ -50,22 +101,41 @@ jobs:
     runs-on: macos-latest
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.2
       # Without a copy of Crosstalk inside: the installer has put that in place already.
       - name: Build the app
         run: |
-          cd native && bun install
+          cd native && bun install --frozen-lockfile
           cd hub-tray && ../node_modules/.bin/tauri build --bundles app
           APP="target/release/bundle/macos/Crosstalk Hub.app"
           codesign --force --deep --sign - "$APP"
           codesign -v --strict "$APP"
-          ditto -c -k --keepParent "$APP" "$GITHUB_WORKSPACE/Crosstalk-Hub-macos-arm64.zip"
-          cd "$GITHUB_WORKSPACE" && shasum -a 256 Crosstalk-Hub-macos-arm64.zip > Crosstalk-Hub-macos-arm64.zip.sha256
+          mkdir "$GITHUB_WORKSPACE/app"
+          ditto -c -k --keepParent "$APP" "$GITHUB_WORKSPACE/app/Crosstalk-Hub-macos-arm64.zip"
+          cd "$GITHUB_WORKSPACE/app" && shasum -a 256 Crosstalk-Hub-macos-arm64.zip > Crosstalk-Hub-macos-arm64.zip.sha256
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: hub-app
+          path: app
+          if-no-files-found: error
+          retention-days: 3
+
+  publish-hub-app:
+    needs: [publish, hub-app]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: hub-app
       - name: Add it to the release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${GITHUB_REF_NAME}" Crosstalk-Hub-macos-arm64.zip Crosstalk-Hub-macos-arm64.zip.sha256 --clobber
-
+          GH_REPO: ${{ github.repository }}
+        run: gh release upload "${GITHUB_REF_NAME}" Crosstalk-Hub-macos-arm64.zip Crosstalk-Hub-macos-arm64.zip.sha256

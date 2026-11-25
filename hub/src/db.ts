@@ -304,6 +304,7 @@ const toDevice = (r: any): Device => ({
   platform: r.platform,
   createdAt: r.created_at,
   lastSeenAt: r.last_seen_at,
+  lastMessageAt: r.last_message_at ?? r.created_at,
   scope: r.scope === "peer" ? "peer" : "full",
   hubId: r.hub_id ?? null,
 });
@@ -352,9 +353,19 @@ export class Store {
     const deviceCols = (this.db.query("PRAGMA table_info(devices)").all() as { name: string }[]).map((c) => c.name);
     if (!deviceCols.includes("scope")) this.db.exec("ALTER TABLE devices ADD COLUMN scope TEXT NOT NULL DEFAULT 'full'");
     if (!deviceCols.includes("hub_id")) this.db.exec("ALTER TABLE devices ADD COLUMN hub_id TEXT");
+    // When a device last said something to an agent (auth.ts signs out a person's device that says nothing for a
+    // month). Devices from before this start counting now, so an update signs nobody out by itself.
+    if (!deviceCols.includes("last_message_at")) {
+      this.db.exec("ALTER TABLE devices ADD COLUMN last_message_at INTEGER");
+      this.db.query("UPDATE devices SET last_message_at = ?").run(Date.now());
+    }
+    // Why a sign-in ended, when Crosstalk ended it by itself ("idle"): the device is told, once.
+    if (!deviceCols.includes("revoked_why")) this.db.exec("ALTER TABLE devices ADD COLUMN revoked_why TEXT");
     const codeCols = (this.db.query("PRAGMA table_info(pairing_codes)").all() as { name: string }[]).map((c) => c.name);
     if (!codeCols.includes("scope")) this.db.exec("ALTER TABLE pairing_codes ADD COLUMN scope TEXT NOT NULL DEFAULT 'full'");
     if (!codeCols.includes("hub_id")) this.db.exec("ALTER TABLE pairing_codes ADD COLUMN hub_id TEXT");
+    // "hub": a code made for linking a machine (auth.ts).
+    if (!codeCols.includes("kind")) this.db.exec("ALTER TABLE pairing_codes ADD COLUMN kind TEXT");
     // Messages from other chats' agents (where they came from, JSON), and chats kept away from other agents.
     const messageCols = (this.db.query("PRAGMA table_info(messages)").all() as { name: string }[]).map((c) => c.name);
     if (!messageCols.includes("via")) this.db.exec("ALTER TABLE messages ADD COLUMN via TEXT");
@@ -967,8 +978,8 @@ export class Store {
   // ---------- devices & pairing ----------
   insertDevice(d: Device, tokenHash: string) {
     this.db
-      .query("INSERT INTO devices (id,name,platform,token_hash,created_at,last_seen_at,scope,hub_id) VALUES (?,?,?,?,?,?,?,?)")
-      .run(d.id, d.name, d.platform, tokenHash, d.createdAt, d.lastSeenAt, d.scope === "peer" ? "peer" : "full", d.hubId ?? null);
+      .query("INSERT INTO devices (id,name,platform,token_hash,created_at,last_seen_at,scope,hub_id,last_message_at) VALUES (?,?,?,?,?,?,?,?,?)")
+      .run(d.id, d.name, d.platform, tokenHash, d.createdAt, d.lastSeenAt, d.scope === "peer" ? "peer" : "full", d.hubId ?? null, d.lastMessageAt ?? d.createdAt);
   }
   getDevice(id: string): Device | null {
     const r = this.db.query("SELECT * FROM devices WHERE id = ? AND revoked = 0").get(id);
@@ -992,8 +1003,25 @@ export class Store {
   touchDevice(id: string) {
     this.db.query("UPDATE devices SET last_seen_at = ? WHERE id = ?").run(Date.now(), id);
   }
-  revokeDevice(id: string) {
-    this.db.query("UPDATE devices SET revoked = 1 WHERE id = ?").run(id);
+  revokeDevice(id: string, why: string | null = null) {
+    this.db.query("UPDATE devices SET revoked = 1, revoked_why = ? WHERE id = ?").run(why, id);
+  }
+  /** The device said something to an agent just now. */
+  deviceSpoke(id: string, at = Date.now()) {
+    this.db.query("UPDATE devices SET last_message_at = ? WHERE id = ?").run(at, id);
+  }
+  /** People's devices (not linked machines) that have said nothing since `before`. */
+  idleDevices(before: number): Device[] {
+    // People's devices only: a linked machine's sign-in (limited or full) sends no messages of its own and stays.
+    return this.db
+      .query("SELECT * FROM devices WHERE revoked = 0 AND scope != 'peer' AND hub_id IS NULL AND platform != 'Crosstalk hub' AND COALESCE(last_message_at, created_at) < ? ORDER BY created_at")
+      .all(before)
+      .map(toDevice);
+  }
+  /** Why the sign-in with this token was ended, when Crosstalk ended it by itself; null for any other token. */
+  revokedWhy(tokenHash: string): string | null {
+    const r = this.db.query("SELECT revoked_why FROM devices WHERE token_hash = ? AND revoked = 1").get(tokenHash) as { revoked_why: string | null } | null;
+    return r?.revoked_why ?? null;
   }
   renameDevice(id: string, name: string) {
     this.db.query("UPDATE devices SET name = ? WHERE id = ?").run(name, id);
@@ -1003,19 +1031,19 @@ export class Store {
     const q = this.db.query("UPDATE xchat_in SET turn_id = ? WHERE message_id = ?");
     for (const id of messageIds) q.run(turnId, id);
   }
-  insertPairingCode(hash: string, expiresAt: number, opts: { scope?: "full" | "peer"; hubId?: string | null } = {}) {
+  insertPairingCode(hash: string, expiresAt: number, opts: { scope?: "full" | "peer"; hubId?: string | null; kind?: "hub" | null } = {}) {
     this.db
-      .query("INSERT INTO pairing_codes (code_hash, created_at, expires_at, scope, hub_id) VALUES (?,?,?,?,?)")
-      .run(hash, Date.now(), expiresAt, opts.scope === "peer" ? "peer" : "full", opts.hubId ?? null);
+      .query("INSERT INTO pairing_codes (code_hash, created_at, expires_at, scope, hub_id, kind) VALUES (?,?,?,?,?,?)")
+      .run(hash, Date.now(), expiresAt, opts.scope === "peer" ? "peer" : "full", opts.hubId ?? null, opts.kind === "hub" ? "hub" : null);
   }
   /** Uses up a pairing code: what the sign-in it makes may do (null when the code is wrong, used or expired). */
-  consumePairingCode(hash: string): { scope: "full" | "peer"; hubId: string | null } | null {
+  consumePairingCode(hash: string): { scope: "full" | "peer"; hubId: string | null; kind: "hub" | null } | null {
     const r = this.db
       .query("SELECT * FROM pairing_codes WHERE code_hash = ? AND used_at IS NULL AND expires_at > ?")
-      .get(hash, Date.now()) as { scope?: string; hub_id?: string | null } | null;
+      .get(hash, Date.now()) as { scope?: string; hub_id?: string | null; kind?: string | null } | null;
     if (!r) return null;
     this.db.query("UPDATE pairing_codes SET used_at = ? WHERE code_hash = ?").run(Date.now(), hash);
-    return { scope: r.scope === "peer" ? "peer" : "full", hubId: r.hub_id ?? null };
+    return { scope: r.scope === "peer" ? "peer" : "full", hubId: r.hub_id ?? null, kind: r.kind === "hub" ? "hub" : null };
   }
 
   // ---------- kv ----------

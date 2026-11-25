@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.11.0
+
+**Quiet devices are signed out**
+- **A device that sends no message for 30 days is signed out**, and pairs again with a new code. On by default;
+  the switch is in Settings → This device → Paired devices ("Sign out devices that go quiet"). A device's line says
+  when that's a week away, and a signed-out device is told why. Devices paired before this version start their 30
+  days now. Linked machines are never signed out this way.
+
+**Security**
+- **Strangers on the network.** What Crosstalk accepts without a sign-in is small and bounded (64 KB, ten seconds),
+  and a code or key is checked before anything else is read: an open connection can't be used to fill the machine's
+  memory. Wrong codes are counted per caller, as they arrive: someone guessing can no longer lock everyone out of
+  pairing, or slip more guesses in by sending them slowly.
+- **Pages elsewhere.** Crosstalk answers only under a name it knows for the machine, tells only the app's own pages
+  they may read an answer, and takes a live connection only from them. The app's pages come with a content policy
+  (scripts from the machine itself only, no frames). A reply's links go to the web or to mail, nothing else.
+- **Sign-ins stay out of addresses.** A live connection carries its sign-in beside its name, not in its address,
+  where logs would keep it. The first pairing code lasts an hour, not a day.
+- **Other machines' agents can't drive a chat that acts without asking**, unless you allow it (Settings → Agents
+  together). A chat they start here asks before it acts.
+- **Crosstalk's private files.** Its database, keys and saved sign-ins are readable by your user only, and Claude
+  Code's file tools are kept out of them. A linked machine with a limited sign-in can't point this one at its own
+  ports. Setup helpers make no pairing code once a device is paired.
+- **Signed updates.** A release's list of checksums is signed, and the Update button takes only a signed release.
+  Releases are built and published by separate jobs, with every build tool pinned to an exact version.
+- **Less said to strangers.** The version is told only to signed-in devices and the machine itself; an error nobody
+  planned for says "Something went wrong" with a number to find it in the log, not the error's own text.
+- **Phones.** The Android app's sign-ins stay out of cloud backups and phone-to-phone transfers. Pairing over plain
+  http to an address on the internet is refused. A notification opens only the app.
+- [docs/SECURITY.md](docs/SECURITY.md) says how all of it fits together, and what to set behind your own proxy
+  (`CROSSTALK_ALLOWED_HOSTS`).
+
 ## 0.10.1
 
 - **Aero**, a fourth texture, after Windows 7: frames of frosted glass that take a wash of the theme's accent, with a

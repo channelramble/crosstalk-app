@@ -67,7 +67,8 @@ self.addEventListener("push", (e) => {
             tag: data.tag,
             icon: "./icon-192.png",
             badge: "./icon-192.png",
-            data: { url: new URL(data.url || "./", self.registration.scope).href },
+            // Only ever a screen of this app: a note that named another site opens the app itself.
+            data: { url: ownUrl(data.url) },
           }),
         ),
       ),
@@ -75,9 +76,20 @@ self.addEventListener("push", (e) => {
   );
 });
 
+/** `url` as an address inside this app, or the app's own start when it leads anywhere else. */
+function ownUrl(url) {
+  const scope = self.registration.scope;
+  try {
+    const u = new URL(url || "./", scope);
+    return u.origin === new URL(scope).origin ? u.href : scope;
+  } catch {
+    return scope;
+  }
+}
+
 self.addEventListener("notificationclick", (e) => {
   e.notification.close();
-  const target = e.notification.data?.url || "./";
+  const target = ownUrl(e.notification.data?.url);
   e.waitUntil(
     self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((list) => {
       for (const c of list) {

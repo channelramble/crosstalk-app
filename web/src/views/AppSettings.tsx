@@ -1,7 +1,7 @@
 import { foldKnown, foldParts, setFoldParts } from "../viewport";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight, Monitor, Plus, SquareTerminal } from "lucide-react";
-import { CHAT_PROVIDERS, EFFORT_LABELS, PROVIDER_INFO, permissionInfo, type ChatProvider, type Device, type HubSettings, type ModelOption, type RoomDefaults, type ScreenStatus } from "@crosstalk/shared";
+import { CHAT_PROVIDERS, EFFORT_LABELS, IDLE_SIGN_OUT_DAYS, PROVIDER_INFO, idleSignOutDays, permissionInfo, type ChatProvider, type Device, type HubSettings, type ModelOption, type RoomDefaults, type ScreenStatus } from "@crosstalk/shared";
 import { api, ApiError } from "../api";
 import { accountKey } from "../accounts";
 import { canNavigate, keepSettingsPage, settingsStartPage, takeSettingsTarget, useNavigationGuard, watchSettingsTarget } from "../navigation";
@@ -10,6 +10,7 @@ import { PAGE_FOR_VIEW, pageForSection, SECTION_FOR_VIEW, SETTINGS_INDEX, SETTIN
 import { UsagePauseSetting } from "./SettingsPage";
 import { useMachines, useStore } from "../store";
 import { ConfirmButton, Stepper, Switch, timeAgo } from "../ui";
+import { quietSoon } from "../quietDevices";
 import { useCatalog } from "../useCatalog";
 import { useReconnected } from "../useReconnected";
 import { holdLayout, NARROWEST, screenWidth, setZoom, useZoom, zoomFactor, ZOOM_STEPS } from "../zoom";
@@ -629,11 +630,30 @@ function DevicesSection() {
   const [pairing, setPairing] = useState(false);
   const [renaming, setRenaming] = useState<Device | null>(null);
   const [error, setError] = useState("");
+  // Days without a message before a device is signed out (0: never); null until the machine has said (an older one
+  // never does, and then there's no switch).
+  const [idleDays, setIdleDays] = useState<number | null>(null);
+  const idleId = useId();
   const load = () => {
     setError("");
+    void api<HubSettings>("GET", "/api/settings/hub")
+      .then((s) => setIdleDays(idleSignOutDays(s)))
+      .catch(() => {});
     return api<Device[]>("GET", "/api/devices")
       .then(setDevices)
       .catch((e) => setError(e instanceof Error ? e.message : String(e)));
+  };
+  // A machine that signs quiet devices out says when each last sent a message: an older one has no such switch.
+  const signsOutQuiet = !!devices?.some((d) => d.lastMessageAt !== undefined) && idleDays !== null;
+  const setIdle = async (on: boolean) => {
+    const was = idleDays;
+    setIdleDays(on ? IDLE_SIGN_OUT_DAYS : 0);
+    try {
+      setIdleDays(idleSignOutDays(await api<HubSettings>("PUT", "/api/settings/hub", { idleSignOutDays: on ? IDLE_SIGN_OUT_DAYS : 0 })));
+    } catch (e) {
+      setIdleDays(was);
+      toast("error", `Couldn't save: ${e instanceof Error ? e.message : String(e)}`);
+    }
   };
   useEffect(() => {
     void load();
@@ -679,6 +699,7 @@ function DevicesSection() {
                   <div className="subtitle">
                     {link ? `Machine link${d.scope === "peer" ? " (agents only)" : ""}` : d.platform || "Unknown"} · paired {timeAgo(d.createdAt)}
                     {d.lastSeenAt ? ` · active ${timeAgo(d.lastSeenAt)}` : ""}
+                    {quietSoon(d, idleDays)}
                   </div>
                 </div>
                 <div className="row-actions">
@@ -704,6 +725,17 @@ function DevicesSection() {
               </div>
             );
           })}
+        </div>
+      )}
+      {signsOutQuiet && (
+        <div className="row quiet-signout" style={{ gap: 12, alignItems: "center", marginTop: 14 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontWeight: 600 }}>Sign out devices that go quiet</div>
+            <div className="help" id={idleId}>
+              A phone or computer that hasn't sent a message or answered an agent for {IDLE_SIGN_OUT_DAYS} days is signed out of {machine}. It pairs again with a new code. Machines linked to this one stay.
+            </div>
+          </div>
+          <Switch checked={(idleDays ?? 0) > 0} onChange={(on) => void setIdle(on)} label="Sign out devices that go quiet" describedBy={idleId} />
         </div>
       )}
       {pairing && <PairDialog onClose={() => (setPairing(false), void load())} />}
@@ -820,13 +852,16 @@ function CrossChatCard() {
   const toast = useStore((s) => s.toast);
   const hub = useStore((s) => s.hub);
   const [on, setOn] = useState<boolean | null>(null);
+  // Agents on other machines messaging chats here that act without asking: this machine's own say (off unless turned on).
+  const [acting, setActing] = useState(false);
+  const actingId = useId();
   const [error, setError] = useState("");
   const request = useRef(0);
   const load = () => {
     const id = ++request.current;
     setError("");
     api<HubSettings>("GET", "/api/settings/hub")
-      .then((s) => { if (id === request.current) setOn(!!s.agentsAcrossChats); })
+      .then((s) => { if (id === request.current) { setOn(!!s.agentsAcrossChats); setActing(!!s.agentsFromMachinesAct); } })
       .catch((e) => { if (id === request.current) setError(e instanceof Error ? e.message : String(e)); });
   };
   useEffect(() => {
@@ -869,6 +904,31 @@ function CrossChatCard() {
         </div>
         {on !== null && <Switch checked={on} onChange={(v) => void put(v)} label={OTHER_CHATS} />}
       </div>
+      {on && (
+        <div className="row" style={{ marginTop: 12, paddingTop: 12, borderTop: "0.5px solid var(--sep)" }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontWeight: 600 }}>Let other machines' agents drive chats that act without asking</div>
+            <div className="help" id={actingId}>
+              Off: a chat here above “Ask first” takes no message from an agent on another machine, and a chat such an agent starts here asks first. On: they can, as agents on this machine can. Leave it off unless you
+              trust every machine linked to this one.
+            </div>
+          </div>
+          <Switch
+            checked={acting}
+            onChange={async (v) => {
+              setActing(v);
+              try {
+                setActing(!!(await api<HubSettings>("PUT", "/api/settings/hub", { agentsFromMachinesAct: v })).agentsFromMachinesAct);
+              } catch (e) {
+                setActing(!v);
+                toast("error", e instanceof Error ? e.message : String(e));
+              }
+            }}
+            label="Let other machines' agents drive chats that act without asking"
+            describedBy={actingId}
+          />
+        </div>
+      )}
     </section>
   );
 }

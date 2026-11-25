@@ -6,6 +6,11 @@ use is a phone-friendly page served at `/editor` by a small ComfyUI custom node,
 `editor/phone_editor` (see `editor/README.md` for the files and how they are installed). The integration is
 entirely optional: without a ComfyUI install, the rest of Crosstalk is unaffected.
 
+**ComfyUI has no sign-in of its own.** Whoever can reach its port can use it, read the pictures in it and run its
+nodes, so keep it off any network you don't trust: start it listening on this machine only (`--listen 127.0.0.1`,
+its default) or on the machine's Tailscale address, never on `0.0.0.0` on a shared or public network, and never
+behind a public address.
+
 The page keeps **one shared edit session**: leave it on one device, come back on another, and it shows the same
 photo, the same running edit and the same result, until someone clears it and starts a new edit. This document
 describes how that works.

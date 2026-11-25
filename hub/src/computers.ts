@@ -111,7 +111,8 @@ export class Computers {
     return { token, expiresAt: now + INVITE_TTL };
   }
 
-  private checkInvite(token: string) {
+  /** Refuses (401) a connect command that isn't live: asked before anything the command sent is read. */
+  checkInvite(token: string) {
     const exp = this.invites.get(token);
     if (!exp || exp < Date.now()) throw new HttpError(401, "This connect command has expired. Make a new one in Crosstalk → Computers.");
   }

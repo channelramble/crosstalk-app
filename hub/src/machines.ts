@@ -38,7 +38,7 @@ export interface MachinesDeps {
   /** Whether agents here may reach other chats: links become two-way only then. */
   agentsOn: () => boolean;
   /** A one-time code that pairs with this hub. */
-  pairingCode: (ttlMs: number, opts: { scope: "full" | "peer"; hubId?: string | null }) => Promise<{ code: string; expiresAt: number }>;
+  pairingCode: (ttlMs: number, opts: { scope: "full" | "peer"; hubId?: string | null; kind?: "hub" | null }) => Promise<{ code: string; expiresAt: number }>;
   getDevice: (id: string) => Device | null;
   revokeDevice: (id: string) => void;
   setDeviceHub: (id: string, hubId: string | null) => void;
@@ -131,6 +131,16 @@ export function secureAddress(url: string): boolean {
   }
 }
 
+/** Whether an address is plain http on this machine itself (a test hub, or one that Tailscale isn't set up for). */
+function loopbackHttp(url: string | null): boolean {
+  try {
+    const u = new URL(url ?? "");
+    return u.protocol === "http:" && ["127.0.0.1", "localhost", "[::1]"].includes(u.hostname);
+  } catch {
+    return false;
+  }
+}
+
 const host = (url: string) => {
   try {
     return new URL(url).host;
@@ -150,6 +160,39 @@ interface CallInit {
   signal?: AbortSignal;
 }
 
+/** The most this hub reads of another machine's answer (a chat's messages, a list of models): 8 MB. */
+export const ANSWER_MAX = 8 * 1024 * 1024;
+
+/** Another machine's answer as text, read no further than ANSWER_MAX: what it says about its length isn't trusted. */
+async function readAnswer(res: Response, url: string): Promise<string> {
+  const tooBig = () => new HttpError(502, `${host(url)} sent more than Crosstalk reads from another machine.`, "too_long");
+  const told = Number(res.headers.get("content-length"));
+  const reader = res.body?.getReader();
+  if (!reader) return "";
+  if (Number.isFinite(told) && told > ANSWER_MAX) {
+    void reader.cancel().catch(() => undefined);
+    throw tooBig();
+  }
+  const parts: Uint8Array[] = [];
+  let size = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > ANSWER_MAX) {
+        void reader.cancel().catch(() => undefined);
+        throw tooBig();
+      }
+      parts.push(value);
+    }
+  } catch (e) {
+    if (e instanceof HttpError) throw e;
+    throw new HttpError(502, `Couldn't reach ${host(url)}: ${String(e instanceof Error ? e.message : e).replace(/[.\s]+$/, "")}`, "unreachable");
+  }
+  return Buffer.concat(parts).toString("utf8");
+}
+
 /** A request to another machine's hub. Redirects are refused, so a code or key can't be bounced elsewhere. */
 export async function hubCall<T>(url: string, path: string, init: CallInit = {}): Promise<T> {
   let res: Response;
@@ -164,7 +207,7 @@ export async function hubCall<T>(url: string, path: string, init: CallInit = {})
   } catch (e) {
     throw new HttpError(502, `Couldn't reach ${host(url)}: ${String(e instanceof Error ? e.message : e).replace(/[.\s]+$/, "")}`, "unreachable");
   }
-  const text = await res.text();
+  const text = await readAnswer(res, url);
   let data: unknown = null;
   try {
     data = text ? JSON.parse(text) : null;
@@ -456,6 +499,11 @@ export class Machines {
     if (!kind) throw new HttpError(400, "Unknown request");
     const url = hubAddress(String(b.url ?? ""));
     if (!secureAddress(url)) throw new HttpError(400, "Machines link only over https.");
+    // A linked machine's limited sign-in names the address this hub then calls: https only, so it can't aim this hub at
+    // what listens on this machine's own ports. (Hubs that are themselves at a loopback address — tests, two hubs on
+    // one machine — are the exception: they have no other address to give.)
+    const limited = caller.scope === "peer";
+    if (limited && new URL(url).protocol !== "https:" && !loopbackHttp(this.deps.self().url)) throw new HttpError(400, "Machines link only over https.");
     const hubId = typeof b.hub?.id === "string" ? b.hub.id : "";
     const hubName = typeof b.hub?.name === "string" ? b.hub.name.replace(/[\u0000-\u001f]/g, "").slice(0, 60) : "";
     if (!/^h_[\w-]{4,40}$/.test(hubId)) throw new HttpError(400, "Which machine?");
@@ -500,6 +548,12 @@ export class Machines {
         timeoutMs: 20_000,
         raw: true,
       }).catch((e: HttpError) => {
+        // What the other side answered goes to a person's device and a full sign-in. A limited one gets the same words
+        // whatever happened there (it chose the address: the answer would be its way to read what's at it).
+        if (limited) {
+          log.warn(`a linked machine (${hubName || hubId}) asked this one to pair with ${host(url)}, which failed: ${e.message}`);
+          throw new HttpError(502, "Couldn't reach that machine.", "pair_failed");
+        }
         throw new HttpError(502, `Couldn't pair with ${host(url)}: ${e.message}`, e.code === "unreachable" ? "unreachable" : "pair_failed");
       });
       if (paired.hub?.id !== hubId) {
@@ -696,6 +750,13 @@ export class Machines {
    * A notification from a linked machine: shown on this hub's devices, its title saying where it came from ("Fix
    * login · Linux box"), so the end of a long text being cut off on a lock screen never hides it.
    */
+  /** Whether this is a linked machine's notification key: asked before anything it sent is read. */
+  async relayKey(token: string | null): Promise<boolean> {
+    if (!token) return false;
+    const hash = await sha256(token);
+    return this.relays().some((r) => r.hash === hash);
+  }
+
   async relay(token: string | null, body: unknown): Promise<void> {
     const hash = token ? await sha256(token) : "";
     const relay = this.relays().find((r) => r.hash === hash);
@@ -784,6 +845,11 @@ export class Machines {
     return { status: i.status, machine: i.machine, error: i.error };
   }
 
+  /** Refuses (401) a setup command that isn't live: asked before anything the command sent is read. */
+  checkInvite(token: string): void {
+    this.openInvite(token);
+  }
+
   private openInvite(token: string): Invite {
     const i = this.invites.get(token);
     if (!i || i.expiresAt < Date.now()) throw new HttpError(401, `This setup command has expired. Make a new one in Crosstalk: ${settingsPath("machines", "Set up a Linux machine")}.`);
@@ -857,7 +923,7 @@ main() {
   DNS="$(tailscale status --json 2>/dev/null | tr -d '\\n' | sed -n 's/.*"Self"[^{]*{[^}]*"DNSName"[^"]*"\\([^"]*\\)".*/\\1/p' | sed 's/\\.$//' || true)"
   [ -n "$DNS" ] || { echo "Couldn't find this machine's Tailscale name."; exit 1; }
   for _ in $(seq 1 30); do curl -fsS -o /dev/null "https://$DNS/api/health" 2>/dev/null && break; sleep 2; done
-  CODE="$("$HOME/.local/bin/crosstalk-hub" pair 30 | sed -n 's/^Pairing code: \\([A-Za-z0-9-]*\\).*/\\1/p')"
+  CODE="$("$HOME/.local/bin/crosstalk-hub" pair 30 --for-machine | sed -n 's/^Pairing code: \\([A-Za-z0-9-]*\\).*/\\1/p')"
   echo "Linking with Crosstalk…"
   ask "Linking failed" "$TMP/claim" -X POST "$HUB/api/machines/install/$TOKEN/claim" -H 'content-type: application/json' \\
     --data "{\\"url\\":\\"https://$DNS\\",\\"code\\":\\"$CODE\\"}"

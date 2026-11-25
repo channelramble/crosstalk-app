@@ -1116,6 +1116,12 @@ export interface Device {
   platform: string;
   createdAt: number;
   lastSeenAt: number | null;
+  /**
+   * When this device last said something to an agent: a message sent, or a request or question answered (it starts as
+   * the time it was paired). A person's device that says nothing for HubSettings.idleSignOutDays is signed out.
+   * Absent from older hubs.
+   */
+  lastMessageAt?: number | null;
   current?: boolean;
   /**
    * "full": a person's device (everything). "peer": another machine's hub, signed in only for what its agents need
@@ -1992,6 +1998,34 @@ export interface HubSettings {
   storage: StorageSettings;
   /** Settings → Machines → Screen (hub/src/screen): whether agents may use the screen, and the account it signs in with. */
   screen?: { agents: boolean; username: string };
+  /**
+   * Agents on the person's other machines may message chats here that act without asking (above "Ask first"), and
+   * chats they start here may act as this machine's new chats do. Off (absent): such a chat takes no message from
+   * another machine's agents, and a chat they start here asks first. The machine that sends asks its own user too, but
+   * that's its word: this is this machine's own.
+   */
+  agentsFromMachinesAct?: boolean;
+  /**
+   * A person's device that hasn't sent a message (or answered an agent) for this many days is signed out, and pairs
+   * again with a new code. 0: never. Absent: IDLE_SIGN_OUT_DAYS (on, 30 days). Machines linked to this one aren't
+   * people's devices and are never signed out this way.
+   */
+  idleSignOutDays?: number;
+}
+
+/** How long a paired device may go without a message before it's signed out, unless the person says otherwise. */
+export const IDLE_SIGN_OUT_DAYS = 30;
+/** The days in force: the factory's when nothing was saved, 0 for never, and never less than a day or more than a year. */
+export function idleSignOutDays(settings: Pick<HubSettings, "idleSignOutDays"> | null | undefined): number {
+  const n = settings?.idleSignOutDays;
+  if (n === undefined || n === null || !Number.isFinite(Number(n))) return IDLE_SIGN_OUT_DAYS;
+  return Number(n) <= 0 ? 0 : Math.min(365, Math.max(1, Math.round(Number(n))));
+}
+/** When a device will be signed out for saying nothing, or null when it won't be (never, or not a person's device). */
+export function idleSignOutAt(device: Pick<Device, "createdAt" | "lastMessageAt" | "scope"> & Partial<Pick<Device, "hubId" | "platform">>, days: number): number | null {
+  // A linked machine's sign-in sends no messages of its own, and its link must outlast any quiet month.
+  if (days <= 0 || device.scope === "peer" || device.hubId || device.platform === "Crosstalk hub") return null;
+  return (device.lastMessageAt ?? device.createdAt) + days * 86_400_000;
 }
 
 /** The hub's disk at a glance: shown as a warning when space is low. */

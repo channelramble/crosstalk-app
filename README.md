@@ -109,7 +109,8 @@ stay in `~/.crosstalk` until you delete that folder.
 anyway.
 
 **Who can reach my computer?** Only devices on your own Tailscale network that you've paired with a code. Codes work
-once and expire. Remove a device any time in Settings → This device → Paired devices.
+once and expire. A device that sends no message for 30 days is signed out and pairs again. Remove a device any time
+in Settings → This device → Paired devices. [More on security](docs/SECURITY.md).
 
 **Can agents break things?** They're real coding agents with real access to the computer. Each has a permission level
 per chat, from "Read-only" to "Full access"; anything above it comes to your phone to approve first. Start each chat
@@ -123,7 +124,7 @@ in a project's own folder, not your home folder.
 
 **Guides:** [getting started, step by step](docs/GETTING-STARTED.md) · [the screen](docs/SCREEN.md) ·
 [group chats](docs/GROUP-CHATS.md) · [the menu-bar app](docs/HUB-APP.md) ·
-[setting up with an AI agent](docs/SETUP-FOR-AGENTS.md) · [what's new](CHANGELOG.md)
+[setting up with an AI agent](docs/SETUP-FOR-AGENTS.md) · [security](docs/SECURITY.md) · [what's new](CHANGELOG.md)
 
 **For developers:** [building it from source](docs/DEVELOPMENT.md) · [how your own models work](docs/LOCAL-MODELS.md) ·
 [the image editor](docs/IMAGE-EDITOR.md)

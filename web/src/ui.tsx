@@ -464,7 +464,8 @@ function MarkdownLink({ href, children }: { href?: string; children?: ReactNode 
   if (isAttachmentUrl(href)) return <Attachment url={href!}>{children}</Attachment>;
   const path = roomId ? projectPath(href) : null;
   if (roomId && path) return isImageName(path) ? <ProjectImage roomId={roomId} path={path}>{children}</ProjectImage> : <ProjectFileLink roomId={roomId} path={path}>{children}</ProjectFileLink>;
-  if (href && /^file:/i.test(href)) return <span>{children}</span>;
+  // A link whose address was taken away (a scheme the app doesn't follow) is its words, not a link to the app itself.
+  if (!href || /^file:/i.test(href)) return <span>{children}</span>;
   // A link to a screen of this app (another chat, say) opens here, not in a new tab.
   if (href && /^#\//.test(href)) return <a href={href}>{children}</a>;
   return <a href={href} target="_blank" rel="noreferrer noopener">{children}</a>;

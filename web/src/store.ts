@@ -6,7 +6,7 @@ import { startHistory, wentTo } from "./back";
 import { SETTINGS_INDEX, settingsPath } from "./settingsTabs";
 import { accountKey } from "./accounts";
 import type { RoomAgentActivity } from "./roomActivity";
-import { PROVIDER_INFO, memberAccount, signInAgentWords, type Approval, type ChatProvider, type HubInfo, type ImageEditorStatus, type MacStatus, type Member, type PtyInfo, type Room, type SignInNeed, type StorageStatus } from "@crosstalk/shared";
+import { IDLE_SIGN_OUT_DAYS, PROVIDER_INFO, memberAccount, signInAgentWords, type Approval, type ChatProvider, type HubInfo, type ImageEditorStatus, type MacStatus, type Member, type PtyInfo, type Room, type SignInNeed, type StorageStatus } from "@crosstalk/shared";
 import { api, setConnection, type Connection } from "./api";
 import { createHubStore, emptyHubData, type HubData, type HubHooks, type HubState } from "./hubStore";
 import { loadMachines, machineKey, saveMachines } from "./machines";
@@ -184,7 +184,8 @@ export function hubStore(key: string): StoreApi<HubState> | undefined {
 function routeFromHash(): { view: View; roomId: string | null; agent: ChatProvider | null; place: string } {
   const h = location.hash.replace(/^#\/?/, "");
   const [view, id] = h.split("/");
-  if (view === "room" && id) return { view: "room", roomId: id, agent: null, place: hashFor("room", id, null) };
+  // A chat's id is letters, digits, _ and -: anything else in its place (a link someone wrote) is not a chat.
+  if (view === "room" && id && /^[\w-]{1,64}$/.test(id)) return { view: "room", roomId: id, agent: null, place: hashFor("room", id, null) };
   if (view === "agent" && (id === "claude" || id === "codex")) return { view: "agent", roomId: null, agent: id, place: hashFor("agent", null, id) };
   // A section or a page to open Settings at: #/settings/agent-setup (the tray app links there), #/settings/machines.
   // Settings works out which page holds it (settingsTabs.ts), so every section id it has ever had still lands. A plain
@@ -303,11 +304,20 @@ export const useStore = create<State>((set, get) => {
       // The next start isn't on it.
       if (lastScreen.startsWith(`{"view":"room","roomId":${JSON.stringify(roomId)},`)) remember({ view: "rooms" });
     },
-    signedOut: () => {
+    signedOut: (why) => {
       const store = hubs.get(key);
       const name = store ? machineName(store.getState().conn, store.getState().hub) : "a machine";
       get().removeMachine(key);
-      get().toast("error", hubs.size ? `This device was signed out of ${name}. Add it again in ${settingsPath("machines")}.` : "This device is no longer paired. Connect it again to continue.");
+      // Signed out for going quiet: say so, or it reads as something having gone wrong.
+      const quiet = why === "idle" ? ` because it sent no message for ${IDLE_SIGN_OUT_DAYS} days` : "";
+      get().toast(
+        "error",
+        hubs.size
+          ? `This device was signed out of ${name}${quiet}. Add it again in ${settingsPath("machines")}.`
+          : why === "idle"
+            ? `This device was signed out${quiet}. Pair it again with a new code.`
+            : "This device is no longer paired. Connect it again to continue.",
+      );
     },
     approval: (a, s) => announceRequest(key, a, s),
     ptyData: (ptyId, data) => ptyListeners.get(ptyId)?.forEach((fn) => fn(data)),

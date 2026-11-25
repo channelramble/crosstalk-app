@@ -2,9 +2,10 @@ import { useEffect, useState, type ReactNode } from "react";
 import { ChevronDown, FileDown, Folder, Image as ImageIcon } from "lucide-react";
 import { api, attachmentBlob, folderFileBlob, projectFileBlob } from "../api";
 export { projectPath } from "../links";
+import { ATTACHMENT_URL, FOLDER_URL } from "../links";
 import { useStore } from "../store";
 
-export const isAttachmentUrl = (url?: string) => !!url && /^\/api\/rooms\/[^/]+\/uploads\/[^/?#]+$/.test(url);
+export const isAttachmentUrl = (url?: string) => !!url && ATTACHMENT_URL.test(url);
 
 const IMAGE_NAME = /\.(png|jpe?g|gif|webp|avif|heic|heif)$/i;
 const IMAGE_TYPES: Record<string, string> = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", avif: "image/avif", heic: "image/heic", heif: "image/heif" };
@@ -12,7 +13,7 @@ const IMAGE_TYPES: Record<string, string> = { png: "image/png", jpg: "image/jpeg
 /** Whether a file path or URL names an image the chat can preview. */
 export const isImageName = (name?: string | null) => !!name && IMAGE_NAME.test(name);
 
-export const isFolderUrl = (url?: string) => !!url && /^\/api\/rooms\/[^/]+\/folders\/[^/]+\/[^/?#]+$/.test(url);
+export const isFolderUrl = (url?: string) => !!url && FOLDER_URL.test(url);
 
 function saveBlob(blob: Blob, name: string) {
   const objectUrl = URL.createObjectURL(blob);
@@ -38,7 +39,9 @@ export function FolderAttachment({ url, children }: { url: string; children: Rea
     setLoading(true);
     try {
       const page = await api<{ files: { path: string; size: number }[]; total: number }>("GET", `${url}?offset=${offset}`);
-      setListing((cur) => ({ files: [...(offset ? cur?.files ?? [] : []), ...page.files], total: page.total }));
+      // An answer that isn't a list of files (the address led somewhere else) is a failure, not something to draw.
+      if (!page || !Array.isArray(page.files)) throw new Error("That isn't a folder of this chat.");
+      setListing((cur) => ({ files: [...(offset ? cur?.files ?? [] : []), ...page.files], total: Number(page.total) || page.files.length }));
       setError("");
       setFailedAt(null);
     } catch (e) {

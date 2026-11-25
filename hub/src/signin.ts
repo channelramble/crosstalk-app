@@ -43,7 +43,8 @@ import type { App } from "./app";
 import type { AuthHit } from "./agents/stale-login";
 import type { SignInHooks } from "./engine/engine";
 import { HttpError } from "./engine/engine";
-import { route, type Route } from "./routes";
+import { HUB_PLATFORM } from "./auth";
+import { readBody, route, SMALL_BODY, type Route } from "./routes";
 import { redactLog } from "./setup/system";
 import { newId } from "./util/ids";
 import { logger } from "./util/log";
@@ -72,9 +73,13 @@ const FIRST_LINK_MS = 45_000;
 /** How long each agent's sign-in is waited for (Codex's device code lasts 15 minutes, Gemini CLI gives up after 5). */
 const TTL_MS: Partial<Record<Provider, number>> = { claude: 10 * 60_000, codex: 15 * 60_000, muse: 15 * 60_000, gemini: 5 * 60_000 };
 
-/** The person's own devices: not another machine's hub (its full or peer sign-in). Setup keys never reach /api at all. */
+/**
+ * The person's own devices: a full sign-in, tied to no machine, that isn't another machine's hub. A sign-in is a
+ * machine's when its pairing code was made for one (auth.ts gives it the hub platform then, whatever it called itself)
+ * or when it says so itself. Setup keys never reach /api at all.
+ */
 export function isPersonDevice(d: Pick<Device, "scope" | "hubId" | "platform">): boolean {
-  return d.scope !== "peer" && !d.hubId && d.platform !== "Crosstalk hub";
+  return (d.scope ?? "full") === "full" && !d.hubId && d.platform !== HUB_PLATFORM;
 }
 
 function personOnly(device: Device) {
@@ -832,7 +837,7 @@ export function signInRoutes(app: App): Route[] {
       // code in it.
       let code: unknown = null;
       try {
-        code = (JSON.parse(await req.text()) as { code?: unknown } | null)?.code ?? null;
+        code = (JSON.parse(await readBody(req, SMALL_BODY)) as { code?: unknown } | null)?.code ?? null;
       } catch {
         throw new HttpError(400, 'Send the code as JSON: { "code": "…" }.', "code");
       }

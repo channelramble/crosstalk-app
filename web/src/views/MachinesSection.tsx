@@ -181,7 +181,8 @@ export function MachinesSection() {
     }
     setBusy(info.id);
     try {
-      const pc = await api<{ code: string }>("POST", "/api/pairing-codes", {}, m.conn);
+      // A code for a machine: the sign-in it makes is never taken for a person's device (older hubs ignore the mark).
+      const pc = await api<{ code: string }>("POST", "/api/pairing-codes", { kind: "hub" }, m.conn);
       await api<MachineInfo>("POST", "/api/machines/link", { url: info.url, code: pc.code }, home.conn);
       toast("info", `${info.name} is linked again.`);
       loadLinked();

@@ -1,4 +1,5 @@
 import { PROTOCOL_VERSION, type ClientEvent, type ServerEvent } from "@crosstalk/shared";
+import { ATTACHMENT_URL } from "./links";
 
 const CONN_KEY = "crosstalk.conn.v1";
 
@@ -61,6 +62,29 @@ export function normalizeBaseUrl(input: string): string {
 }
 
 /**
+ * Whether a machine's address is safe to send a pairing code and a sign-in to: https anywhere, and plain http only to
+ * this device itself, an address on your own network (10.x, 172.16-31.x, 192.168.x, 169.254.x, Tailscale's 100.64-127.x)
+ * or a name with no dots or ending in .local (a computer on the same network). Over plain http to anywhere else, both
+ * would cross the internet readable.
+ */
+export function plainHttpElsewhere(baseUrl: string): boolean {
+  let u: URL;
+  try {
+    u = new URL(baseUrl);
+  } catch {
+    return false;
+  }
+  if (u.protocol !== "http:") return false;
+  const host = u.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  if (host === "localhost" || host === "::1" || !host.includes(".") || /\.(local|lan|home|internal|home\.arpa)$/.test(host)) return false;
+  if (/^(fe80|f[cd][0-9a-f]{2}):/.test(host)) return false;
+  const ip = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(host);
+  if (!ip) return true;
+  const [a, b] = [Number(ip[1]), Number(ip[2])];
+  return !(a === 127 || a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254) || (a === 100 && b >= 64 && b <= 127));
+}
+
+/**
  * Uploads a file with no overall time limit, so large transfers and slow ZIP unpacking can finish. It fails
  * only if the upload stops making progress for a minute (a stalled connection).
  */
@@ -111,7 +135,28 @@ function uploadBlob<T>(method: string, url: string, body: Blob, token: string | 
 }
 
 /** A request to the hub. It gives up after `timeoutMs` (20 seconds unless a slower route needs longer). */
+/** The name this app's live connections go by. */
+export const SOCKET_PROTOCOL = "crosstalk";
+/**
+ * What a live connection offers when it opens: its name, and this device's sign-in beside it (a WebSocket can carry no
+ * header of its own from a browser; this is the one place it can say something that isn't its address).
+ */
+export const socketAuth = (token: string): string[] => [SOCKET_PROTOCOL, `bearer.${token}`];
+/** Per machine (its address): whether its live connection has to carry the sign-in in its address, as before 0.11. */
+const oldWay = new Map<string, boolean>();
+
+/**
+ * Whether a path the app is about to ask a machine for is one it could have built itself: under /api/, with no step
+ * up or down the path (plain or percent-encoded) and no backslash, which a browser reads as a slash. Ids from an
+ * address someone wrote can't then steer a request to another route.
+ */
+export function safeApiPath(path: string): boolean {
+  const [route] = path.split(/[?#]/, 1);
+  return /^\/(api|internal)\//.test(route) && !/\\|%5c|%2e|%2f|(^|\/)\.{1,2}(\/|$)/i.test(route);
+}
+
 export async function api<T = unknown>(method: string, path: string, body?: unknown, c: Connection | null = conn, timeoutMs = 20_000): Promise<T> {
+  if (!safeApiPath(path)) throw new ApiError(400, "That isn't an address this app asks for.");
   if (body instanceof Blob) return uploadBlob<T>(method, (c?.baseUrl ?? "") + path, body, c?.token);
   const headers: Record<string, string> = {};
   if (c?.token) headers.authorization = `Bearer ${c.token}`;
@@ -151,7 +196,7 @@ export async function api<T = unknown>(method: string, path: string, body?: unkn
 
 /** Fetch uploads with the device's bearer token; never put tokens in image URLs or chat history. */
 export async function attachmentBlob(path: string, signal?: AbortSignal): Promise<Blob> {
-  if (!/^\/api\/rooms\/[^/]+\/uploads\/[^/?#]+$/.test(path)) throw new ApiError(400, "Invalid attachment URL");
+  if (!ATTACHMENT_URL.test(path)) throw new ApiError(400, "Invalid attachment URL");
   const res = await fetch((conn?.baseUrl ?? "") + path, { headers: conn?.token ? { authorization: `Bearer ${conn.token}` } : {}, signal });
   if (!res.ok) throw new ApiError(res.status, "Couldn't open the attachment");
   return res.blob();
@@ -177,6 +222,8 @@ export async function projectFileBlob(roomId: string, path: string, signal?: Abo
 }
 
 export async function pairDevice(baseUrl: string, code: string, name: string): Promise<Connection> {
+  // Not over plain http to somewhere on the internet: the code and the sign-in it buys would cross it readable.
+  if (plainHttpElsewhere(baseUrl)) throw new ApiError(400, "That address isn't https. Use the machine's https address, or its address on your own network.");
   const platform = navigator.userAgent.match(/(iPhone|iPad|Android|Macintosh|Windows|Linux)/)?.[1] ?? "Web";
   const res = await api<{ token: string }>("POST", "/api/pair", { code, name, platform: isNative ? `${platform} app` : platform }, { baseUrl, token: "", deviceName: name });
   return { baseUrl, token: res.token, deviceName: name };
@@ -299,6 +346,9 @@ export class Live {
     this.timer = setTimeout(() => this.open(), delay);
   }
 
+  /** The last try was made the new way (the sign-in beside the connection's name) and hasn't opened. */
+  private triedNew = false;
+
   private open() {
     if (this.closed) return;
     if (this.timer) clearTimeout(this.timer);
@@ -306,13 +356,20 @@ export class Live {
     this.clearHealth();
     const base = this.c.baseUrl || location.origin;
     // Says which protocol this app speaks: steps then stream as deltas (older apps get whole steps).
-    const url = base.replace(/^http/, "ws") + `/api/ws?token=${encodeURIComponent(this.c.token)}&v=${PROTOCOL_VERSION}`;
+    // The sign-in travels beside the connection's name (socketAuth), not in its address, where a proxy's log or a
+    // copied address would keep it. A machine on a version before that knows only the address: when a try without
+    // it never opens, the next one is made the old way, and the way that worked is remembered for this machine.
+    const inAddress = oldWay.get(base) ?? this.triedNew;
+    const url = base.replace(/^http/, "ws") + (inAddress ? `/api/ws?token=${encodeURIComponent(this.c.token)}&v=${PROTOCOL_VERSION}` : `/api/ws?v=${PROTOCOL_VERSION}`);
     this.onStatus("connecting");
-    const ws = new WebSocket(url);
+    const ws = inAddress ? new WebSocket(url) : new WebSocket(url, socketAuth(this.c.token));
+    this.triedNew = !inAddress && !oldWay.has(base);
     this.ws = ws;
     this.deadline = setTimeout(() => this.lost(ws), this.timing.connectMs ?? this.timing.timeoutMs);
     ws.onopen = () => {
       if (this.closed || this.ws !== ws) return;
+      oldWay.set(base, inAddress);
+      this.triedNew = false;
       this.retry = 0;
       this.received();
       this.onStatus("open");

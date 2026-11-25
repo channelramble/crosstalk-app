@@ -25,3 +25,42 @@ test("every GitHub workflow file is readable YAML with jobs that have steps", ()
     }
   }
 });
+
+// What runs with the right to publish is kept small and fixed: a tag someone moves, or a package that turns bad, must
+// not be able to put out a release or read the key releases are signed with.
+test("workflows read the repo and no more, name every action by its exact commit, and publish from jobs that run none of the repo's code", () => {
+  for (const file of readdirSync(DIR).filter((f) => /\.ya?ml$/.test(f))) {
+    const doc = YAML.parse(readFileSync(join(DIR, file), "utf8")) as {
+      permissions?: Record<string, string>;
+      jobs: Record<string, { permissions?: Record<string, string>; steps: { run?: string; uses?: string; with?: Record<string, unknown>; env?: Record<string, string> }[] }>;
+    };
+    expect(doc.permissions, `${file}: the run itself may only read`).toEqual({ contents: "read" });
+    for (const [id, job] of Object.entries(doc.jobs)) {
+      const writes = Object.values(job.permissions ?? {}).includes("write");
+      for (const step of job.steps) {
+        if (step.uses) expect(step.uses, `${file} ${id}: an action by its commit`).toMatch(/^[\w.-]+\/[\w.-]+@[0-9a-f]{40}$/);
+        if (step.uses?.startsWith("actions/checkout@")) expect(step.with?.["persist-credentials"], `${file} ${id}: the checkout keeps no token`).toBe(false);
+        const secret = Object.values(step.env ?? {}).some((v) => /secrets\.|github\.token/.test(String(v)));
+        if (secret) expect(writes, `${file} ${id}: a token or key only in a job that publishes`).toBe(true);
+        if (!writes) continue;
+        // A job that may publish: the finished files only. No checkout, no installing, nothing of the repo's is run.
+        if (step.uses) expect(step.uses, `${file} ${id}`).toMatch(/^actions\/download-artifact@/);
+        expect(step.run ?? "", `${file} ${id}: runs none of the repo's code`).not.toMatch(/\b(bun|bunx|npm|npx|node|cargo|tauri|make|bash [\w./-]+\.sh|sh [\w./-]+\.sh)\b/);
+        expect(step.run ?? "", `${file} ${id}: replaces nothing that's published`).not.toContain("--clobber");
+      }
+    }
+  }
+});
+
+test("the release is signed before it's published, by a key the version being released knows", () => {
+  const text = readFileSync(join(DIR, "release.yml"), "utf8");
+  const doc = YAML.parse(text) as { jobs: Record<string, { needs?: string | string[]; steps: { name?: string; run?: string }[] }> };
+  const steps = doc.jobs.publish.steps.map((s) => s.run ?? "");
+  const sign = steps.findIndex((r) => r.includes("SHA256SUMS.sig"));
+  const publish = steps.findIndex((r) => r.includes("gh release create"));
+  expect(sign).toBeGreaterThanOrEqual(0);
+  expect(publish).toBeGreaterThan(sign);
+  expect(steps[sign]).toContain("meta/release-keys");
+  expect(steps[sign]).toContain("pkeyutl -verify");
+  expect(doc.jobs.build.steps.some((s) => (s.run ?? "").includes("RELEASE_KEYS"))).toBe(true);
+});

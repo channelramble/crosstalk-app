@@ -207,7 +207,11 @@ describe("Claude Code's permission prompt", () => {
       const file = argv[argv.indexOf("--settings") + 1];
       expect(argv.join(" ")).not.toContain("git status");
       expect((statSync(file).mode & 0o777).toString(8)).toBe("600");
-      expect(JSON.parse(readFileSync(file, "utf8")).permissions).toEqual({ allow: ["Bash(git status:*)", "Edit(//tmp/x.ts)"] });
+      const permissions = JSON.parse(readFileSync(file, "utf8")).permissions as { allow: string[]; deny: string[] };
+      expect(permissions.allow).toEqual(["Bash(git status:*)", "Edit(//tmp/x.ts)"]);
+      // Beside them, what's never allowed: Crosstalk's own private files (claude-private-files.test.ts).
+      expect(permissions.deny.length).toBeGreaterThan(0);
+      expect(permissions.deny.every((rule) => /^(Read|Edit)\(\/\//.test(rule))).toBe(true);
       await d.dispose();
       expect(existsSync(file)).toBe(false);
     } finally {

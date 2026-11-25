@@ -147,6 +147,11 @@ export class CrossChat {
     if (!this.on()) throw new HttpError(403, this.offText(), "off");
   }
 
+  /** Whether a caller is another machine's hub (its word about its own chats can't be checked from here). */
+  private fromElsewhere(caller: Caller): boolean {
+    return caller.hubId !== this.app.hubId();
+  }
+
   /** This hub, as the caller of its own chats. */
   selfCaller(): Caller {
     return { hubId: this.app.hubId(), machine: this.app.machineName() };
@@ -281,6 +286,16 @@ export class CrossChat {
     }
     const member = this.app.store.listMembers(room.id)[0];
     if (!member) throw new HttpError(409, `"${clean(room.name)}" has no agent.`, "not_ready");
+    // Decided here, not on the machine that sends: the approval its user gives there is that machine's word, and a
+    // machine that was broken into, or runs a changed Crosstalk, would simply not ask. So a chat here that acts without
+    // asking takes messages from another machine's agents only when this machine's own settings say so.
+    if (this.fromElsewhere(caller) && rank(member.provider, member.permissionMode) > rank(member.provider, "ask") && !this.app.hubSettings().agentsFromMachinesAct) {
+      throw new HttpError(
+        403,
+        `"${clean(room.name)}" on ${this.app.machineName()} acts without asking (${MODE_NAME[member.permissionMode]}), and ${this.app.machineName()} doesn't take messages for such chats from other machines' agents. The user can allow it on ${this.app.machineName()}: Settings → Agents together.`,
+        "acts_without_asking",
+      );
+    }
     // That chat is waiting for this sender's answer: the answer goes back in the reply, not as a new message.
     if ([...this.waits.values()].some((w) => w.memberId === member.id && w.hubId === caller.hubId && w.chatId === fromChat)) {
       throw new HttpError(409, `"${clean(room.name)}" on ${this.app.machineName()} is waiting for your answer to its message.`, "waiting_on_you");
@@ -404,7 +419,10 @@ export class CrossChat {
     const sourceProvider = b.fromProvider === "claude" || b.fromProvider === "codex" ? b.fromProvider : null;
     const ceiling = sourceMembers.length ? Math.min(...sourceMembers.map((m) => rank(m.provider, m.permissionMode))) : rank(sourceProvider, max);
     const def = this.app.defaults().agent[provider]?.permissionMode ?? "ask";
-    const permissionMode = (["full", "auto", "edits", "ask"] as PermissionMode[]).find((mode) => rank(provider, mode) <= Math.min(ceiling, rank(provider, def)))!;
+    // What another machine says its sender may do is that machine's word (see post): a chat it starts here asks first,
+    // unless this machine's settings let other machines' agents drive chats that act without asking.
+    const trusted = !this.fromElsewhere(caller) || !!this.app.hubSettings().agentsFromMachinesAct;
+    const permissionMode = (["full", "auto", "edits", "ask"] as PermissionMode[]).find((mode) => rank(provider, mode) <= Math.min(ceiling, rank(provider, trusted ? def : "ask")))!;
     // The same model and effort as the agent that started it (when it's the same kind of agent), else this machine's defaults.
     const inheritedModel = typeof b.model === "string" && /^[\w.:@/[\]-]{1,100}$/.test(b.model) ? b.model : undefined;
     const inheritedEffort = typeof b.effort === "string" && /^[a-z]{2,12}$/.test(b.effort) ? b.effort : undefined;

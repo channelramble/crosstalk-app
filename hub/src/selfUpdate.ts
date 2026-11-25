@@ -2,8 +2,8 @@
 // Crosstalk asks GitHub for the newest release of the repo it was installed from (a little after it starts, about every
 // six hours, and when asked), says so on every device when there's a newer one, and one button downloads it:
 //
-//   1. the release's SHA256SUMS and the program for this machine's system and processor, to a file beside the running
-//      program (never over it);
+//   1. the release's SHA256SUMS, which must carry Crosstalk's signature (SHA256SUMS.sig, RELEASE_KEYS below), and the
+//      program for this machine's system and processor, to a file beside the running program (never over it);
 //   2. the download must match its checksum, and must say it is that version when run (on a Mac it's cleared of
 //      quarantine and signed first, the way deploy/install-macos.sh does it);
 //   3. it's then renamed to where a new build waits (setup/system.ts nextBuildPath). From there on it's the update that
@@ -14,6 +14,7 @@
 // A Crosstalk run from its source code, started by hand, or in a folder it can't write to offers nothing and asks
 // nothing.
 
+import { createPublicKey, verify as verifySignature } from "node:crypto";
 import { accessSync, chmodSync, closeSync, constants, openSync, readdirSync, renameSync, rmSync, writeSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { compareVersions, type HubRelease, type HubUpdate, type UpdateInstall, type UpdateStatus } from "@crosstalk/shared";
@@ -24,6 +25,13 @@ const log = logger("update");
 
 /** The repo releases come from: the one install.sh installs from (CROSSTALK_REPO names another, as it does there). */
 export const DEFAULT_REPO = "channelramble/crosstalk-app";
+/**
+ * The keys Crosstalk's releases are signed with (Ed25519 public keys, as base64 of their SPKI form). A release's
+ * SHA256SUMS comes with SHA256SUMS.sig, made by the release workflow with the private half, which is kept out of the
+ * repo. An update is taken only when one of these keys made that signature: the files being on GitHub isn't enough.
+ * More than one may stand here while a key is being replaced.
+ */
+export const RELEASE_KEYS = ["MCowBQYDK2VwAyEATsmjDiyf6XOvgvjT6pLBZPL6AuyohLDMFRG8cIEuVHI="];
 const FIRST_CHECK_MS = 45_000;
 const CHECK_EVERY_MS = 6 * 60 * 60_000;
 /** Check now, tapped again within this, gets the answer just given. */
@@ -49,6 +57,8 @@ export interface SelfUpdateDeps {
   latestUrl: string;
   /** Where a release's file is. */
   fileUrl(tag: string, name: string): string;
+  /** The keys a release's list of checksums must be signed with (RELEASE_KEYS unless this says otherwise). */
+  keys?: string[];
   /** Runs a program quietly: the download itself (`version`), and on a Mac xattr, security and codesign. */
   run: Run;
   /** Whether something starts Crosstalk again when it exits (launchd, systemd). Null: not known. */
@@ -66,12 +76,14 @@ export interface SelfUpdateDeps {
 }
 
 /** Where releases are, from the environment: the names install.sh uses, plus one for the "latest release" answer. */
-export function releaseSource(env: Record<string, string | undefined> = process.env): Pick<SelfUpdateDeps, "latestUrl" | "fileUrl"> {
+export function releaseSource(env: Record<string, string | undefined> = process.env): Pick<SelfUpdateDeps, "latestUrl" | "fileUrl" | "keys"> {
   const repo = /^[\w.-]+\/[\w.-]+$/.test(env.CROSSTALK_REPO ?? "") ? env.CROSSTALK_REPO! : DEFAULT_REPO;
   const base = env.CROSSTALK_DOWNLOAD_BASE?.replace(/\/+$/, "");
   return {
     latestUrl: env.CROSSTALK_UPDATE_URL || `https://api.github.com/repos/${repo}/releases/latest`,
     fileUrl: (tag, name) => (base ? `${base}/${name}` : `https://github.com/${repo}/releases/download/${tag}/${name}`),
+    // Someone's own fork or mirror signs with its own key, and says which: CROSSTALK_RELEASE_KEY (the public half).
+    keys: env.CROSSTALK_RELEASE_KEY?.trim() ? [env.CROSSTALK_RELEASE_KEY.trim()] : RELEASE_KEYS,
   };
 }
 
@@ -80,6 +92,23 @@ export function programName(platform: string, arch: string): string | null {
   const os = platform === "darwin" || platform === "linux" ? platform : null;
   const cpu = arch === "arm64" || arch === "x64" ? arch : null;
   return os && cpu ? `crosstalk-hub-${os}-${cpu}` : null;
+}
+
+/**
+ * Whether `signature` (base64, as SHA256SUMS.sig holds it) is one of `keys`' over exactly these bytes. A key or a
+ * signature that isn't one is simply not a match.
+ */
+export function signedByOne(keys: string[], text: string, signature: string): boolean {
+  const sig = Buffer.from(signature.trim(), "base64");
+  if (sig.length !== 64) return false;
+  return keys.some((key) => {
+    try {
+      const k = createPublicKey({ key: Buffer.from(key, "base64"), format: "der", type: "spki" });
+      return k.asymmetricKeyType === "ed25519" && verifySignature(null, Buffer.from(text, "utf8"), k, sig);
+    } catch {
+      return false;
+    }
+  });
 }
 
 /** A failure whose words are for the person as they are. */
@@ -284,6 +313,9 @@ export class SelfUpdate {
       const name = this.program!;
       this.abort = new AbortController();
       const sums = await this.text(this.deps.fileUrl(want.tag, "SHA256SUMS"));
+      // The list is believed only with Crosstalk's signature on it: whoever can put files on GitHub can't make that.
+      const signature = await this.text(this.deps.fileUrl(want.tag, "SHA256SUMS.sig"), "signature");
+      if (!signedByOne(this.deps.keys ?? RELEASE_KEYS, sums, signature)) throw new Plain(`Crosstalk ${version} on GitHub isn't signed with Crosstalk's key, so nothing was downloaded.`);
       const sha = sums
         .split("\n")
         .map((l) => /^([0-9a-f]{64})\s+\*?(\S+)$/i.exec(l.trim()))
@@ -321,8 +353,11 @@ export class SelfUpdate {
     }
   }
 
-  private async text(url: string): Promise<string> {
+  private async text(url: string, what: "checksums" | "signature" = "checksums"): Promise<string> {
     const res = await fetch(checked(url), { headers: AGENT, signal: AbortSignal.any([this.abort!.signal, AbortSignal.timeout(20_000)]) });
+    // Wherever GitHub sent the request on to is held to the same rule.
+    checked(res.url || url);
+    if (res.status === 404 && what === "signature") throw new Plain("That release has no signature, so nothing was downloaded. If it was published minutes ago, try again in a few.");
     if (!res.ok) throw new Plain(res.status === 404 ? "That release's files aren't on GitHub (yet). Try again in a few minutes." : `GitHub answered ${res.status} for the update. Try again in a few minutes.`);
     const text = await res.text();
     if (text.length > 1024 * 1024) throw new Plain("The release's list of checksums isn't one, so nothing was downloaded.");
@@ -346,6 +381,7 @@ export class SelfUpdate {
       alive();
       // As it is on the server, so the size it gives is the size that arrives.
       const res = await fetch(checked(url), { headers: { ...AGENT, "Accept-Encoding": "identity" }, signal: abort.signal });
+      checked(res.url || url);
       if (!res.ok || !res.body) throw new Plain(res.status === 404 ? "That release's files aren't on GitHub (yet). Try again in a few minutes." : `GitHub answered ${res.status} for the download. Try again in a few minutes.`);
       const total = Number(res.headers.get("content-length")) || listed || 0;
       const hash = new Bun.CryptoHasher("sha256");

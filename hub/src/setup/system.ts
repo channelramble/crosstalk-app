@@ -7,7 +7,7 @@ import { closeSync, copyFileSync, existsSync, linkSync, openSync, readFileSync, 
 import { homedir, networkInterfaces, userInfo } from "node:os";
 import { join } from "node:path";
 import type { MacStatus } from "@crosstalk/shared";
-import { HOME } from "../config";
+import { HOME, HUB_RUN, HUB_VERSION } from "../config";
 import { askTailscale, isIPv4, isTailscaleIP } from "../tailscale";
 import { browserOsFacts, type BrowserOsFacts, type McpAgent } from "../browseros";
 import type { HttpsAnswer, ServiceFacts, TailscaleFacts } from "./checklist";
@@ -22,8 +22,8 @@ export interface SetupProbes {
   mac?: () => Promise<MacStatus | null>;
   /** The version of a newer build at the hub's path, waiting for a restart. */
   staged?: () => Promise<string | null>;
-  /** A linked hub's version, from its public /api/health. */
-  hubVersion?: (url: string) => Promise<string | null>;
+  /** A linked hub's version, from its /api/health, which says it to this hub's sign-in there. */
+  hubVersion?: (url: string, token?: string) => Promise<string | null>;
   /** The newest lines of the hub's log, as written (redactLog hides what they mustn't show). */
   log?: (lines: number) => Promise<string[] | null>;
   /** restart-when-idle.sh, where it's installed. */
@@ -43,10 +43,10 @@ export function systemProbes(run: Run, mac: (() => Promise<MacStatus>) | null): 
   return {
     service: () => hubService(run),
     tailscale: () => tailscaleFacts(),
-    https: (url) => httpsAnswers(url),
+    https: (url) => httpsAnswers(url, { self: { run: HUB_RUN, version: HUB_VERSION } }),
     ...(mac ? { mac } : {}),
     staged: stagedBuild(run),
-    hubVersion: (url) => hubVersion(url),
+    hubVersion: (url, token) => hubVersion(url, token),
     log: (lines) => hubLog(run, lines),
     idleRestart: () => idleRestartScript(),
     // Its own `run` keeps stderr: codesign and spctl say what they found there, not on stdout.
@@ -149,6 +149,8 @@ export interface HttpsProbeDeps {
   lookup?: (host: string) => Promise<string[]>;
   /** This machine's own addresses, as its network interfaces have them. */
   own?: () => string[];
+  /** This run of the hub and its version: an answer that names this run is this very hub's, whatever else it leaves out. */
+  self?: { run: string; version: string };
 }
 
 /**
@@ -168,14 +170,17 @@ export async function httpsAnswers(url: string, deps: HttpsProbeDeps = {}): Prom
     const r = await get(`${url.replace(/\/+$/, "")}/api/health`, { signal: AbortSignal.timeout(5000), redirect: "error", headers: { accept: "application/json" } });
     // Any answer at all counts as answering, a web server's error page included: only Crosstalk's own health says more.
     const text = (await r.text().catch(() => "")).slice(0, 4096);
-    let j: { name?: unknown; version?: unknown } | null = null;
+    let j: { name?: unknown; version?: unknown; run?: unknown } | null = null;
     try {
       j = r.ok ? JSON.parse(text) : null;
     } catch {
       j = null;
     }
     const crosstalk = !!j && typeof j === "object" && j.name === "crosstalk";
-    return { answers: true, crosstalk, version: crosstalk && typeof j?.version === "string" ? j.version : null };
+    // A hub tells its version only to this machine itself and to signed-in devices; asked through its https address
+    // it names its run instead, and this hub knows its own.
+    const mine = crosstalk && !!deps.self && j?.run === deps.self.run;
+    return { answers: true, crosstalk, version: mine ? deps.self!.version : crosstalk && typeof j?.version === "string" ? j.version : null };
   } catch {
     return { answers: false, crosstalk: false, version: null };
   }
@@ -277,9 +282,11 @@ export function takeNextBuild(version: string, path: string = process.execPath):
   }
 }
 
-async function hubVersion(url: string): Promise<string | null> {
+async function hubVersion(url: string, token?: string): Promise<string | null> {
   try {
-    const r = await fetch(`${url.replace(/\/+$/, "")}/api/health`, { signal: AbortSignal.timeout(3000), redirect: "error" });
+    // The sign-in goes only over https, or to this machine itself.
+    const safe = /^https:\/\//i.test(url) || /^http:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?(\/|$)/i.test(url);
+    const r = await fetch(`${url.replace(/\/+$/, "")}/api/health`, { signal: AbortSignal.timeout(3000), redirect: "error", headers: token && safe ? { authorization: `Bearer ${token}` } : {} });
     const j = (await r.json()) as { version?: unknown };
     return typeof j.version === "string" && /^\d+\.\d+[\w.-]*$/.test(j.version) ? j.version.slice(0, 30) : null;
   } catch {

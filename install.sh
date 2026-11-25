@@ -42,7 +42,9 @@ done
 
 # Only what's listed in SHA256SUMS, and only if it matches.
 ( cd "$DIR"
-  grep -E "  ($BIN|$SETUP)\$" SHA256SUMS > want || die "SHA256SUMS doesn't list $BIN"
+  grep -E "^[0-9a-f]{64}  ($BIN|$SETUP)\$" SHA256SUMS > want || die "SHA256SUMS doesn't list $BIN"
+  # Both of them, each once: a list that leaves one out would leave that one unchecked.
+  [ "$(grep -c "  $BIN\$" want)" = 1 ] && [ "$(grep -c "  $SETUP\$" want)" = 1 ] || die "SHA256SUMS doesn't list both $BIN and $SETUP"
   if command -v sha256sum >/dev/null; then sha256sum -c want >/dev/null; else shasum -a 256 -c want >/dev/null; fi
 ) || die "The download doesn't match its checksum. Nothing was installed; try again."
 

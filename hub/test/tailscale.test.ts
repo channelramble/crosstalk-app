@@ -329,6 +329,12 @@ test("the hub's own https address, asked of itself: whether it answers and wheth
   const here = (get: typeof fetch) => ({ get, own, lookup: async () => ["100.64.0.9"] });
   // This very hub answering there: the one thing that makes the network items safe to call done without Tailscale.
   expect(await httpsAnswers("https://mini.tail1.ts.net/", here(serving({ ok: true, version: "0.5.0", name: "crosstalk" })))).toEqual({ answers: true, crosstalk: true, version: "0.5.0" });
+  // Through its https address a hub no longer says its version (that's for this machine and signed-in devices): it
+  // names its run, and the hub that asked knows its own. Another hub's run says nothing.
+  const self = { run: "run-1", version: "0.11.0" };
+  expect(await httpsAnswers("https://mini.tail1.ts.net/", { ...here(serving({ ok: true, name: "crosstalk", run: "run-1" })), self })).toEqual({ answers: true, crosstalk: true, version: "0.11.0" });
+  expect(await httpsAnswers("https://mini.tail1.ts.net/", { ...here(serving({ ok: true, name: "crosstalk", run: "run-2" })), self })).toEqual({ answers: true, crosstalk: true, version: null });
+  asked.splice(1);
   // Its health is the only thing asked, and a redirect away from the tailnet name is never followed.
   expect(asked).toEqual([{ url: "https://mini.tail1.ts.net/api/health", redirect: "error" }]);
   // Something else at that address: it answers, but it isn't Crosstalk.

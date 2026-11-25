@@ -10,7 +10,7 @@ import { runSetupCli } from "./setup/cli";
 import { runBrowserOsCli } from "./browserosCli";
 import { runHook } from "./agents/model-lock";
 import { Store } from "./db";
-import { Auth } from "./auth";
+import { Auth, FIRST_CODE_TTL_MS } from "./auth";
 import { logger } from "./util/log";
 import { rotateLog } from "./setup/system";
 import "./providers/all";
@@ -30,7 +30,8 @@ async function serve() {
   const server = startServer(app);
 
   if (!app.auth.hasDevices()) {
-    const { code } = await app.auth.createPairingCode(24 * 3600_000);
+    // The first code is printed where the service's log keeps it: an hour, then `crosstalk-hub pair` makes another.
+    const { code } = await app.auth.createPairingCode(FIRST_CODE_TTL_MS);
     const where = config.publicUrl ?? `http://${config.host}:${server.port}`;
     // As wide as the address needs: a tailnet name can be longer than the box used to be.
     const lines = ["Pair your first device", `Open ${where}`, `and enter the code:  ${code}`];
@@ -86,7 +87,8 @@ async function pair() {
   const given = at >= 0 ? rest[at + 1] : undefined;
   const minutes = rest.find((a, i) => /^\d+$/.test(a) && (at < 0 || i !== at + 1));
   const ttl = Number(minutes ?? 30) * 60_000;
-  const { code, expiresAt } = await auth.createPairingCode(ttl);
+  // `--for-machine`: the code links another machine's hub (the Linux setup command asks for one), never a person's device.
+  const { code, expiresAt } = await auth.createPairingCode(ttl, rest.includes("--for-machine") ? { kind: "hub" } : {});
   console.log(`Pairing code: ${code}  (valid until ${new Date(expiresAt).toLocaleTimeString()})`);
   // A person at the terminal (or an installer that says the address) also gets the code as a QR to scan. A program
   // that reads the line above gets only that line, as ever.

@@ -20,5 +20,16 @@ export function projectPath(href: string | undefined): string | null {
  * default, which drops unsafe schemes like javascript:.
  */
 export function urlTransform(url: string, fallback: (url: string) => string): string {
-  return /^file:\/\//i.test(url) ? url : fallback(url);
+  if (/^file:\/\//i.test(url)) return url;
+  const kept = fallback(url);
+  // react-markdown also lets irc:, ircs: and xmpp: through, which would hand a tap to whatever other app claims them:
+  // a reply's links go to the web, to mail, or stay inside this app.
+  return /^[a-z][a-z0-9+.-]*:/i.test(kept) && !/^(https?|mailto):/i.test(kept) ? "" : kept;
 }
+
+/** One part of an address the app builds a request from: a name, never a step up or down the path. */
+const PART = String.raw`(?!\.{1,2}(?:[/?#]|$))(?:(?!%2e|%2f|%5c)[^/?#\\])+`;
+/** `/api/rooms/<chat>/uploads/<file>`: a file sent in a chat. */
+export const ATTACHMENT_URL = new RegExp(String.raw`^/api/rooms/[\w-]+/uploads/${PART}$`, "i");
+/** `/api/rooms/<chat>/folders/<folder>/<name>`: a folder sent in a chat. */
+export const FOLDER_URL = new RegExp(String.raw`^/api/rooms/[\w-]+/folders/[\w-]+/${PART}$`, "i");

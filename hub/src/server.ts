@@ -2,10 +2,12 @@ import { existsSync, statSync } from "node:fs";
 import { homedir, userInfo } from "node:os";
 import { join, normalize, resolve, extname, dirname } from "node:path";
 import type { ServerWebSocket } from "bun";
-import { isNoRewindAgent, MESSAGE_MAX, PROVIDER_INFO, memberAccount, messageTooLongWords, type ClientEvent, type Device, type Provider, type ServerEvent } from "@crosstalk/shared";
+import { IDLE_SIGN_OUT_DAYS, idleSignOutDays, isNoRewindAgent, MESSAGE_MAX, PROVIDER_INFO, memberAccount, messageTooLongWords, type ClientEvent, type Device, type Provider, type ServerEvent } from "@crosstalk/shared";
 import type { App } from "./app";
 import { HttpError, previewActivity } from "./engine/engine";
-import { tokenFromRequest } from "./auth";
+import { IDLE, SIGNED_OUT_IDLE, SOCKET_PROTOCOL, socketProtocols, tokenFromRequest } from "./auth";
+import { HOSTNAME, HUB_RUN } from "./config";
+import { policyFor } from "./contentPolicy";
 import { logger } from "./util/log";
 import { cutText } from "./util/text";
 import { startInternalServer } from "./internal-server";
@@ -14,7 +16,7 @@ import { attachmentText, folderFile, getUpload, listFolder, projectFile, saveFol
 import { NEW_CHAT } from "./chats";
 import { dropForkCopies, duplicateChat, exportChat, markDuplicated, receiveDuplicate } from "./duplicate";
 import { pinChat } from "./pins";
-import { json, peerRoute, route, type Ctx, type Handler, type Route } from "./routes";
+import { json, JSON_HEADERS, peerRoute, readJson, route, SMALL_BODY, SMALL_BODY_MS, type Ctx, type Handler, type Route } from "./routes";
 import { askRoutes } from "./asks";
 import { spendRoutes } from "./spend";
 import { serviceRoutes } from "./services";
@@ -113,6 +115,7 @@ export function buildRoutes(app: App): Route[] {
       if (room.chat && room.name === NEW_CHAT && String(b.text ?? "").trim()) {
         app.updateRoom(room.id, { name: cutText(String(b.text).replace(/\s+/g, " ").trim(), 60) });
       }
+      app.auth.spoke(device.id);
       return app.engine.postHumanMessage(params.id, text, device.name, String(b.text ?? ""));
     }),
     route("POST", "/api/rooms/:id/uploads", async ({ params, req, url }) => {
@@ -310,6 +313,8 @@ export function buildRoutes(app: App): Route[] {
       const answers = b.answers && typeof b.answers === "object" ? (b.answers as Record<string, string[]>) : undefined;
       const a = app.engine.decideApproval(params.id, b.decision, device.name, answers);
       if (!a) throw new HttpError(404, "approval not found");
+      // An answer to an agent is something said to it: the device's month without a message starts again.
+      app.auth.spoke(device.id);
       return a;
     }),
     // A device shows a question the agent can go on without: its time to answer starts now.
@@ -337,8 +342,10 @@ export function buildRoutes(app: App): Route[] {
       app.auth.revoke(params.id);
       return { ok: true };
     }),
-    route("POST", "/api/pairing-codes", async () => {
-      const c = await app.auth.createPairingCode();
+    // `{ kind: "hub" }`: a code for linking another machine's hub, whose sign-in is then never taken for a person's device.
+    route("POST", "/api/pairing-codes", async ({ body }) => {
+      const b = (await body().catch(() => null)) as { kind?: unknown } | null;
+      const c = await app.auth.createPairingCode(undefined, b?.kind === "hub" ? { kind: "hub" } : {});
       return { ...c, url: app.config.publicUrl };
     }),
     // ---- Other machines' hubs (Settings → Machines) ----
@@ -623,8 +630,18 @@ export function startServer(app: App) {
     maxRequestBodySize: Number.MAX_SAFE_INTEGER, // no upload size limit; uploads.ts guards free disk space instead
     async fetch(req, srv) {
       const url = new URL(req.url);
-      const cors = corsHeaders(req);
+      const ip = srv.requestIP(req)?.address ?? null;
+      const where: Where = { publicUrl: app.config.publicUrl, port: srv.port ?? app.config.port };
+      // A name this hub doesn't know as its own gets nothing (a page elsewhere whose name was pointed at this machine).
+      if (!knownHost(req.headers.get("host"), where.publicUrl) || !knownHost(req.headers.get("x-forwarded-host"), where.publicUrl)) {
+        return new Response(`${UNKNOWN_HOST}\n`, { status: 421, headers: { "content-type": "text/plain; charset=utf-8", "x-content-type-options": "nosniff" } });
+      }
+      const cors = corsHeaders(req, where);
       if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
+      // Who asks, for the wrong-code limits (callerOf).
+      const who = callerOf(req, ip);
+      // A person's own full sign-in, once checked: only that is shown this hub's own words for an error it didn't plan.
+      let trusted = false;
       try {
         // The agents' internal API is served on the hub's Unix socket only (internal-server.ts), never here. The one
         // exception is the setup API, which answers here too — for a request made on this machine straight to the hub
@@ -634,7 +651,7 @@ export function startServer(app: App) {
         // through `tailscale serve` or another proxy finds nothing here, key or not, and no CORS headers go with it, so
         // no web page can read the answer.
         if (url.pathname.startsWith("/internal/")) {
-          if (url.pathname.startsWith("/internal/setup/") && req.method === "POST" && directLocal(req, srv.requestIP(req)?.address ?? null)) return handleSetupInternal(app, req, url);
+          if (url.pathname.startsWith("/internal/setup/") && req.method === "POST" && directLocal(req, ip)) return handleSetupInternal(app, req, url);
           return new Response("not found", { status: 404 });
         }
 
@@ -644,104 +661,138 @@ export function startServer(app: App) {
         }
         if (url.pathname === "/api/push/notes" && req.method === "POST") {
           // Newer service workers take every notification waiting for them, each with its own text and tag.
-          const b = (await req.json().catch(() => ({}))) as { endpoint?: unknown };
+          const b = obj(await readJson(req, SMALL_BODY, PUBLIC_BODY)) as { endpoint?: unknown };
           return json(app.push.take(typeof b.endpoint === "string" ? b.endpoint : ""), 200, cors);
         }
 
-        if (url.pathname === "/api/health") return json({ ok: true, version: app.hubInfo().version, name: "crosstalk" }, 200, cors);
+        // Anyone may ask whether a Crosstalk answers here. Which version it runs is said only on this machine itself
+        // (the installers, the menu-bar app and `crosstalk-hub setup` ask 127.0.0.1) and to a signed-in device.
+        if (url.pathname === "/api/health") {
+          const version = directLocal(req, ip) || (await app.auth.verify(tokenFromRequest(req, url))) ? { version: app.hubInfo().version } : {};
+          // `run` is a random name for this start of the hub: by it the hub knows its own answer at its https address.
+          return json({ ok: true, ...version, name: "crosstalk", run: HUB_RUN }, 200, cors);
+        }
         // The setup guide for agents on this machine (setup/index.ts): never through tailscale serve or another proxy.
-        if (url.pathname === "/setup.md") return setupGuideResponse(req, srv.requestIP(req)?.address ?? null);
+        if (url.pathname === "/setup.md") return setupGuideResponse(req, ip);
 
         // The connect command runs on a computer that isn't paired; its one-time code is the permission.
         const claim = url.pathname.match(/^\/api\/computers\/claim\/([A-Za-z0-9]{8,64})(\/script|\/ps1)?$/);
         if (claim) {
-          if (tooManyFailures("claim")) return new Response(`${TOO_MANY}\n`, { status: 429, headers: { "content-type": "text/plain; charset=utf-8" } });
+          const plain = (body: string, status: number) => new Response(`${body}\n`, { status, headers: { "content-type": "text/plain; charset=utf-8", "x-content-type-options": "nosniff" } });
+          // Counted before anything is waited for, and taken back unless the code turns out wrong (see `guess`).
+          const g = guess("claim", who);
+          if (!g) return plain(TOO_MANY, 429);
           try {
             if (claim[2] && req.method === "GET") {
               const hub = (app.config.publicUrl || url.origin).replace(/\/+$/, "");
               const body = claim[2] === "/ps1" ? app.computers.windowsScript(claim[1], hub) : app.computers.script(claim[1], hub);
+              g.ok();
               return new Response(body, { headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" } });
             }
             if (!claim[2] && req.method === "POST") {
-              const computer = await app.computers.claim(claim[1], (await req.json().catch(() => ({}))) as Record<string, unknown>);
+              // The invite first: nothing a stranger sends is read.
+              app.computers.checkInvite(claim[1]);
+              g.ok();
+              const computer = await app.computers.claim(claim[1], obj(await readJson(req, SMALL_BODY, PUBLIC_BODY)));
               log.info(`connected computer "${computer.label}" as ${computer.name}`);
               return json(computer, 200, cors);
             }
+            g.ok();
           } catch (e) {
             const status = e instanceof HttpError ? e.status : 500;
-            if (status === 401) recordFailure("claim");
-            return new Response(`${e instanceof Error ? e.message : String(e)}\n`, { status, headers: { "content-type": "text/plain; charset=utf-8" } });
+            if (status !== 401) g.ok();
+            return plain(e instanceof HttpError ? e.message : wentWrong(e, req, url).error, status);
           }
         }
 
         // The Linux setup command runs on a machine that isn't paired; its one-time token is the permission.
         const install = url.pathname.match(/^\/api\/machines\/install\/([A-Za-z0-9]{16,64})(?:\/(crosstalk-hub-linux-(x64|arm64)|install\.sh|claim))?$/);
         if (install) {
-          if (tooManyFailures("install")) return new Response(`${TOO_MANY}\n`, { status: 429, headers: { "content-type": "text/plain; charset=utf-8" } });
+          const plain = (body: string, status: number) => new Response(`${body}\n`, { status, headers: { "content-type": "text/plain; charset=utf-8", "x-content-type-options": "nosniff" } });
+          const g = guess("install", who);
+          if (!g) return plain(TOO_MANY, 429);
           try {
             const [, token, part, arch] = install;
             const text = (body: string) => new Response(body, { headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" } });
+            // The token first (401 when it isn't live): nothing a stranger sends is read.
+            app.machines.checkInvite(token);
+            g.ok();
             if (!part && req.method === "GET") return text(app.machines.script(token, (app.config.publicUrl || url.origin).replace(/\/+$/, "")));
             if (part === "install.sh" && req.method === "GET") return text(app.machines.installer(token));
             if (arch && req.method === "GET") return new Response(Bun.file(app.machines.binary(token, arch)), { headers: { "content-type": "application/octet-stream", "cache-control": "no-store" } });
-            if (part === "claim" && req.method === "POST") return json(await app.machines.claim(token, await req.json().catch(() => ({}))), 200, cors);
+            if (part === "claim" && req.method === "POST") return json(await app.machines.claim(token, obj(await readJson(req, SMALL_BODY, PUBLIC_BODY))), 200, cors);
             return new Response("not found\n", { status: 404 });
           } catch (e) {
             const status = e instanceof HttpError ? e.status : 500;
-            if (status === 401) recordFailure("install");
-            return new Response(`${e instanceof Error ? e.message : String(e)}\n`, { status, headers: { "content-type": "text/plain; charset=utf-8" } });
+            if (status !== 401) g.ok();
+            return plain(e instanceof HttpError ? e.message : wentWrong(e, req, url).error, status);
           }
         }
 
         // A linked machine's hub passes on a notification; its own key (not a device sign-in) is the permission.
         if (url.pathname === "/api/push/relay" && req.method === "POST") {
-          if (tooManyFailures("relay")) return json({ error: TOO_MANY }, 429, cors);
+          const g = guess("relay", who);
+          if (!g) return json({ error: TOO_MANY }, 429, cors);
           try {
-            await app.machines.relay(tokenFromRequest(req, url), await req.json().catch(() => ({})));
+            // The key first: nothing a stranger sends is read.
+            const key = tokenFromRequest(req, url);
+            if (!(await app.machines.relayKey(key))) return json({ error: "unauthorized" }, 401, cors);
+            g.ok();
+            await app.machines.relay(key, obj(await readJson(req, SMALL_BODY, PUBLIC_BODY)));
             return json({ ok: true }, 200, cors);
           } catch (e) {
             const status = e instanceof HttpError ? e.status : 500;
-            if (status === 401) recordFailure("relay");
-            return json({ error: e instanceof Error ? e.message : String(e) }, status, cors);
+            if (status !== 401) g.ok();
+            return json(e instanceof HttpError ? { error: e.message } : wentWrong(e, req, url), status, cors);
           }
         }
 
         if (url.pathname === "/api/pair" && req.method === "POST") {
-          if (tooManyFailures("pair")) return json({ error: TOO_MANY }, 429, cors);
-          const b = (await req.json().catch(() => ({}))) as { code?: string; name?: string; platform?: string };
+          // The attempt counts from the moment it arrives, before its body is waited for: a crowd of requests that
+          // send their headers first and their codes later is counted as it comes in, not after all of them passed.
+          const g = guess("pair", who);
+          if (!g) return json({ error: TOO_MANY }, 429, cors);
+          const b = obj(await readJson(req, SMALL_BODY, PUBLIC_BODY)) as { code?: unknown; name?: unknown; platform?: unknown };
           const res = await app.auth.pair(String(b.code ?? ""), String(b.name ?? "Device"), String(b.platform ?? ""));
-          if (!res) recordFailure("pair");
           if (!res) return json({ error: "That code is wrong or expired. Make a new one on a paired device, or run `crosstalk-hub pair` on the server." }, 401, cors);
+          g.ok();
           log.info(`paired device "${res.device.name}" (${res.device.platform})`);
           return json({ ...res, hub: app.hubInfo() }, 200, cors);
         }
 
-        if (url.pathname === "/api/ws") {
+        if (url.pathname === "/api/ws" || url.pathname === "/api/screen/ws") {
+          // A page elsewhere can open a socket here (browsers ask no leave for that), so the page's address must be one
+          // of the app's. No Origin at all is a native app, another hub or a test.
+          const origin = req.headers.get("origin");
+          if (origin && !originAllowed(origin, where, req) && !sameHost(origin, req)) return new Response("forbidden", { status: 403 });
           const device = await app.auth.verify(tokenFromRequest(req, url));
           if (!device) return new Response("unauthorized", { status: 401 });
-          // Live events carry everything (terminals included): people's devices only.
-          if (device.scope === "peer") return new Response("forbidden", { status: 403 });
-          if (srv.upgrade(req, { data: { device, v: protocolOf(url) } })) return undefined;
-          return new Response("upgrade failed", { status: 400 });
-        }
-
-        // The live view of this machine's screen (screen/proxy.ts): people's own devices only.
-        if (url.pathname === "/api/screen/ws") {
-          const device = await app.auth.verify(tokenFromRequest(req, url));
-          if (!device) return new Response("unauthorized", { status: 401 });
-          if (!isPersonDevice(device)) return new Response("forbidden", { status: 403 });
-          if (srv.upgrade(req, { data: { device, v: 0, screen: true } })) return undefined;
+          const screen = url.pathname === "/api/screen/ws";
+          // Live events carry everything (terminals included): people's devices only. The live view of this machine's
+          // screen (screen/proxy.ts): people's own devices only.
+          if (screen ? !isPersonDevice(device) : device.scope === "peer") return new Response("forbidden", { status: 403 });
+          // An app that offered the "crosstalk" subprotocol (its token beside it) is answered with that name, never the token.
+          const headers = socketProtocols(req).includes(SOCKET_PROTOCOL) ? { "sec-websocket-protocol": SOCKET_PROTOCOL } : undefined;
+          const data: WsData = screen ? { device, v: 0, screen: true } : { device, v: protocolOf(url) };
+          if (srv.upgrade(req, { headers, data })) return undefined;
           return new Response("upgrade failed", { status: 400 });
         }
 
         if (url.pathname.startsWith("/api/")) {
           const device = await app.auth.verify(tokenFromRequest(req, url));
-          if (!device) return json({ error: "unauthorized" }, 401, cors);
+          if (!device) {
+            // A device Crosstalk signed out for saying nothing is told so (only the holder of its old token is).
+            if ((await app.auth.endedWhy(tokenFromRequest(req, url))) === IDLE) {
+              return json({ error: `This device was signed out because it sent no message for ${idleSignOutDays(app.hubSettings()) || IDLE_SIGN_OUT_DAYS} days. Pair it again with a new code.`, code: SIGNED_OUT_IDLE }, 401, cors);
+            }
+            return json({ error: "unauthorized" }, 401, cors);
+          }
           for (const r of routes) {
             if (r.method !== req.method) continue;
             const m = r.pattern.exec(url.pathname);
             if (!m) continue;
             if (device.scope === "peer" && !r.peer) return json({ error: "This came from a linked machine's agents, which can't use this.", code: "peer_scope" }, 403, cors);
+            trusted = device.scope !== "peer";
             const params: Record<string, string> = {};
             r.keys.forEach((k, i) => (params[k] = decodeURIComponent(m[i + 1])));
             const out = await r.handler({
@@ -749,10 +800,8 @@ export function startServer(app: App) {
               url,
               params,
               device,
-              body: async () => {
-                const t = await req.text();
-                return t ? JSON.parse(t) : {};
-              },
+              // Uploads stream to disk from `req` themselves; everything else is JSON of a bounded size.
+              body: () => readJson(req, url.pathname === "/api/chats/duplicate" ? COPY_BODY : JSON_BODY),
             });
             if (out instanceof Response) {
               for (const [key, value] of Object.entries(cors)) out.headers.set(key, value);
@@ -761,7 +810,7 @@ export function startServer(app: App) {
             // A big answer (a chat's history) goes out compressed where the app takes it (compress.ts).
             const text = JSON.stringify(out ?? { ok: true });
             const packed = compressedJson(text, req.headers.get("accept-encoding"));
-            if (packed) return new Response(packed.body, { status: 200, headers: { "content-type": "application/json", "content-encoding": packed.encoding, vary: "accept-encoding", ...cors } });
+            if (packed) return new Response(packed.body, { status: 200, headers: { ...JSON_HEADERS, "content-encoding": packed.encoding, vary: "accept-encoding", ...cors } });
             return json(out ?? { ok: true }, 200, cors);
           }
           return json({ error: "not found" }, 404, cors);
@@ -770,9 +819,13 @@ export function startServer(app: App) {
         return serveStatic(webDir, url.pathname, req.headers.get("accept-encoding"));
       } catch (e) {
         if (e instanceof HttpError) return json({ error: e.message, ...(e.code ? { code: e.code } : {}) }, e.status, cors);
-        const msg = e instanceof Error ? e.message : String(e);
-        log.error(`${req.method} ${url.pathname}: ${msg}`);
-        return json({ error: msg }, 500, cors);
+        // Words this hub's own code wrote for the person ("Stop the agent first."), to the person's own device.
+        if (trusted && ownWords(e)) {
+          log.error(`${req.method} ${url.pathname}: ${e.message}`);
+          return json({ error: e.message }, 500, cors);
+        }
+        // Anything else (a database's complaint, a path, a bug's own text) stays in the log.
+        return json(wentWrong(e, req, url), 500, cors);
       }
     },
     websocket: {
@@ -862,34 +915,91 @@ export function startServer(app: App) {
   return server;
 }
 
-const ALLOWED_ORIGINS = [/^tauri:\/\/localhost$/, /^https?:\/\/tauri\.localhost$/, /^http:\/\/localhost(:\d+)?$/, /^http:\/\/127\.0\.0\.1(:\d+)?$/, /^https:\/\/[\w.-]+\.ts\.net$/];
+// ---------------------------------------------------------------------------------------- who may ask, and from where
+
+/** This hub's own address, as far as it knows it. */
+export interface Where {
+  publicUrl: string | null;
+  port: number;
+}
+
+const LOOPBACK_IPS = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
+const LOOPBACK_NAMES = ["127.0.0.1", "localhost", "[::1]"];
+/** The native apps' pages. */
+const APP_ORIGINS = [/^tauri:\/\/localhost$/, /^https?:\/\/tauri\.localhost$/];
+const UNKNOWN_HOST = "This address isn't one Crosstalk knows for this machine. If you reach it through your own proxy, set CROSSTALK_ALLOWED_HOSTS.";
+
+const envList = (name: string) => (process.env[name] ?? "").split(",").map((v) => v.trim().toLowerCase().replace(/\/+$/, "")).filter(Boolean);
+/** "Mini.Tailnet.ts.net:443" → "mini.tailnet.ts.net"; "[::1]:7420" → "[::1]". */
+const bareHost = (h: string) => h.trim().toLowerCase().replace(/:\d+$/, "").replace(/\.$/, "");
+/** "mini.tailnet.ts.net" → "tailnet.ts.net": the tailnet a machine's name is in (null for any other name). */
+function tailnetOf(name: string): string | null {
+  const labels = name.split(".");
+  return name.endsWith(".ts.net") && labels.length >= 4 ? labels.slice(1).join(".") : null;
+}
+const urlOf = (v: string | null | undefined): URL | null => {
+  try {
+    return v ? new URL(v) : null;
+  } catch {
+    return null;
+  }
+};
+/** The name the browser used for this hub: what a proxy on this machine says it was asked for, or the request's own Host. */
+const askedHost = (req: Request) => (req.headers.get("x-forwarded-host") ?? req.headers.get("host") ?? "").split(",")[0].trim().toLowerCase();
 
 /**
- * Throttles wrong guesses at the two endpoints that accept a code without a paired device (pairing and
- * connecting a computer): after 20 failures in 10 minutes, further attempts are refused until the window passes.
+ * Whether a request's Host is one this machine goes by. A page on someone else's site can have its name pointed at
+ * this machine's address (DNS rebinding) and would then be "the same site" to the browser; it can't do that with an IP
+ * address, with a name on a tailnet, or with a name this machine has. Known: localhost, any IP address, the hub's own
+ * address (`publicUrl`), this computer's name (and `<name>.local`), any `*.ts.net` name, and CROSSTALK_ALLOWED_HOSTS
+ * (comma-separated, for a hub behind someone's own proxy). No Host at all is no browser.
  */
-const FAIL_WINDOW = 10 * 60_000;
-const FAIL_LIMIT = 20;
-const failures = new Map<string, number[]>();
-function tooManyFailures(bucket: string): boolean {
-  const now = Date.now();
-  const recent = (failures.get(bucket) ?? []).filter((t) => now - t < FAIL_WINDOW);
-  failures.set(bucket, recent);
-  return recent.length >= FAIL_LIMIT;
+export function knownHost(header: string | null, publicUrl: string | null): boolean {
+  if (!header) return true;
+  const h = bareHost(header.split(",")[0]);
+  if (!h) return true;
+  if (h.startsWith("[")) return /^\[[0-9a-f:.]+\]$/.test(h);
+  if (h === "localhost" || /^\d{1,3}(\.\d{1,3}){3}$/.test(h)) return true;
+  if (h.endsWith(".ts.net")) return true;
+  const own = HOSTNAME.toLowerCase().replace(/\.$/, "");
+  const short = own.replace(/\.local$/, "");
+  if (own && (h === own || h === short || h === `${short}.local`)) return true;
+  if (h === urlOf(publicUrl)?.hostname.toLowerCase()) return true;
+  return envList("CROSSTALK_ALLOWED_HOSTS").map(bareHost).includes(h);
 }
-function recordFailure(bucket: string) {
-  failures.set(bucket, [...(failures.get(bucket) ?? []), Date.now()]);
-}
-/** For tests. */
-export function resetFailureLimits() {
-  failures.clear();
-}
-const TOO_MANY = "Too many wrong codes. Wait a few minutes, then try again.";
 
-function corsHeaders(req: Request): Record<string, string> {
+/**
+ * Whether a page at `origin` may read this hub's answers and open its sockets: the native apps, this hub's own address
+ * (`publicUrl`, and 127.0.0.1 or localhost on its own port), and the person's other machines — `https://<any
+ * name>.<this hub's tailnet>`, because the app served by one of their machines calls the others directly. The tailnet
+ * is the one in `publicUrl`, or the one in the name this request was asked under. Other pages on this machine (a dev
+ * server on another port) only when CROSSTALK_DEV_ORIGINS lists them, comma-separated.
+ */
+export function originAllowed(origin: string, where: Where, req?: Request): boolean {
+  if (APP_ORIGINS.some((r) => r.test(origin))) return true;
+  const o = urlOf(origin);
+  if (!o || o.origin !== origin) return false;
+  if (envList("CROSSTALK_DEV_ORIGINS").includes(origin)) return true;
+  const pub = urlOf(where.publicUrl);
+  if (pub && pub.origin === origin) return true;
+  if (o.protocol === "http:" && LOOPBACK_NAMES.includes(o.hostname) && Number(o.port || 80) === where.port) return true;
+  if (o.protocol !== "https:") return false;
+  const net = tailnetOf(o.hostname);
+  if (!net) return false;
+  return (pub ? tailnetOf(pub.hostname.toLowerCase()) : null) === net || (req ? tailnetOf(bareHost(askedHost(req))) : null) === net;
+}
+
+/** The app's own page asking the hub that served it: its Origin is the address the browser used for this very request. */
+function sameHost(origin: string, req: Request): boolean {
+  const o = urlOf(origin);
+  if (!o || (o.protocol !== "http:" && o.protocol !== "https:")) return false;
+  return [askedHost(req), (req.headers.get("host") ?? "").trim().toLowerCase()].includes(o.host);
+}
+
+function corsHeaders(req: Request, where: Where): Record<string, string> {
   const origin = req.headers.get("origin");
-  // Auth is a bearer token (never a cookie), so reflecting known app origins is safe.
-  if (!origin || !ALLOWED_ORIGINS.some((r) => r.test(origin))) return {};
+  // Auth is a bearer token (never a cookie); still, only the app's own pages are told they may read an answer.
+  if (!origin || !originAllowed(origin, where, req)) return {};
   return {
     "access-control-allow-origin": origin,
     "access-control-allow-headers": "authorization, content-type",
@@ -897,6 +1007,92 @@ function corsHeaders(req: Request): Record<string, string> {
     "access-control-max-age": "600",
     vary: "origin",
   };
+}
+
+// --------------------------------------------------------------------------------------------------- wrong-code limits
+
+/**
+ * Wrong guesses at what accepts a code without a paired device (pairing, connecting a computer, setting up a machine,
+ * a linked machine's notification key) are limited per caller: 20 in 10 minutes, then that caller waits. One caller
+ * guessing doesn't lock anyone else out. A far higher ceiling for everyone together (1,000) stands behind it, for a
+ * caller who comes from many addresses.
+ */
+const FAIL_WINDOW = 10 * 60_000;
+const FAIL_LIMIT = 20;
+const FAIL_LIMIT_ALL = 1000;
+const failures = new Map<string, number[]>();
+
+/**
+ * Who asks: the address the connection comes from. A proxy on this machine (`tailscale serve`) makes every connection
+ * come from 127.0.0.1 and says who it was for: the last X-Forwarded-For address (the one the nearest proxy wrote, not
+ * what the caller may have sent along) or, without one, the Tailscale sign-in. Straight from this machine is its own caller.
+ */
+function callerOf(req: Request, ip: string | null): string {
+  if (!ip) return "unknown";
+  if (!LOOPBACK_IPS.has(ip)) return ip;
+  const via = req.headers.get("x-forwarded-for")?.split(",").pop()?.trim() || req.headers.get("tailscale-user-login")?.trim();
+  return via ? `via ${via.slice(0, 80).toLowerCase()}` : "local";
+}
+
+function recentFailures(key: string, now: number): number[] {
+  const list = (failures.get(key) ?? []).filter((t) => now - t < FAIL_WINDOW);
+  if (list.length) failures.set(key, list);
+  else failures.delete(key);
+  return list;
+}
+
+/**
+ * Counts one attempt at `what` by `who`, at once: before the request's body or anything else is waited for, so requests
+ * held open together are each counted as they arrive. Null: this caller (or everyone together) is over the limit.
+ * `ok()` takes the attempt back, for one that wasn't a wrong code.
+ */
+function guess(what: string, who: string): { ok: () => void } | null {
+  const now = Date.now();
+  if (failures.size > 4000) for (const key of [...failures.keys()]) recentFailures(key, now);
+  const keys = [`${what}|${who}`, `${what}|*`];
+  const [mine, all] = keys.map((k) => recentFailures(k, now));
+  if (mine.length >= FAIL_LIMIT || all.length >= FAIL_LIMIT_ALL) return null;
+  for (const k of keys) failures.set(k, [...(failures.get(k) ?? []), now]);
+  let back = false;
+  return {
+    ok: () => {
+      if (back) return;
+      back = true;
+      for (const k of keys) {
+        const list = failures.get(k) ?? [];
+        const i = list.lastIndexOf(now);
+        if (i >= 0) list.splice(i, 1);
+        if (!list.length) failures.delete(k);
+      }
+    },
+  };
+}
+/** For tests. */
+export function resetFailureLimits() {
+  failures.clear();
+}
+const TOO_MANY = "Too many wrong codes. Wait a few minutes, then try again.";
+
+// ------------------------------------------------------------------------------------------------- bodies and errors
+
+/** What a request without a sign-in may send, and how long it has to (routes.ts). A body that isn't JSON holds no code. */
+const PUBLIC_BODY = { timeoutMs: SMALL_BODY_MS, lenient: true };
+/** A signed-in device's JSON: a message is at most MESSAGE_MAX characters (under half a megabyte), so 4 MB is ample. */
+const JSON_BODY = Math.max(4 * 1024 * 1024, MESSAGE_MAX * 8);
+/** A whole chat another machine sends to copy (duplicate.ts keeps it to 5,000 messages and 5 million characters). */
+const COPY_BODY = 32 * 1024 * 1024;
+const obj = (v: unknown): Record<string, unknown> => (v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {});
+
+/** Words this hub's own code wrote for the person (a plain Error thrown on purpose), not an error from underneath it. */
+function ownWords(e: unknown): e is Error {
+  return e instanceof Error && e.constructor === Error && !!e.message && !("code" in e) && !("errno" in e) && !("syscall" in e);
+}
+
+/** An error nobody planned for: its own text goes to the log under a short id, and the id goes back with plain words. */
+function wentWrong(e: unknown, req: Request, url: URL): { error: string; code: string; id: string } {
+  const id = crypto.randomUUID().slice(0, 8);
+  log.error(`${req.method} ${url.pathname} [${id}]: ${e instanceof Error ? e.stack ?? e.message : String(e)}`);
+  return { error: "Something went wrong on the machine. Its log has the details.", code: "went_wrong", id };
 }
 
 function resolveWebDir(): string | null {
@@ -931,7 +1127,9 @@ async function serveStatic(webDir: string | null, pathname: string, acceptEncodi
   const cache = (p: string) => (p.includes("/assets/") ? "public, max-age=31536000, immutable" : "no-cache");
   // The app's text files go out compressed where the browser takes it (compress.ts): about a quarter of the size.
   const send = async (file: Blob, path: string, key: string, cacheControl: string) => {
-    const headers = { "content-type": type(path), "cache-control": cacheControl, vary: "accept-encoding", ...SECURITY_HEADERS };
+    const headers: Record<string, string> = { "content-type": type(path), "cache-control": cacheControl, vary: "accept-encoding", ...SECURITY_HEADERS };
+    // The page itself says what may run in it (contentPolicy.ts).
+    if (extname(path) === ".html") headers["content-security-policy"] = await policyFor(key, file);
     const packed = await compressedFile(key, path, async () => new Uint8Array(await file.arrayBuffer()), acceptEncoding);
     return packed ? new Response(packed.bytes, { headers: { ...headers, "content-encoding": packed.encoding } }) : new Response(file, { headers });
   };

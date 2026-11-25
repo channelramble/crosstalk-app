@@ -96,7 +96,7 @@ export class Setup {
       p.mac ? within(p.mac(), 10_000) : undefined,
       p.staged ? within(p.staged(), 6000) : null,
       within(app.services.localServers(), 3000),
-      Promise.all(machines.map((m) => (p.hubVersion ? within(p.hubVersion(m.url), 4000) : null))),
+      Promise.all(machines.map((m) => (p.hubVersion ? within(p.hubVersion(m.url, app.machines.linkOf(m.id)?.token), 4000) : null))),
       // GitHub can be slow: longer than the others, still short enough that the checklist never waits on it (a probe
       // that times out reads as "couldn't check", which the item says in plain words). The probe's own worst case fits
       // inside this: it reads the bundle, then asks GitHub and the browser's own port at the same time, and both of
@@ -150,6 +150,17 @@ export class Setup {
    * at once, logged, and every paired phone is told: an agent that's been misled could otherwise pair a device itself.
    */
   async pairCode(minutes: unknown): Promise<{ code: string; expiresAt: number; minutes: number; url: string | null; localUrl: string }> {
+    // Only until a person's device is paired. After that a new device is paired from one that already is (it shows the
+    // code and its QR), or by the person at the machine: a setup agent, or anything else holding the setup key, can't
+    // then make itself a way in.
+    const people = this.app.store.listDevices().filter((d) => d.scope !== "peer" && !d.hubId && d.platform !== "Crosstalk hub");
+    if (people.length) {
+      throw new HttpError(
+        409,
+        `A device is already paired with ${this.app.machineName()}, so new codes come from it: ${settingsPath("devices", "Pair a new device")} on that device. Or the person can run \`crosstalk-hub pair\` in a terminal on this machine.`,
+        "already_paired",
+      );
+    }
     const m = Math.max(5, Math.min(60, Math.round(Number(minutes ?? 15)) || 15));
     // Where the phone opens it, asked now (an agent may just have set up tailscale serve). Null: nowhere a phone can
     // reach yet. Asked before the count below, so two calls at once can't both pass it while this runs.

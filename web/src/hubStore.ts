@@ -170,7 +170,8 @@ export interface HubHooks {
   /** A room was deleted on this hub (or, found on reconnecting, while this device wasn't listening). */
   roomGone(roomId: string): void;
   /** This device was signed out of the hub. */
-  signedOut(): void;
+  /** `why`: "idle" when the machine signed this device out for sending no message for a month. */
+  signedOut(why?: "idle"): void;
   /** A new request is waiting (a notice, or a notification while the page is in the background). */
   approval(a: Approval, s: HubState): void;
   ptyData(ptyId: string, data: string): void;
@@ -356,7 +357,7 @@ export function createHubStore(conn: Connection, hooks: HubHooks): StoreApi<HubS
         .then(
           () => {},
           (e) => {
-            if (generation === connectionGeneration && !stopped && e instanceof ApiError && e.status === 401) hooks.signedOut();
+            if (generation === connectionGeneration && !stopped && e instanceof ApiError && e.status === 401) hooks.signedOut(e.code === "signed_out_idle" ? "idle" : undefined);
           },
         )
         .finally(() => {
@@ -802,7 +803,7 @@ export function createHubStore(conn: Connection, hooks: HubHooks): StoreApi<HubS
           clearTimeout(slowSync);
           snapshotEvents = null;
           if (e instanceof ApiError && e.status === 401) {
-            hooks.signedOut();
+            hooks.signedOut(e.code === "signed_out_idle" ? "idle" : undefined);
           } else {
             // HTTP can lag behind an already-open socket after a restart. Retry without an unhandled rejection; what's
             // shown may be out of date meanwhile, and says so, with the hub's own words once it has gone on a while.

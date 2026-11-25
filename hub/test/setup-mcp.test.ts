@@ -196,11 +196,13 @@ test("setup_status and setup_guide: the checklist with a line saying what's left
   }
 });
 
-test("pair_code: a code that pairs once, at the address a phone can open, at most two waiting unused, and every phone is told", async () => {
+test("pair_code: until a device is paired, a code that pairs once, at the address a phone can open, at most two waiting unused, and every phone is told", async () => {
   const mcp = launch();
   notes = [];
   resetFailureLimits();
   const tailscale = app.setup.probes.tailscale!;
+  // A machine nobody has paired a device with yet (this file's phone is set aside for the test).
+  app.store.db.query("UPDATE devices SET revoked = 1 WHERE name = 'Phone'").run();
   try {
     // tailscale serve sends https elsewhere (to 7420; this hub listens on port 0): no address a phone can open yet.
     const first = await mcp.call("pair_code", { minutes: 10 });
@@ -213,18 +215,31 @@ test("pair_code: a code that pairs once, at the address a phone can open, at mos
     expect(first.text).toContain("Don't type it, or open that page, yourself.");
     expect(notes.map((n) => n.tag)).toEqual(["setup-pair-code"]);
     expect(notes[0].body).toContain("made a code to pair a device, valid 10 minutes");
-    const pair = () => fetch(`${base}/api/pair`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ code, name: "New phone", platform: "iPhone" }) });
-    expect((await pair()).status).toBe(200);
-    expect((await pair()).status).toBe(401);
     // Now serve sends this machine's name to the hub: that's where the phone goes, checked when the code is made.
     app.setup.probes.tailscale = async () => ({ ...(await tailscale())!, serve: { target: `http://127.0.0.1:${app.config.port}`, funnel: false } });
-    // That one is used: two more may wait, a third waits for one of them.
-    const second = await mcp.call("pair_code");
-    expect(second).toMatchObject({ isError: false, text: expect.stringContaining("Tell the person to open https://mini.tail1.ts.net on their phone or computer and type it there.") });
-    expect((await mcp.call("pair_code", { minutes: 600 })).text).toContain("60 minutes");
+    // Two may wait unused (and never for longer than an hour); a third waits for one of them.
+    const second = await mcp.call("pair_code", { minutes: 600 });
+    expect(second.isError).toBe(false);
+    expect(second.text).toContain("Tell the person to open https://mini.tail1.ts.net on their phone or computer and type it there.");
+    expect(second.text).toContain("60 minutes");
     const third = await mcp.call("pair_code");
     expect(third).toMatchObject({ isError: true, text: expect.stringContaining("still unused") });
+    // The first one pairs a phone, once.
+    const pair = () => fetch(`${base}/api/pair`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ code, name: "New phone", platform: "iPhone" }) });
+    const paired = await pair();
+    expect(paired.status).toBe(200);
+    expect((await pair()).status).toBe(401);
+    // With a person's device paired, setup makes no more codes: the next device is paired from that one, or by the
+    // person at the machine. Whatever holds the setup key can't make itself a way in.
+    const after = await mcp.call("pair_code");
+    expect(after.isError).toBe(true);
+    expect(after.text).toContain("A device is already paired");
+    expect(after.text).toContain("Pair a new device");
+    expect(after.text).toContain("crosstalk-hub pair");
+    const { device } = (await paired.json()) as { device: { id: string } };
+    app.auth.revoke(device.id);
   } finally {
+    app.store.db.query("UPDATE devices SET revoked = 0 WHERE name = 'Phone'").run();
     app.setup.probes.tailscale = tailscale;
     resetFailureLimits();
     mcp.close();

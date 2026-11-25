@@ -1,9 +1,11 @@
 import { expect, test } from "bun:test";
 import { fitZoom, keysFor, screenHeading, screenSocketUrl, windowButtons, windowLabel, windowPlace, KEY } from "./screen";
 
-test("the live view's address: the machine's own, as a WebSocket, with this device's sign-in", () => {
-  expect(screenSocketUrl({ baseUrl: "", token: "a b" }, "https://mini.example.ts.net")).toBe("wss://mini.example.ts.net/api/screen/ws?token=a%20b");
-  expect(screenSocketUrl({ baseUrl: "http://127.0.0.1:7420", token: "t" }, "https://elsewhere")).toBe("ws://127.0.0.1:7420/api/screen/ws?token=t");
+test("the live view's address: the machine's own, as a WebSocket, without this device's sign-in in it", () => {
+  expect(screenSocketUrl({ baseUrl: "", token: "a b" }, "https://mini.example.ts.net")).toBe("wss://mini.example.ts.net/api/screen/ws");
+  expect(screenSocketUrl({ baseUrl: "http://127.0.0.1:7420", token: "t" }, "https://elsewhere")).toBe("ws://127.0.0.1:7420/api/screen/ws");
+  // A machine on an older version takes it only there.
+  expect(screenSocketUrl({ baseUrl: "", token: "a b" }, "https://mini.example.ts.net", true)).toBe("wss://mini.example.ts.net/api/screen/ws?token=a%20b");
 });
 
 test("a window fills the view's width, never past twice life size, never smaller than the whole screen", () => {

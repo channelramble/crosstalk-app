@@ -24,6 +24,8 @@ const FIX = join(import.meta.dir, "../../hub/test/fixtures");
 
 // As e2e/hub.ts: nothing of the live hub's, and nothing on this machine or the internet is asked about.
 for (const key of Object.keys(process.env)) if (key.startsWith("CROSSTALK_") || key.startsWith("FAKE_")) delete process.env[key];
+// The page under test is the dev server's, and it calls this hub directly on its own port.
+process.env.CROSSTALK_DEV_ORIGINS = "http://127.0.0.1:5198";
 process.env.CROSSTALK_TAILSCALE_BIN = join(dir, "no-tailscale");
 process.env.CROSSTALK_TAILSCALE_APP_DIR = join(dir, "no-tailscale-app");
 process.env.CROSSTALK_GITHUB_API = "http://127.0.0.1:9";

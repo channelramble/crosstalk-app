@@ -83,22 +83,29 @@ test("a socket rechecks device access before accepting terminal input or sending
   } finally { inputSocket.close(); outputSocket.close(); server.stop(true); await app.engine.shutdown(); app.store.close(); rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("wrong pairing and connect codes are throttled after 20 failures; every API route needs a paired device", async () => {
+test("wrong pairing and connect codes are throttled per caller after 20 failures; every API route needs a paired device", async () => {
   const dir = mkdtempSync(join(tmpdir(), "ct-security-"));
   const app = new App({ dbPath: ":memory:", config: { port: 0, host: "127.0.0.1", publicUrl: null, workspaceRoot: dir, maxHopsDefault: 6 } });
   const server = startServer(app);
   resetFailureLimits();
   try {
     const base = `http://127.0.0.1:${server.port}`;
-    const pair = (code: string) => fetch(`${base}/api/pair`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ code, name: "x" }) });
-    for (let i = 0; i < 20; i++) expect((await pair("WRONG-CODE")).status).toBe(401);
-    // Locked: even a real code waits until the window passes.
+    // Callers behind the proxy on this machine are told apart by the address it forwards for; no header is this machine itself.
+    const from = (ip?: string): Record<string, string> => (ip ? { "x-forwarded-for": ip } : {});
+    const pair = (code: string, ip?: string) => fetch(`${base}/api/pair`, { method: "POST", headers: { "content-type": "application/json", ...from(ip) }, body: JSON.stringify({ code, name: "x" }) });
+    for (let i = 0; i < 20; i++) expect((await pair("WRONG-CODE", "203.0.113.5")).status).toBe(401);
+    // Locked for the caller who guessed: even a real code waits until the window passes.
     const real = await app.auth.createPairingCode();
-    expect((await pair(real.code)).status).toBe(429);
-    for (let i = 0; i < 20; i++) expect((await fetch(`${base}/api/computers/claim/wrongtoken${i}/script`)).status).toBe(401);
-    expect((await fetch(`${base}/api/computers/claim/wrongtokenX/script`)).status).toBe(429);
+    expect((await pair(real.code, "203.0.113.5")).status).toBe(429);
+    for (let i = 0; i < 20; i++) expect((await fetch(`${base}/api/computers/claim/wrongtoken${i}/script`, { headers: from("203.0.113.5") })).status).toBe(401);
+    expect((await fetch(`${base}/api/computers/claim/wrongtokenX/script`, { headers: from("203.0.113.5") })).status).toBe(429);
+    // Nobody else is locked out by it: another caller's wrong code is just wrong, and their good code pairs.
+    expect((await fetch(`${base}/api/computers/claim/wrongtokenX/script`, { headers: from("203.0.113.6") })).status).toBe(401);
+    expect((await pair("WRONG-CODE", "203.0.113.6")).status).toBe(401);
+    expect((await pair(real.code, "203.0.113.6")).status).toBe(200);
+    expect((await pair((await app.auth.createPairingCode()).code)).status).toBe(200);
     resetFailureLimits();
-    expect((await pair(real.code)).status).toBe(200);
+    expect((await pair((await app.auth.createPairingCode()).code, "203.0.113.5")).status).toBe(200);
     // Without a device token, the app's API refuses everything except the few public endpoints.
     for (const [method, path] of [["GET", "/api/state"], ["GET", "/api/rooms/x/history"], ["POST", "/api/rooms"], ["GET", "/api/settings/defaults"], ["GET", "/api/computers"], ["POST", "/api/computers/invite"], ["GET", "/api/rooms/x/files?path=a"], ["POST", "/api/rooms/x/uploads"], ["GET", "/api/devices"], ["GET", "/api/pty"], ["GET", "/api/setup"], ["POST", "/api/setup/connect"]] as const) {
       expect([method, path, (await fetch(base + path, { method })).status]).toEqual([method, path, 401]);

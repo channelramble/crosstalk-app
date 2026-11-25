@@ -10,6 +10,8 @@ for (const key of Object.keys(process.env)) if (key.startsWith("CROSSTALK_")) de
 // This hub asks about itself (Settings' checklist, the image editor's link, Local models): it must never run this
 // Mac's real Tailscale (a path that isn't there reads as "not installed") or reach GitHub and Hugging Face (nothing
 // listens on port 9, so a request fails at once).
+// Some tests stand this hub in for another machine: the dev server's page then calls it directly, on its own port.
+process.env.CROSSTALK_DEV_ORIGINS = "http://127.0.0.1:5198";
 process.env.CROSSTALK_TAILSCALE_BIN = join(dir, "no-tailscale");
 process.env.CROSSTALK_TAILSCALE_APP_DIR = join(dir, "no-tailscale-app");
 process.env.CROSSTALK_GITHUB_API = "http://127.0.0.1:9";
