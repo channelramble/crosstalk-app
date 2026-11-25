@@ -18,11 +18,5 @@ export function screenRoutes(app: App): Route[] {
     route("POST", "/api/screen/check", ({ device }) => (personOnly(device), app.screen.check())),
     route("PUT", "/api/screen", async ({ device, body }) => (personOnly(device), app.screen.configure(await body()))),
     route("GET", "/api/screen/windows", async ({ device }) => (personOnly(device), { windows: await app.screen.windows() })),
-    // "Restart now" on an update that's waiting for the chats to go quiet (update.ts): the person's own devices only.
-    route("POST", "/api/update/restart", ({ device }) => {
-      personOnly(device);
-      if (!app.updater.restartNow(device.name)) throw new HttpError(409, "There's no update waiting on this machine.");
-      return { ok: true };
-    }),
   ];
 }

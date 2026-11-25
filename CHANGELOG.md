@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.10.0
+
+**Updates from the app**
+- **A new version is one tap away.** Crosstalk looks for a newer release a little after it starts and every few hours.
+  When there is one, Home says "Crosstalk X is available" with one button, Update, on every device. It downloads the
+  version for that machine, checks it, and starts it once your chats are quiet (or at Restart now).
+- **Settings → Machines → Updates** shows each machine's version, whether it's up to date, Check now, and what's new.
+- A download that fails changes nothing and says why. A machine that's offline just doesn't offer anything.
+- Nothing about you or your machine is sent: it's the same request any download makes.
+- Earlier versions kept beside the program no longer pile up: an update keeps the newest one.
+- Crosstalk run from its source code, or started by hand, is updated the way it was installed.
+
+**Textures**
+- **A texture beside the theme** (Settings → This device): how bars, buttons and panels are drawn, on any theme and
+  without changing its colours. **Flat** is the look so far. **Skeuomorphic** is brushed metal bars, raised and glossy
+  buttons that sink when pressed, wells for what you type in, and metal knobs on switches, after the classic Mac.
+  **Liquid glass** gives clear, shiny panels and buttons, with what's behind sheets and menus blurred through them.
+- **Liquid glass is a texture now, not a theme.** The theme that had its name is **Nebula** (the same pools of
+  colour); a device that used it gets Nebula with the Liquid glass texture, and looks as it did.
+- **Terminal** is neon green on true black.
+
+**Animations**
+- **A closing sheet drops off the screen whole.** On a computer, a closed sheet (Chat settings, opened from the chat's
+  options or its permissions) dropped only by its own height and hung there half on screen for a moment. It now falls
+  all the way, from wherever it sat, and sheets rise in on a computer as they do on a phone.
+- **Chat settings moves.** A section's arrow turns, what's in it drops in, and the sections under it glide out of its
+  way (the sheet itself too); its rows, cards and steps answer a press like every other button, and a tick pops in on
+  what you pick. The same for the theme tiles, group chat set-up, a question's options and the app's text links,
+  which had no press at all. With Reduce Motion on, none of it moves.
+
+**Chat settings**
+- **The ring opens Memory and usage**: how full the model's memory is, your plan's limits and what the chat has cost,
+  in one place, then what you can do about the memory. The closed row names the limit nearest full.
+
+**Phones and computers**
+- **The screen fills the window with the chat list hidden.** It was a column 860 px wide in the middle, which left a
+  bar each side of an unfolded phone held sideways. The top bar reaches the screen's edges past a cutout at the side.
+- **The message box stays above an iPhone's keyboard.** The keyboard sometimes came up without the phone saying so
+  (a tap on a box that already had the focus, coming back to the app), and the message box was left under it.
+  Crosstalk now looks for itself around every touch, focus and letter typed, and while a box has the focus.
+
 ## 0.9.1
 
 - Fixed: when the image editor's server died in the instant after a restarted Crosstalk found it, Crosstalk said so

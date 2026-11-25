@@ -1,13 +1,14 @@
 import type { APIRequestContext, Page } from "@playwright/test";
-import type { Member, Message, Room } from "@crosstalk/shared";
+import type { Approval, Member, Message, Room } from "@crosstalk/shared";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { test, expect, noHorizontalOverflow } from "./fixtures";
 import { pong } from "./otherMachine";
-import { CUSTOM_THEME, DEFAULT_CUSTOM, DEFAULT_SETTINGS, paintFor, PRESETS, serialize, THEME_KEY, type CustomTheme, type ThemeSettings } from "../src/theme";
+import { CUSTOM_THEME, DEFAULT_CUSTOM, DEFAULT_SETTINGS, paintFor, PRESETS, serialize, TEXTURES, THEME_KEY, type CustomTheme, type Texture, type ThemeSettings } from "../src/theme";
 
 // Themes (Settings → This device → Theme): the presets, your own colour, gradient and picture, and that words stay
-// readable on whatever a theme puts behind them.
+// readable on whatever a theme puts behind them. And textures (Flat, Skeuomorphic, Liquid glass): how any theme is
+// drawn, with every word still readable and every box where it was.
 // CT_SHOTS: a folder to save every theme's screens in, to look at them.
 
 const HUB = "http://127.0.0.1:8451";
@@ -45,6 +46,8 @@ const root = (page: Page) =>
       scheme: el.getAttribute("data-scheme"),
       backdrop: el.getAttribute("data-backdrop"),
       glass: el.getAttribute("data-glass"),
+      texture: el.getAttribute("data-texture"),
+      chrome: v("--chrome"),
       picture: el.getAttribute("data-picture"),
       inline: el.getAttribute("style") ?? "",
       bg: v("--bg"),
@@ -63,7 +66,7 @@ const root = (page: Page) =>
   });
 
 /** A real chat whose history the test writes (its agent never runs): a question, a reply with a list, code and a link, and a follow-up. */
-async function chatWithMessages(page: Page, request: APIRequestContext, token: string) {
+async function chatWithMessages(page: Page, request: APIRequestContext, token: string, { waiting = false }: { waiting?: boolean } = {}) {
   const headers = { authorization: `Bearer ${token}` };
   const room: Room = await (await request.post(`${HUB}/api/chats`, { headers, data: { provider: "claude", name: "Theme check" } })).json();
   const snapshot = await (await request.get(`${HUB}/api/state`, { headers })).json();
@@ -80,7 +83,9 @@ async function chatWithMessages(page: Page, request: APIRequestContext, token: s
     message("human", "Nice. Run the tests once more and tell me what `plan()` prints."),
     message("agent", "All 42 tests pass. `plan()` prints one line per file it would copy, and a total at the end."),
   ];
-  const history = { room, messages, turns: [], activities: [], approvals: [], tasks: {}, totals: null, hasMore: false };
+  // `waiting`: the agent has asked to run a command and waits for a yes.
+  const approval: Approval = { id: "th-ap", roomId: room.id, memberId: member.id, turnId: null, kind: "command", title: "npm test", detail: "npm test -- --watch=false", status: "pending", decision: null, decidedBy: null, createdAt: Date.now() - 20_000, decidedAt: null };
+  const history = { room, messages, turns: [], activities: [], approvals: waiting ? [approval] : [], tasks: {}, totals: null, hasMore: false };
   await page.routeWebSocket("**/api/ws?**", (ws) => pong(ws));
   await page.route("**/api/state", (r) => r.fulfill({ json: { ...snapshot, members: snapshot.members.map((m: Member) => (m.id === member.id ? { ...m, status: "idle", readSeq: seq } : m)) } }));
   await page.route(`**/api/rooms/${room.id}/history**`, (r) => r.fulfill({ json: history }));
@@ -568,7 +573,7 @@ test("Reset theme goes back to OLED black and takes your own theme and its pictu
   await expect.poll(async () => (await root(page)).picture).toBe("ready");
   // Asked first.
   await page.getByRole("button", { name: "Reset theme", exact: true }).click();
-  await expect(page.getByText("Back to OLED black, and your own theme and picture are removed from this device.", { exact: true })).toBeVisible();
+  await expect(page.getByText("Back to OLED black and the Flat texture, and your own theme and picture are removed from this device.", { exact: true })).toBeVisible();
   await pastDoubleTap(page);
   await page.locator(".theme-reset").getByRole("button", { name: "Reset", exact: true }).click();
   await expect(tile(page, "OLED black")).toHaveAttribute("aria-checked", "true");
@@ -689,6 +694,362 @@ test("the terminal is drawn in the theme's colours, and follows a change of them
   await expect.poll(drawn).toEqual({ screen: "rgb(0, 0, 0)", box: "rgb(16, 16, 18)" });
 });
 
+// ------------------------------------------------------------ textures
+
+const textureTile = (page: Page, name: string) => page.getByRole("radiogroup", { name: "Texture", exact: true }).getByRole("radio", { name: new RegExp(`^${name}\\.`) });
+const textured = (settings: ThemeSettings, texture: Texture): ThemeSettings => ({ ...settings, texture });
+/** The themes every texture is checked on: the look the stylesheet draws by itself, a light page, Terminal, a gradient, and your own gradient. */
+const TEXTURE_THEMES: { id: string; settings: ThemeSettings }[] = [
+  { id: "oled", settings: DEFAULT_SETTINGS },
+  { id: "light", settings: preset("light") },
+  { id: "terminal", settings: preset("terminal") },
+  { id: "aurora", settings: preset("aurora") },
+  { id: "own-gradient", settings: custom({ base: "gradient", accent: "#ff6fb5", gradient: { shape: "radial", angle: 0, stops: ["#6b2a8f", "#2a1458", "#0c0a1c"] } }) },
+];
+/** How a few things are drawn right now: what a texture changes. */
+const drawn = (page: Page) =>
+  page.evaluate(() => {
+    const of = (selector: string) => {
+      const el = document.querySelector(selector);
+      if (!el) return null;
+      const css = getComputedStyle(el);
+      return { image: css.backgroundImage, shadow: css.boxShadow, filter: css.backdropFilter || (css as unknown as Record<string, string>).webkitBackdropFilter || "none", color: css.backgroundColor };
+    };
+    return { bar: of(".topbar"), button: of(".theme-from .btn"), knob: getComputedStyle(document.querySelector(".switch span")!, "::after").backgroundImage };
+  });
+
+test("a tap on a texture changes how the app is drawn at once, in the theme's own colours, and it's there before the app loads", async ({ page }) => {
+  await openTheme(page);
+  const group = page.getByRole("radiogroup", { name: "Texture", exact: true });
+  await expect(page.getByRole("heading", { name: "Texture", exact: true })).toBeVisible();
+  await expect(group.getByRole("radio")).toHaveCount(3);
+  for (const t of TEXTURES) await expect(textureTile(page, t.name)).toHaveAccessibleName(`${t.name}. ${t.about}`);
+  // Flat is what a device has until it picks another, and it is the app as it always was.
+  await expect(textureTile(page, "Flat")).toHaveAttribute("aria-checked", "true");
+  const flat = await drawn(page);
+  expect([(await root(page)).texture, flat.bar!.image, flat.button!.image, flat.knob]).toEqual([null, "none", "none", "none"]);
+
+  // On OLED black, which paints nothing itself: brushed metal on the bar, a raised button, a metal knob.
+  await textureTile(page, "Skeuomorphic").click();
+  await expect(textureTile(page, "Skeuomorphic")).toHaveAttribute("aria-checked", "true");
+  await expect(textureTile(page, "Flat")).toHaveAttribute("aria-checked", "false");
+  let r = await root(page);
+  expect([r.texture, r.theme, r.bg, r.accent, r.surface, r.page]).toEqual(["skeuo", null, "#000000", "#3d95ff", "#111113", "rgb(0, 0, 0)"]);
+  for (const name of ["--bg", "--surface", "--text", "--accent"]) expect(r.inline, name).not.toContain(name);
+  expect(JSON.parse(r.stored!)).toMatchObject({ theme: "oled", texture: "skeuo", paint: null });
+  const skeuo = await drawn(page);
+  expect(skeuo.bar!.image).toContain("data:image/svg+xml");
+  expect(skeuo.bar!.image).toContain("linear-gradient");
+  expect(skeuo.button!.image).toContain("linear-gradient");
+  expect(skeuo.button!.shadow).toContain("inset");
+  expect(skeuo.knob).toContain("conic-gradient");
+  // The colours under the texture are the theme's own.
+  expect([skeuo.bar!.color, skeuo.button!.color]).toEqual([flat.bar!.color, flat.button!.color]);
+
+  // With another theme the texture stays, and the theme's colours are what they are under Flat.
+  await tile(page, "Light").click();
+  r = await root(page);
+  const light = paintFor(preset("light"))!;
+  expect([r.texture, r.theme, r.bg, r.accent, r.surface]).toEqual(["skeuo", "light", light.vars["--bg"], light.vars["--accent"], light.vars["--surface"]]);
+  await noHorizontalOverflow(page);
+
+  // The app's own code is held back: what's on the page is what index.html alone put there from what was saved.
+  await page.route("**/src/main.tsx*", (route) => route.abort());
+  await page.reload();
+  await expect.poll(() => page.evaluate(() => document.readyState)).not.toBe("loading");
+  r = await root(page);
+  expect([r.texture, r.theme, r.bg]).toEqual(["skeuo", "light", light.vars["--bg"]]);
+  expect(await page.locator("#root").innerHTML()).toBe("");
+  await page.unroute("**/src/main.tsx*");
+  await page.reload();
+  await expect(textureTile(page, "Skeuomorphic")).toHaveAttribute("aria-checked", "true");
+  await expect(tile(page, "Light")).toHaveAttribute("aria-checked", "true");
+
+  // Liquid glass on OLED black: only what the glass needs is set, and the bar blurs what's behind it.
+  await tile(page, "OLED black").click();
+  await textureTile(page, "Liquid glass").click();
+  r = await root(page);
+  expect([r.texture, r.theme, r.glass, r.bg, r.surface, r.page]).toEqual(["glass", null, "1", "#000000", "#111113", "rgb(0, 0, 0)"]);
+  expect(r.chrome).toMatch(/^rgba\(/);
+  expect(r.filter).toContain("blur(28px)");
+  for (const name of ["--bg", "--surface", "--text", "--accent"]) expect(r.inline, name).not.toContain(name);
+  const glass = await drawn(page);
+  expect(glass.bar!.filter).toContain("blur(28px)");
+  expect(glass.bar!.shadow).toContain("inset");
+  expect(glass.button!.shadow).toContain("inset");
+  await page.route("**/src/main.tsx*", (route) => route.abort());
+  await page.reload();
+  await expect.poll(() => page.evaluate(() => document.readyState)).not.toBe("loading");
+  r = await root(page);
+  expect([r.texture, r.theme, r.glass]).toEqual(["glass", null, "1"]);
+  expect(r.chrome).toMatch(/^rgba\(/);
+  await page.unroute("**/src/main.tsx*");
+  await page.reload();
+  await expect(textureTile(page, "Liquid glass")).toHaveAttribute("aria-checked", "true");
+
+  // Back to Flat: nothing of a texture stays, on the page or on the device.
+  await textureTile(page, "Flat").click();
+  r = await root(page);
+  expect([r.texture, r.glass, r.chrome, r.stored]).toEqual([null, null, "", null]);
+  await expect.poll(() => drawn(page)).toEqual(flat);
+  // Reset theme takes a texture off too.
+  await textureTile(page, "Skeuomorphic").click();
+  await page.getByRole("button", { name: "Reset theme", exact: true }).click();
+  await pastDoubleTap(page);
+  await page.locator(".theme-reset").getByRole("button", { name: "Reset", exact: true }).click();
+  await expect(textureTile(page, "Flat")).toHaveAttribute("aria-checked", "true");
+  expect([(await root(page)).texture, (await root(page)).stored]).toEqual([null, null]);
+});
+
+/**
+ * Every word on screen under a texture reads at 4.5:1 or better, or, where the theme itself has it lower under Flat
+ * (OLED black's smallest words in two places; a red or an orange over a gradient, which a theme holds to 3:1), as it
+ * does there: within 0.2, which is what panels a little more see-through over a gradient move it by. Measured on the
+ * same screen, Flat first and then the texture.
+ */
+async function expectReadableAsFlat(page: Page, settings: ThemeSettings, texture: Texture, what: string) {
+  const change = (next: ThemeSettings) => page.evaluate(async (next) => (await import("/src/themeDevice.ts" as string)).setTheme(next), next);
+  await change(textured(settings, "flat"));
+  const flat = new Map<string, number>();
+  for (const r of await readings(page)) flat.set(`${r.where}|${r.text}`, Math.min(r.ratio, flat.get(`${r.where}|${r.text}`) ?? Infinity));
+  await change(textured(settings, texture));
+  expect((await root(page)).texture).toBe(texture);
+  const now = await readings(page);
+  expect(now.length, `${what}: there are words to measure`).toBeGreaterThan(8);
+  const poor = now.filter((r) => r.ratio < 4.5 && r.ratio < Math.min(4.5, (flat.get(`${r.where}|${r.text}`) ?? 4.5) - 0.2)).map((r) => `${r.ratio} (Flat: ${flat.get(`${r.where}|${r.text}`) ?? "not there"}) "${r.text}" (${r.where})`);
+  expect(poor, `${what}: words that read below 4.5:1, and worse than under Flat`).toEqual([]);
+}
+
+for (const texture of ["skeuo", "glass"] as const) {
+  for (const theme of TEXTURE_THEMES) {
+    test(`${texture} on ${theme.id}: words read on what's behind them, in a chat, in Settings and on Home`, async ({ page, request, token }) => {
+      test.setTimeout(90_000);
+      await saved(page, textured(theme.settings, texture));
+      const chat = await chatWithMessages(page, request, token, { waiting: true });
+      try {
+        await chat.open();
+        expect((await root(page)).texture).toBe(texture);
+        await expectReadableAsFlat(page, theme.settings, texture, `${texture} on ${theme.id}, a chat`);
+        await noHorizontalOverflow(page);
+        // The chat's settings, a sheet over the chat.
+        await page.locator(".chat-controls .ctl-model").click();
+        await expect(page.getByRole("dialog").last()).toBeVisible();
+        await expectReadableAsFlat(page, theme.settings, texture, `${texture} on ${theme.id}, Chat settings`);
+        await page.keyboard.press("Escape");
+        await expect(page.getByRole("dialog")).toHaveCount(0);
+        await openTheme(page);
+        await expectReadableAsFlat(page, theme.settings, texture, `${texture} on ${theme.id}, Settings`);
+        // The Texture section itself, with its three tiles.
+        await page.getByRole("radiogroup", { name: "Texture", exact: true }).scrollIntoViewIfNeeded();
+        await expectReadableAsFlat(page, theme.settings, texture, `${texture} on ${theme.id}, the Texture section`);
+        await noHorizontalOverflow(page);
+        await page.goto("/#/");
+        await expect(page.getByRole("heading", { name: "What agent do you want to use?", exact: true })).toBeVisible();
+        await expectReadableAsFlat(page, theme.settings, texture, `${texture} on ${theme.id}, Home`);
+      } finally {
+        await chat.cleanup();
+      }
+    });
+  }
+}
+
+test("a texture changes no size and no place: every box on screen is where it is under Flat", async ({ page, request, token }) => {
+  test.setTimeout(90_000);
+  const change = (settings: ThemeSettings) => page.evaluate(async (settings) => (await import("/src/themeDevice.ts" as string)).setTheme(settings), settings);
+  /** Every element's box, and the sizes a texture could have touched. */
+  const boxes = () =>
+    page.evaluate(() =>
+      [...document.querySelectorAll("body *")].map((el) => {
+        const r = el.getBoundingClientRect();
+        const css = getComputedStyle(el);
+        // The pickers' own tiles are left out: the one that's picked has the tick and the stronger words.
+        if (el.closest(".theme-tile")) return "";
+        return [el.tagName.toLowerCase(), typeof el.className === "string" ? el.className : "", Math.round(r.left * 10) / 10, Math.round(r.top * 10) / 10, Math.round(r.width * 10) / 10, Math.round(r.height * 10) / 10, css.borderTopWidth, css.borderLeftWidth, css.paddingTop, css.paddingLeft, css.fontSize, css.fontWeight, css.color].join(" ");
+      }),
+    );
+  const chat = await chatWithMessages(page, request, token, { waiting: true });
+  try {
+    await page.goto("/");
+    for (const theme of [DEFAULT_SETTINGS, preset("light"), preset("aurora")]) {
+      // A chat with an approval waiting, Home, Settings' list of pages, and a sheet with fields and buttons. (Not the
+      // Theme page: its "Reduce see-through effects" card says more or less by the texture, which moves what's under it.)
+      const home = async () => {
+        await page.goto("/#/");
+        await expect(page.getByRole("heading", { name: "What agent do you want to use?", exact: true })).toBeVisible();
+      };
+      const settings = async () => {
+        await page.goto("/#/settings");
+        await expect(page.getByRole("navigation", { name: "Settings pages" })).toBeVisible();
+      };
+      const sheet = async () => {
+        await page.goto("/#/agent/codex");
+        await page.getByRole("button", { name: "New chat", exact: true }).last().click();
+        await expect(page.getByRole("dialog", { name: "New chat with Codex", exact: true })).toBeVisible();
+      };
+      for (const open of [chat.open, home, settings, sheet]) {
+        await change(theme);
+        await open();
+        // Once the screen has stopped filling in (a list read from the machine, a button that wakes up).
+        let flat = await boxes();
+        for (let i = 0; i < 20; i++) {
+          await page.waitForTimeout(200);
+          const next = await boxes();
+          const settled = next.length === flat.length && next.every((b, k) => b === flat[k]);
+          flat = next;
+          if (settled) break;
+        }
+        expect(flat.length).toBeGreaterThan(100);
+        for (const texture of ["skeuo", "glass"] as const) {
+          await change(textured(theme, texture));
+          expect((await root(page)).texture).toBe(texture);
+          const moved = async () => {
+            const now = await boxes();
+            return now.length === flat.length ? now.filter((b, i) => b !== flat[i]).slice(0, 8) : [`${now.length} boxes, where Flat has ${flat.length}`];
+          };
+          await expect.poll(moved, { message: `${theme.theme}, ${texture}` }).toEqual([]);
+          await noHorizontalOverflow(page);
+        }
+      }
+    }
+  } finally {
+    await chat.cleanup();
+  }
+});
+
+test("Reduce see-through effects makes everything solid under Liquid glass, and the glass keeps its edges", async ({ page }) => {
+  for (const theme of [preset("light"), DEFAULT_SETTINGS, preset("aurora")]) {
+    await page.goto("/");
+    await page.evaluate(async (settings) => (await import("/src/themeDevice.ts" as string)).setTheme(settings), textured(theme, "glass"));
+    await openTheme(page);
+    const card = page.getByRole("region", { name: "Reduce see-through effects", exact: true });
+    const toggle = card.locator('label.switch[aria-label="Reduce see-through effects"]');
+    const on = toggle.locator("input");
+    // There's something to reduce, on a plain page too.
+    await expect(card).toContainText("Makes panels solid and turns blur off. Easier to read");
+    await expect(on).not.toBeChecked();
+    let r = await root(page);
+    expect([r.texture, r.glass]).toEqual(["glass", "1"]);
+    expect(r.chrome, theme.theme).toMatch(/^rgba\(/);
+    expect(r.filter, theme.theme).toContain("blur(");
+    expect((await drawn(page)).bar!.filter).toContain("blur(");
+    const seeThrough = (color: string) => /^rgba\(.*, 0?\.\d+\)$/.test(color);
+    expect(seeThrough((await drawn(page)).bar!.color)).toBe(true);
+
+    await toggle.click();
+    await expect(on).toBeChecked();
+    r = await root(page);
+    expect([r.texture, r.glass, r.filter], theme.theme).toEqual(["glass", "1", "none"]);
+    expect(r.chrome, theme.theme).toMatch(/^#[0-9a-f]{6}$/);
+    const solid = await drawn(page);
+    expect([solid.bar!.filter, seeThrough(solid.bar!.color)], theme.theme).toEqual(["none", false]);
+    // Nothing on screen is see-through or blurs: the page, every panel, every bar.
+    const clear = () => page.evaluate(() =>
+      [...document.querySelectorAll<HTMLElement>(".topbar, .settings-tabs, .chat-sidebar, .card, .list-group, .btn:not(.ghost), .input, .dialog")]
+        .filter((el) => {
+          const css = getComputedStyle(el);
+          const filter = css.backdropFilter || (css as unknown as Record<string, string>).webkitBackdropFilter || "none";
+          const m = /^rgba\(.*, ([\d.]+)\)$/.exec(css.backgroundColor);
+          return filter !== "none" || (m && Number(m[1]) > 0 && Number(m[1]) < 1);
+        })
+        .map((el) => el.className),
+    );
+    await expect.poll(clear, theme.theme).toEqual([]);
+    // The edges and the shine are still the glass's.
+    expect(solid.bar!.shadow, theme.theme).toContain("inset");
+    expect(solid.button!.shadow, theme.theme).toContain("inset");
+    await expectReadable(page, `Liquid glass, solid, ${theme.theme}`);
+    await toggle.click();
+    await expect(on).not.toBeChecked();
+    expect((await root(page)).filter).toContain("blur(");
+  }
+  // Without the texture, on a plain page, the switch says there's nothing to reduce.
+  await page.evaluate(async (settings) => (await import("/src/themeDevice.ts" as string)).setTheme(settings), preset("light"));
+  await expect(page.getByRole("region", { name: "Reduce see-through effects", exact: true })).toContainText("Nothing is see-through as things are.");
+});
+
+test("the Texture tiles work from the keyboard and fit a narrow phone", async ({ page, browserName }) => {
+  // Safari moves to a button with Option+Tab unless the Mac is set to tab through every control.
+  const tab = browserName === "webkit" ? "Alt+Tab" : "Tab";
+  await openTheme(page);
+  const group = page.getByRole("radiogroup", { name: "Texture", exact: true });
+  // Tab reaches a tile; Space and Enter pick it, as any button.
+  await textureTile(page, "Flat").focus();
+  await expect(textureTile(page, "Flat")).toBeFocused();
+  await page.keyboard.press(tab);
+  await expect(textureTile(page, "Skeuomorphic")).toBeFocused();
+  await page.keyboard.press("Space");
+  await expect(textureTile(page, "Skeuomorphic")).toHaveAttribute("aria-checked", "true");
+  expect((await root(page)).texture).toBe("skeuo");
+  await page.keyboard.press(tab);
+  await page.keyboard.press("Enter");
+  await expect(textureTile(page, "Liquid glass")).toHaveAttribute("aria-checked", "true");
+  expect((await root(page)).texture).toBe("glass");
+  // The arrow keys move through the group and pick as they go, round its ends; Home and End jump.
+  await page.keyboard.press("ArrowDown");
+  await expect(textureTile(page, "Flat")).toBeFocused();
+  await expect(textureTile(page, "Flat")).toHaveAttribute("aria-checked", "true");
+  expect((await root(page)).texture).toBeNull();
+  await page.keyboard.press("ArrowUp");
+  await expect(textureTile(page, "Liquid glass")).toBeFocused();
+  await expect(textureTile(page, "Liquid glass")).toHaveAttribute("aria-checked", "true");
+  await page.keyboard.press("ArrowLeft");
+  await expect(textureTile(page, "Skeuomorphic")).toHaveAttribute("aria-checked", "true");
+  await page.keyboard.press("Home");
+  await expect(textureTile(page, "Flat")).toHaveAttribute("aria-checked", "true");
+  await page.keyboard.press("End");
+  await expect(textureTile(page, "Liquid glass")).toBeFocused();
+  expect((await root(page)).texture).toBe("glass");
+  await expect(group.locator(".theme-tile-check")).toHaveCount(1);
+
+  // Under each texture: nothing wider than the screen, nothing sticking out of the card, every tile a finger's height,
+  // and each tile's own line about it in full.
+  for (const t of TEXTURES) {
+    await textureTile(page, t.name).click();
+    await noHorizontalOverflow(page);
+    const fit = await group.evaluate((el) => {
+      const card = el.closest(".card")!.getBoundingClientRect();
+      const out = [...el.closest(".card")!.querySelectorAll("*")].filter((x) => { const r = x.getBoundingClientRect(); return r.width > 0 && (r.right > card.right + 1 || r.left < card.left - 1); }).map((x) => x.className);
+      const tiles = [...el.querySelectorAll<HTMLElement>('[role="radio"]')].map((x) => ({ h: Math.round(x.getBoundingClientRect().height), cut: [...x.querySelectorAll<HTMLElement>(".texture-tile-about")].some((a) => a.scrollWidth > a.clientWidth + 1 || a.scrollHeight > a.clientHeight + 1), preview: Math.round(x.querySelector(".xp")!.getBoundingClientRect().width) }));
+      return { out, tiles };
+    });
+    expect(fit.out, t.name).toEqual([]);
+    for (const x of fit.tiles) expect([t.name, x.h >= 44, x.cut, x.preview >= 80]).toEqual([t.name, true, false, true]);
+    for (const about of TEXTURES.map((x) => x.about)) await expect(group.getByText(about, { exact: true })).toBeVisible();
+  }
+  // Each tile's preview is drawn its own way whatever texture is on: three different pictures.
+  const previews = await group.evaluate((el) => [...el.querySelectorAll(".xp")].map((x) => { const bar = getComputedStyle(x.querySelector(".xp-bar")!); const button = getComputedStyle(x.querySelector(".xp-btn")!); return `${bar.backgroundImage} ${bar.boxShadow} ${button.backgroundImage}`; }));
+  expect(new Set(previews).size).toBe(3);
+  expect(previews[0]).toBe("none none none");
+});
+
+test("a device that had the Liquid glass theme has Nebula with the Liquid glass texture, looking as it did", async ({ page }) => {
+  // What that app left on the device: the theme's name, and what it painted then.
+  const nebula = textured(preset("nebula"), "glass");
+  const then = paintFor(nebula)!;
+  const kept = JSON.stringify({ v: 1, theme: "glass", custom: DEFAULT_CUSTOM, calm: false, paint: { ...then, attrs: { ...then.attrs, "data-theme": "glass" } } });
+  await page.addInitScript(([key, value]) => {
+    if (sessionStorage.getItem("ct-theme-saved")) return;
+    sessionStorage.setItem("ct-theme-saved", "1");
+    localStorage.setItem(key, value);
+  }, [THEME_KEY, kept] as const);
+  await openTheme(page);
+  await expect(tile(page, "Nebula")).toHaveAttribute("aria-checked", "true");
+  await expect(textureTile(page, "Liquid glass")).toHaveAttribute("aria-checked", "true");
+  await expect(page.getByRole("radiogroup", { name: "Theme", exact: true }).getByRole("radio", { name: /^Liquid glass/ })).toHaveCount(0);
+  const r = await root(page);
+  expect([r.theme, r.texture, r.glass, r.backdrop, r.bg, r.accent, r.surface, r.chrome, r.filter, r.radius]).toEqual(["nebula", "glass", "1", "gradient", then.vars["--bg"], then.vars["--accent"], then.vars["--surface"], then.vars["--chrome"], then.vars["--glass-filter"], then.vars["--radius-lg"]]);
+  expect(r.backdropCss).toContain("radial-gradient(65% 55% at 10% 6%, #74184f");
+  // What's kept is brought up to date, so the next start (and index.html before it) has it as it is now.
+  expect(JSON.parse(r.stored!)).toMatchObject({ theme: "nebula", texture: "glass", paint: { attrs: { "data-theme": "nebula", "data-glass": "1" } } });
+  await page.reload();
+  await expect(tile(page, "Nebula")).toHaveAttribute("aria-checked", "true");
+  expect([(await root(page)).theme, (await root(page)).texture]).toEqual(["nebula", "glass"]);
+  // Under Flat, Nebula is drawn like the other colourful themes: the same backdrop and panels, their softer blur.
+  await textureTile(page, "Flat").click();
+  const flat = await root(page);
+  expect([flat.theme, flat.texture, flat.backdropCss, flat.surface, flat.filter]).toEqual(["nebula", null, r.backdropCss, r.surface, "saturate(140%) blur(20px)"]);
+});
+
 // ------------------------------------------------------------ screens to look at (CT_SHOTS)
 
 const SETUPS: { id: string; settings: ThemeSettings; picture?: "photo" | "checks" }[] = [
@@ -699,13 +1060,13 @@ const SETUPS: { id: string; settings: ThemeSettings; picture?: "photo" | "checks
   { id: "own-gradient-light", settings: custom({ base: "gradient", accent: "#a78bfa", gradient: { shape: "linear", angle: 135, stops: ["#ffd6e8", "#d6e4ff"] } }) },
   { id: "own-picture", settings: custom({ base: "picture", accent: "#ffd60a" }), picture: "photo" },
   { id: "own-picture-sharp", settings: custom({ base: "picture", accent: "#38bdf8", picture: { ...DEFAULT_CUSTOM.picture, blur: 0, dim: 0 }, seeThrough: 100, panelBlur: 30 }), picture: "photo" },
-  { id: "glass-solid", settings: { ...preset("glass"), calm: true } },
+  { id: "glass-solid", settings: { ...preset("nebula"), texture: "glass", calm: true } },
 ];
 
 for (const setup of SETUPS) {
   test(`screens to look at: ${setup.id}`, async ({ page, request, token }) => {
     test.skip(!process.env.CT_SHOTS, "set CT_SHOTS to a folder to save the screens");
-    test.skip(!/^chromium-(390|1440)$/.test(test.info().project.name) && !(test.info().project.name === "webkit-390" && ["glass", "light", "own-picture"].includes(setup.id)), "phones and a computer");
+    test.skip(!/^chromium-(390|1440)$/.test(test.info().project.name) && !(test.info().project.name === "webkit-390" && ["nebula", "light", "own-picture"].includes(setup.id)), "phones and a computer");
     test.setTimeout(90_000);
     const width = page.viewportSize()!.width;
     if (width === 390) await page.setViewportSize({ width: 390, height: 844 });
@@ -773,4 +1134,52 @@ for (const setup of SETUPS) {
       await chat.cleanup();
     }
   });
+}
+
+// Every texture on four themes, to look at: CT_SHOTS/<texture>-<theme>-<width>-<screen>.png.
+for (const texture of TEXTURES.map((t) => t.id)) {
+  for (const theme of TEXTURE_THEMES.filter((t) => t.id !== "own-gradient")) {
+    test(`textures to look at: ${texture} on ${theme.id}`, async ({ page, request, token }) => {
+      test.skip(!process.env.CT_SHOTS, "set CT_SHOTS to a folder to save the screens");
+      test.skip(!/^chromium-(390|1440)$/.test(test.info().project.name), "a phone and a computer");
+      test.setTimeout(90_000);
+      const width = page.viewportSize()!.width;
+      if (width === 390) await page.setViewportSize({ width: 390, height: 844 });
+      mkdirSync(process.env.CT_SHOTS!, { recursive: true });
+      const shot = (name: string) => page.screenshot({ path: join(process.env.CT_SHOTS!, `${texture}-${theme.id}-${width}-${name}.png`), animations: "disabled" });
+      await saved(page, textured(theme.settings, texture));
+      const chat = await chatWithMessages(page, request, token, { waiting: true });
+      try {
+        await page.goto("/#/");
+        await expect(page.getByRole("heading", { name: "What agent do you want to use?", exact: true })).toBeVisible();
+        await shot("home");
+        await chat.open();
+        await shot("chat");
+        await page.locator(".chat-controls .ctl-model").click();
+        await expect(page.getByRole("dialog").last()).toBeVisible();
+        await shot("chat-settings");
+        await page.keyboard.press("Escape");
+        await expect(page.getByRole("dialog")).toHaveCount(0);
+        await page.goto("/#/settings/appearance");
+        const group = page.getByRole("radiogroup", { name: "Texture", exact: true });
+        await expect(group).toBeVisible();
+        await shot("settings");
+        await group.evaluate((el) => el.scrollIntoView({ block: "center" }));
+        await shot("settings-texture");
+        await page.goto("/#/agent/codex");
+        await page.getByRole("button", { name: "New chat", exact: true }).last().click();
+        await expect(page.getByRole("dialog", { name: "New chat with Codex", exact: true })).toBeVisible();
+        await shot("dialog");
+        await page.keyboard.press("Escape");
+        await chat.open();
+        if (width < 761) {
+          await page.getByRole("button", { name: /^Show chats/ }).click();
+          await expect(page.getByRole("complementary", { name: "Chats", exact: true })).toBeVisible();
+        }
+        await shot("chats");
+      } finally {
+        await chat.cleanup();
+      }
+    });
+  }
 }

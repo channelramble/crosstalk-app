@@ -123,7 +123,7 @@ test("a group chat's cost line follows the agent whose popup it is in, not which
   try {
     await s.open();
     // Each agent has its own block in the chat's settings: the one on the API key.
-    const pop = await chatSettings(page, "Answers with", "keys");
+    const pop = await chatSettings(page, "Memory and usage", "keys");
     const line = pop.locator(".chat-cost");
     await expect(line).toBeVisible();
     // @keys is billed per reply: nothing here may say a plan covers this chat.
@@ -158,11 +158,11 @@ test("a group chat's popups say each agent's part, and the asks and earlier acco
   const rest = "Asks and earlier accounts in this chat: $3.10";
   try {
     await s.open();
-    await chatSettings(page, "Answers with", "claude");
+    await chatSettings(page, "Memory and usage", "claude");
     await expect(pop.locator(".chat-cost")).toHaveText("@claude in this chat: ≈$4.10 at API prices, included in your plan");
     await expect(pop.locator(".chat-cost-rest")).toHaveText(rest);
     await noHorizontalOverflow(page);
-    await chatSettings(page, "Answers with", "keys");
+    await chatSettings(page, "Memory and usage", "keys");
     await expect(keys.locator(".chat-cost")).toHaveText("@keys in this chat: $8.20");
     // The same $3.10, billed, and in no way said to be covered by @claude's plan.
     await expect(keys.locator(".chat-cost-rest")).toHaveText(rest);

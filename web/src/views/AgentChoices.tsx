@@ -63,7 +63,12 @@ export function RadioCards<T extends string>({ label, value, options, onChange, 
                 </span>
               )}
             </span>
-            {on && <Check size={17} aria-hidden="true" />}
+            {/* The tick pops in (motion-controls.css) in a box of its own: Chrome never says an animation on an <svg> ended. */}
+            {on && (
+              <span className="cs-tick" aria-hidden="true">
+                <Check size={17} />
+              </span>
+            )}
           </button>
         );
       })}

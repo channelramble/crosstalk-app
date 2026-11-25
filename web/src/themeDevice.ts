@@ -1,11 +1,13 @@
 import { useSyncExternalStore } from "react";
-import { DEFAULT_SETTINGS, deserialize, isPristine, luminance, paintFor, serialize, THEME_KEY, toHex, type Paint, type PictureInfo, type ThemeSettings } from "./theme";
+import { DEFAULT_SETTINGS, deserialize, isPristine, luminance, paintFor, serialize, TEXTURE_ATTR, textureAttr, THEME_KEY, toHex, type Paint, type PictureInfo, type ThemeSettings } from "./theme";
 
 /**
  * The theme on this device (theme.ts works out what it paints): kept in localStorage with what it paints, so
  * index.html can paint the page before the app loads; applied here as CSS variables and attributes on the page's root;
  * and its picture, which is too big for localStorage, kept in IndexedDB and shown a moment after the page (over its own
- * average colour, so nothing flashes). Nothing is sent to a machine: another device has its own theme.
+ * average colour, so nothing flashes). The texture (Flat, Skeuomorphic, Liquid glass) is kept with it and is one
+ * attribute on the root, which index.html also sets before the first paint. Nothing is sent to a machine: another
+ * device has its own theme.
  */
 
 /** The background picture is never kept bigger than this on its long side. */
@@ -53,6 +55,10 @@ function apply(paint: Paint | null) {
     for (const [k, v] of Object.entries(paint.vars)) if (root.style.getPropertyValue(k) !== v) root.style.setProperty(k, v);
     for (const [k, v] of Object.entries(paint.attrs)) if (root.getAttribute(k) !== v) root.setAttribute(k, v);
   }
+  // The texture: one attribute, whatever the theme (OLED black paints nothing and still takes one). None for Flat.
+  const texture = textureAttr(settings);
+  if (!texture) root.removeAttribute(TEXTURE_ATTR);
+  else if (root.getAttribute(TEXTURE_ATTR) !== texture) root.setAttribute(TEXTURE_ATTR, texture);
   // The browser's bar and, for an app on the Home Screen, the status bar's words.
   setMeta("theme-color", paint?.color ?? DEFAULT_BAR);
   setMeta("apple-mobile-web-app-status-bar-style", paint?.scheme === "light" ? "default" : "black");
@@ -345,7 +351,7 @@ export function terminalColors(): { background: string; foreground: string; curs
   const css = getComputedStyle(document.documentElement);
   const read = (name: string, fallback: string) => css.getPropertyValue(name).trim() || fallback;
   const accent = read("--accent", "#3d95ff");
-  return { background: read("--term-screen", "#000000"), foreground: read("--term-text", "#e8e8ea"), cursor: accent, selectionBackground: /^#[0-9a-f]{6}$/i.test(accent) ? `${accent}55` : "#3d95ff55", themed: !!applied };
+  return { background: read("--term-screen", "#000000"), foreground: read("--term-text", "#e8e8ea"), cursor: accent, selectionBackground: /^#[0-9a-f]{6}$/i.test(accent) ? `${accent}55` : "#3d95ff55", themed: !!applied?.attrs["data-theme"] };
 }
 
 /** Calls `fn` whenever the theme changes; returns how to stop. */

@@ -409,8 +409,8 @@ test("a chat says what it has cost, with ≈ when some replies have no price, an
   Object.assign(s.member, { readSeq: 2 });
   try {
     await s.open();
-    // What the chat has cost is with the account that pays for it: the sheet's Answers with.
-    const pop = await chatSettings(page, "Answers with");
+    // What the chat has cost is beside the plan's limits: the sheet's Memory and usage.
+    const pop = await chatSettings(page, "Memory and usage");
     await expect(pop.getByText("This chat: $1.23", { exact: true })).toBeVisible();
     await expect(pop).not.toContainText("without a price");
     // This chat's account is an API key: its cost is billed, with nothing about a plan.
@@ -446,8 +446,8 @@ test("a chat on a plan sign-in says its figure is what the use would cost, not a
   Object.assign(s.member, { readSeq: 2 });
   try {
     await s.open();
-    // What the chat has cost is with the account that pays for it: the sheet's Answers with.
-    const pop = await chatSettings(page, "Answers with");
+    // What the chat has cost is beside the plan's limits: the sheet's Memory and usage.
+    const pop = await chatSettings(page, "Memory and usage");
     await expect(pop.locator(".chat-cost")).toHaveText("This chat: ≈$12.30 at API prices, included in your plan");
     await page.screenshot(shot("20-chat-cost-line-plan.png"));
     await noHorizontalOverflow(page);
@@ -473,8 +473,8 @@ test("a plan chat's figure waits for its account's figures, so it never shows as
   try {
     await s.open();
     const answered = page.waitForResponse((res) => res.url().endsWith(`/api/rooms/${s.room.id}/spend`));
-    // What the chat has cost is with the account that pays for it: the sheet's Answers with.
-    const pop = await chatSettings(page, "Answers with");
+    // What the chat has cost is beside the plan's limits: the sheet's Memory and usage.
+    const pop = await chatSettings(page, "Memory and usage");
     await expect(pop).toBeVisible();
     // The chat's own figure is here, and the line still isn't drawn: it would say "$12.30" with no word about the plan.
     await answered;

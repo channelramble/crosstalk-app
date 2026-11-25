@@ -116,7 +116,7 @@ test("search finds pages and sections by title and keyword, titles first", () =>
   expect(found("zoom")).toEqual(["display"]);
   // The theme, by its name and by what people call it.
   expect(found("theme")).toEqual(["appearance"]);
-  for (const word of ["dark", "light", "background", "picture", "glass", "colour", "color", "appearance"]) expect(found(word)).toContain("appearance");
+  for (const word of ["dark", "light", "background", "picture", "glass", "colour", "color", "appearance", "texture", "metal", "skeuomorphic", "liquid glass"]) expect(found(word)).toContain("appearance");
   expect(found("spending limit")).toEqual(["costs"]);
   expect(found("ssh")).toEqual(["computers"]);
   expect(found("github")).toEqual(["more"]);

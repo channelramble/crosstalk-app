@@ -1,5 +1,5 @@
 import type { Page } from "@playwright/test";
-import { test, expect } from "./fixtures";
+import { test, expect, noHorizontalOverflow } from "./fixtures";
 import { given } from "./tourChats";
 
 /*
@@ -294,4 +294,31 @@ test.describe("on a touch screen as wide as a computer's", () => {
     await expect(input(page)).not.toBeFocused();
     await expect(page.locator(".csb-key")).toHaveCount(0);
   });
+});
+
+test("held sideways with a cutout at each side: the screen and its top bar reach both edges, and what's in the bar keeps clear", async ({ page }) => {
+  // An unfolded phone turned sideways, the chats hidden. The cutout is played by the variables the app reads it into.
+  await page.setViewportSize({ width: 960, height: 700 });
+  await page.addInitScript(() => localStorage.setItem("crosstalk.sidebar.collapsed", "1"));
+  await page.goto("/#/");
+  await expect(page.locator(".topbar").first()).toBeVisible();
+  await page.addStyleTag({ content: ":root { --safe-left: 48px !important; --safe-right: 48px !important; }" });
+  const edges = async (selector: string) => page.locator(selector).first().evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    return { left: Math.round(r.left), right: Math.round(r.right) };
+  });
+  // Not a column in the middle with a bar of page each side.
+  expect(await edges(".topbar")).toEqual({ left: 0, right: 960 });
+  const main = await edges(".shell > .main");
+  expect(main).toEqual({ left: 48, right: 912 });
+  // The bar's first and last buttons stay out from under the cutouts.
+  const buttons = page.locator(".topbar button");
+  const first = (await buttons.first().boundingBox())!;
+  const last = (await buttons.last().boundingBox())!;
+  expect(first.x).toBeGreaterThanOrEqual(48);
+  expect(last.x + last.width).toBeLessThanOrEqual(912);
+  await noHorizontalOverflow(page);
+  // With no cutout, the screen is the whole window.
+  await page.addStyleTag({ content: ":root { --safe-left: 0px !important; --safe-right: 0px !important; }" });
+  expect(await edges(".shell > .main")).toEqual({ left: 0, right: 960 });
 });

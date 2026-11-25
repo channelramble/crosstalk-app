@@ -1,0 +1,496 @@
+/*
+ * Textures (Settings → This device → Texture): how surfaces and controls are drawn, in whatever colours the theme has.
+ * One attribute on the page's root, set by themeDevice.ts and by index.html before the first paint:
+ * - none: Flat, the app as styles.css and themes.css draw it. Nothing here reaches it.
+ * - [data-texture="skeuo"]: Skeuomorphic, after Mac OS X's brushed metal and Aqua. Bars are brushed metal with a bevel,
+ *   buttons are raised and sink when pressed, the main button is a glossy gel, fields are wells, switches and sliders
+ *   have metal knobs.
+ * - [data-texture="glass"]: Liquid glass. theme.ts works out its see-through layers and its edges for every theme, and
+ *   themes.css draws the bars, sheets and cards with them ([data-glass]); what's here is the rest: small controls, and
+ *   what only a plain page needs.
+ *
+ * The rule of this file: a texture changes how a surface is DRAWN and nothing else. Only these properties appear:
+ * background-image (layers of white or black at low strength over the theme's own colour, which stays underneath),
+ * background (only to one of the theme's own variables), box-shadow, border-color, text-shadow, backdrop-filter (and
+ * one corner radius: a sheet's title bar follows the sheet's own corners, so its metal doesn't poke out of them).
+ * Never a size, a border's width, a padding, a font, a place, or a colour of words: every measured thing is the same
+ * under every texture, and so is what every word is read against, within what the theme's colours allow:
+ * - On a dark page words are light, so darkening under them costs nothing and lightening does: highlights stay on
+ *   edges and above where words start. On a light page it's the other way round.
+ * - The quiet words are as dim as still reads on the theme's panels, so a bar under them is never lightened (dark) or
+ *   darkened (light) past the theme's second panel colour.
+ * Nothing moves here either: pressed looks are just looks, and every transition is in the motion stylesheets.
+ *
+ * Small controls never get a backdrop-filter of their own: many small blurs are slow on a phone.
+ */
+
+/* ============================================================ Skeuomorphic */
+
+/*
+ * What it's drawn with. The grain is one small picture of fine sideways hairs (noise stretched along the bar), tiled:
+ * light hairs and dark hairs, each as strong as the words on the bar allow (on a dark page the dark ones cost nothing
+ * and the light ones are faint; on a light page the other way round). The preview in Settings (.xp-skeuo) uses the
+ * same, whatever texture is on.
+ */
+:root[data-texture="skeuo"],
+.xp-skeuo {
+  --tx-grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='128'%3E%3Cfilter id='g' x='0' y='0' width='100%25' height='100%25'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.003 0.85' numOctaves='2' seed='4' stitchTiles='stitch' result='n'/%3E%3CfeColorMatrix in='n' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 5 0 0 -2'/%3E%3CfeComponentTransfer result='k'%3E%3CfeFuncA type='linear' slope='0.22'/%3E%3C/feComponentTransfer%3E%3CfeColorMatrix in='n' values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 5 0 0 0 -2'/%3E%3CfeComponentTransfer result='w'%3E%3CfeFuncA type='linear' slope='0.045'/%3E%3C/feComponentTransfer%3E%3CfeMerge%3E%3CfeMergeNode in='k'/%3E%3CfeMergeNode in='w'/%3E%3C/feMerge%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23g)'/%3E%3C/svg%3E");
+  --tx-grain-soft: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='128'%3E%3Cfilter id='g' x='0' y='0' width='100%25' height='100%25'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.003 0.85' numOctaves='2' seed='9' stitchTiles='stitch' result='n'/%3E%3CfeColorMatrix in='n' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 5 0 0 -2'/%3E%3CfeComponentTransfer result='k'%3E%3CfeFuncA type='linear' slope='0.18'/%3E%3C/feComponentTransfer%3E%3CfeColorMatrix in='n' values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 5 0 0 0 -2'/%3E%3CfeComponentTransfer result='w'%3E%3CfeFuncA type='linear' slope='0.035'/%3E%3C/feComponentTransfer%3E%3CfeMerge%3E%3CfeMergeNode in='k'/%3E%3CfeMergeNode in='w'/%3E%3C/feMerge%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23g)'/%3E%3C/svg%3E");
+  /* A bar's sheen, top to bottom, and a tall panel's, side to side. */
+  --tx-sheen: linear-gradient(180deg, rgba(255, 255, 255, 0.055) 0%, rgba(255, 255, 255, 0.03) 55%, rgba(255, 255, 255, 0.015) 100%);
+  --tx-sheen-side: linear-gradient(90deg, rgba(255, 255, 255, 0.028) 0%, rgba(255, 255, 255, 0.012) 60%, rgba(255, 255, 255, 0) 100%);
+  /* The bevel: a light line on an upper edge, a dark one beneath. */
+  --tx-hi: rgba(255, 255, 255, 0.2);
+  --tx-hi-soft: rgba(255, 255, 255, 0.09);
+  --tx-lo: rgba(0, 0, 0, 0.7);
+  --tx-line: rgba(0, 0, 0, 0.85);
+  --tx-drop: 0 1px 2px rgba(0, 0, 0, 0.55);
+  --tx-drop-big: 0 2px 6px rgba(0, 0, 0, 0.5);
+  /* A raised control: lit from above, darker towards its foot; pressed, the other way up. */
+  --tx-raise: linear-gradient(180deg, rgba(255, 255, 255, 0.075) 0%, rgba(255, 255, 255, 0) 14%, rgba(0, 0, 0, 0) 46%, rgba(0, 0, 0, 0.3) 100%);
+  --tx-press: linear-gradient(180deg, rgba(0, 0, 0, 0.42) 0%, rgba(0, 0, 0, 0.2) 55%, rgba(0, 0, 0, 0.1) 100%);
+  --tx-raise-edge: inset 0 1px 0 rgba(255, 255, 255, 0.2), inset 0 -1px 0 rgba(0, 0, 0, 0.3);
+  --tx-press-edge: inset 0 2px 4px rgba(0, 0, 0, 0.6), inset 0 0 0 0.5px rgba(0, 0, 0, 0.4);
+  /* The gel: a bright band across the upper half of a filled button, and a glow rising from its foot. */
+  --tx-gel: linear-gradient(180deg, rgba(255, 255, 255, 0.7) 0%, rgba(255, 255, 255, 0.3) 47%, rgba(0, 0, 0, 0.2) 53%, rgba(0, 0, 0, 0.14) 72%, rgba(0, 0, 0, 0.03) 100%);
+  --tx-gel-press: linear-gradient(180deg, rgba(0, 0, 0, 0.28) 0%, rgba(0, 0, 0, 0.14) 52%, rgba(0, 0, 0, 0.04) 100%);
+  --tx-gel-edge: inset 0 1px 0 rgba(255, 255, 255, 0.8), inset 0 -1px 0 rgba(0, 0, 0, 0.22), inset 0 0 0 0.5px rgba(0, 0, 0, 0.3);
+  /* A filled control in the accent: its words are dark on a dark page, and only just readable on some accents, so its
+     gloss is all light: the band across its upper half and next to nothing under it. */
+  --tx-gel-accent: linear-gradient(180deg, rgba(255, 255, 255, 0.55) 0%, rgba(255, 255, 255, 0.2) 47%, rgba(255, 255, 255, 0) 53%, rgba(0, 0, 0, 0.03) 100%);
+  /* A well: sunk, with the light catching its lower lip. */
+  --tx-well: inset 0 1px 3px rgba(0, 0, 0, 0.7), inset 0 0 0 0.5px rgba(0, 0, 0, 0.45), 0 1px 0 rgba(255, 255, 255, 0.09);
+  /* A panel standing a little off the page. */
+  --tx-lift: inset 0 1px 0 rgba(255, 255, 255, 0.09), 0 1px 0 rgba(0, 0, 0, 0.6), 0 2px 5px rgba(0, 0, 0, 0.45);
+  /* Words pressed into metal. */
+  --tx-emboss: 0 -1px 0 rgba(0, 0, 0, 0.75);
+  /* A metal knob: turned on a lathe, so the light falls on it in four spokes. */
+  --tx-knob: conic-gradient(from 20deg, rgba(0, 0, 0, 0.2), rgba(0, 0, 0, 0) 14%, rgba(0, 0, 0, 0.17) 27%, rgba(0, 0, 0, 0) 40%, rgba(0, 0, 0, 0.2) 52%, rgba(0, 0, 0, 0) 66%, rgba(0, 0, 0, 0.17) 78%, rgba(0, 0, 0, 0) 90%, rgba(0, 0, 0, 0.2)), linear-gradient(180deg, rgba(0, 0, 0, 0) 0%, rgba(0, 0, 0, 0.16) 100%);
+  --tx-knob-edge: 0 1px 3px rgba(0, 0, 0, 0.7), 0 0 0 0.5px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.95), inset 0 -1px 1px rgba(0, 0, 0, 0.3);
+}
+/* A light page: dark hairs, the bars shaded towards their foot, the highlights white and free. */
+:root[data-scheme="light"][data-texture="skeuo"],
+:root[data-scheme="light"] .xp-skeuo {
+  --tx-grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='128'%3E%3Cfilter id='g' x='0' y='0' width='100%25' height='100%25'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.003 0.85' numOctaves='2' seed='4' stitchTiles='stitch' result='n'/%3E%3CfeColorMatrix in='n' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 5 0 0 -2'/%3E%3CfeComponentTransfer result='k'%3E%3CfeFuncA type='linear' slope='0.03'/%3E%3C/feComponentTransfer%3E%3CfeColorMatrix in='n' values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 5 0 0 0 -2'/%3E%3CfeComponentTransfer result='w'%3E%3CfeFuncA type='linear' slope='0.6'/%3E%3C/feComponentTransfer%3E%3CfeMerge%3E%3CfeMergeNode in='k'/%3E%3CfeMergeNode in='w'/%3E%3C/feMerge%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23g)'/%3E%3C/svg%3E");
+  --tx-grain-soft: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='128'%3E%3Cfilter id='g' x='0' y='0' width='100%25' height='100%25'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.003 0.85' numOctaves='2' seed='9' stitchTiles='stitch' result='n'/%3E%3CfeColorMatrix in='n' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 5 0 0 -2'/%3E%3CfeComponentTransfer result='k'%3E%3CfeFuncA type='linear' slope='0.014'/%3E%3C/feComponentTransfer%3E%3CfeColorMatrix in='n' values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 5 0 0 0 -2'/%3E%3CfeComponentTransfer result='w'%3E%3CfeFuncA type='linear' slope='0.5'/%3E%3C/feComponentTransfer%3E%3CfeMerge%3E%3CfeMergeNode in='k'/%3E%3CfeMergeNode in='w'/%3E%3C/feMerge%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23g)'/%3E%3C/svg%3E");
+  --tx-sheen: linear-gradient(180deg, rgba(0, 0, 0, 0.008) 0%, rgba(0, 0, 0, 0.026) 50%, rgba(0, 0, 0, 0.044) 100%);
+  --tx-sheen-side: linear-gradient(90deg, rgba(0, 0, 0, 0.012) 0%, rgba(0, 0, 0, 0.006) 60%, rgba(0, 0, 0, 0.002) 100%);
+  --tx-hi: rgba(255, 255, 255, 0.95);
+  --tx-hi-soft: rgba(255, 255, 255, 0.8);
+  --tx-lo: rgba(0, 0, 0, 0.26);
+  --tx-line: rgba(0, 0, 0, 0.34);
+  --tx-drop: 0 1px 2px rgba(0, 0, 0, 0.2);
+  --tx-drop-big: 0 2px 6px rgba(0, 0, 0, 0.16);
+  --tx-raise: linear-gradient(180deg, rgba(255, 255, 255, 0.95) 0%, rgba(255, 255, 255, 0.5) 48%, rgba(255, 255, 255, 0.12) 52%, rgba(255, 255, 255, 0) 84%, rgba(0, 0, 0, 0.05) 100%);
+  --tx-press: linear-gradient(180deg, rgba(0, 0, 0, 0.1) 0%, rgba(0, 0, 0, 0.03) 30%, rgba(255, 255, 255, 0.2) 100%);
+  --tx-raise-edge: inset 0 1px 0 rgba(255, 255, 255, 1), inset 0 -1px 0 rgba(0, 0, 0, 0.1);
+  --tx-press-edge: inset 0 2px 4px rgba(0, 0, 0, 0.28), inset 0 0 0 0.5px rgba(0, 0, 0, 0.25);
+  /* The main button is dark with white words here: a gloss it can afford, and the accent's none at all where its
+     words are (they're only just readable on it), so that one is shaded towards its foot instead. */
+  --tx-gel: linear-gradient(180deg, rgba(255, 255, 255, 0.4) 0%, rgba(255, 255, 255, 0.16) 48%, rgba(255, 255, 255, 0) 52%, rgba(0, 0, 0, 0.14) 100%);
+  --tx-gel-press: linear-gradient(180deg, rgba(0, 0, 0, 0.3) 0%, rgba(0, 0, 0, 0.12) 100%);
+  --tx-gel-edge: inset 0 1px 0 rgba(255, 255, 255, 0.55), inset 0 -1px 0 rgba(0, 0, 0, 0.3), inset 0 0 0 0.5px rgba(0, 0, 0, 0.35);
+  --tx-gel-accent: linear-gradient(180deg, rgba(255, 255, 255, 0.34) 0%, rgba(255, 255, 255, 0) 16%, rgba(0, 0, 0, 0) 50%, rgba(0, 0, 0, 0.2) 100%);
+  --tx-well: inset 0 1px 3px rgba(0, 0, 0, 0.26), inset 0 0 0 0.5px rgba(0, 0, 0, 0.2), 0 1px 0 rgba(255, 255, 255, 0.9);
+  --tx-lift: inset 0 1px 0 rgba(255, 255, 255, 0.9), 0 0 0 0.5px rgba(0, 0, 0, 0.1), 0 1px 3px rgba(0, 0, 0, 0.16);
+  --tx-emboss: 0 1px 0 rgba(255, 255, 255, 0.9);
+}
+/*
+ * Over a gradient or a picture the theme's bars are see-through, and its quiet words are as dim as still reads on
+ * them: nothing to spare. So there the metal is drawn only in the direction that costs words nothing: dark hairs and a
+ * shade towards the bar's foot under light words, light hairs and a wash of white under dark ones.
+ */
+:root[data-texture="skeuo"][data-backdrop],
+:root[data-backdrop] .xp-skeuo {
+  --tx-grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='128'%3E%3Cfilter id='g' x='0' y='0' width='100%25' height='100%25'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.003 0.85' numOctaves='2' seed='4' stitchTiles='stitch' result='n'/%3E%3CfeColorMatrix in='n' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 5 0 0 -2'/%3E%3CfeComponentTransfer result='k'%3E%3CfeFuncA type='linear' slope='0.3'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23g)'/%3E%3C/svg%3E");
+  --tx-grain-soft: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='128'%3E%3Cfilter id='g' x='0' y='0' width='100%25' height='100%25'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.003 0.85' numOctaves='2' seed='9' stitchTiles='stitch' result='n'/%3E%3CfeColorMatrix in='n' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 5 0 0 -2'/%3E%3CfeComponentTransfer result='k'%3E%3CfeFuncA type='linear' slope='0.24'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23g)'/%3E%3C/svg%3E");
+  --tx-sheen: linear-gradient(180deg, rgba(0, 0, 0, 0) 0%, rgba(0, 0, 0, 0.07) 50%, rgba(0, 0, 0, 0.16) 100%);
+  --tx-sheen-side: linear-gradient(90deg, rgba(0, 0, 0, 0) 0%, rgba(0, 0, 0, 0.05) 60%, rgba(0, 0, 0, 0.1) 100%);
+}
+:root[data-scheme="light"][data-texture="skeuo"][data-backdrop],
+:root[data-scheme="light"][data-backdrop] .xp-skeuo {
+  --tx-grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='128'%3E%3Cfilter id='g' x='0' y='0' width='100%25' height='100%25'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.003 0.85' numOctaves='2' seed='4' stitchTiles='stitch' result='n'/%3E%3CfeColorMatrix in='n' values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 5 0 0 0 -2'/%3E%3CfeComponentTransfer result='w'%3E%3CfeFuncA type='linear' slope='0.7'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23g)'/%3E%3C/svg%3E");
+  --tx-grain-soft: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='128'%3E%3Cfilter id='g' x='0' y='0' width='100%25' height='100%25'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.003 0.85' numOctaves='2' seed='9' stitchTiles='stitch' result='n'/%3E%3CfeColorMatrix in='n' values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 5 0 0 0 -2'/%3E%3CfeComponentTransfer result='w'%3E%3CfeFuncA type='linear' slope='0.6'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23g)'/%3E%3C/svg%3E");
+  --tx-sheen: linear-gradient(180deg, rgba(255, 255, 255, 0.55) 0%, rgba(255, 255, 255, 0.25) 50%, rgba(255, 255, 255, 0.05) 100%);
+  --tx-sheen-side: linear-gradient(90deg, rgba(255, 255, 255, 0.35) 0%, rgba(255, 255, 255, 0.15) 60%, rgba(255, 255, 255, 0) 100%);
+}
+
+/* ------------------------------------------------------------ bars: brushed metal with a bevel */
+
+/* The top bar and Settings' tabs: grain and sheen over the bar's own colour, a light line on top, a dark one beneath. */
+:root[data-texture="skeuo"] .app .topbar,
+:root[data-texture="skeuo"] .app.mobile .topbar,
+:root[data-texture="skeuo"] .settings-tabs {
+  background-image: var(--tx-grain), var(--tx-sheen);
+  border-bottom-color: var(--tx-line);
+  box-shadow: inset 0 1px 0 var(--tx-hi-soft), var(--tx-drop-big);
+}
+/* A chat's bar keeps the glow of its agent's colour, under the metal. */
+:root[data-texture="skeuo"] .app .topbar.tinted,
+:root[data-texture="skeuo"] .app.mobile .topbar.tinted {
+  background-image: var(--tx-grain), var(--tx-sheen), radial-gradient(70% 220% at 0% 0%, color-mix(in srgb, var(--c) 16%, transparent), transparent 70%);
+  border-bottom-color: var(--tx-line);
+}
+:root[data-texture="skeuo"][data-backdrop] .app .topbar.tinted,
+:root[data-texture="skeuo"][data-backdrop] .app.mobile .topbar.tinted {
+  background-image: var(--tx-grain), var(--tx-sheen), radial-gradient(70% 220% at 0% 0%, color-mix(in srgb, var(--c) 22%, transparent), transparent 70%);
+}
+:root[data-texture="skeuo"] .topbar h1,
+:root[data-texture="skeuo"] .dialog-head h3,
+:root[data-texture="skeuo"] .csb-brand {
+  text-shadow: var(--tx-emboss);
+}
+/* The chat list, docked or as a drawer: a tall plate, so its sheen runs side to side, and the quiet words on it keep
+   the softer grain. */
+:root[data-texture="skeuo"] .chat-sidebar,
+:root[data-texture="skeuo"] .chat-sidebar.drawer {
+  background-image: var(--tx-grain-soft), var(--tx-sheen-side);
+  border-right-color: var(--tx-line);
+}
+:root[data-texture="skeuo"] .chat-sidebar:not(.drawer) {
+  box-shadow: inset -1px 0 0 var(--tx-hi-soft);
+}
+/* Each line of the list lets the plate show through, as over a theme's backdrop (themes.css), rather than laying the
+   list's flat colour over the grain. */
+:root[data-texture="skeuo"] .chat-sidebar {
+  --csb-bg: transparent;
+}
+:root[data-texture="skeuo"] .csb-foot {
+  border-top-color: var(--tx-line);
+  box-shadow: inset 0 1px 0 var(--tx-hi-soft);
+}
+/* The area around the message box: the window's lower bar, a groove along its top. */
+:root[data-texture="skeuo"] .composer-wrap {
+  background-image: var(--tx-grain), var(--tx-sheen);
+  box-shadow: inset 0 1px 0 var(--tx-lo), inset 0 2px 0 var(--tx-hi-soft);
+}
+/* A sheet's or a dialog's title: its own bar. */
+:root[data-texture="skeuo"] .dialog-head {
+  background-image: var(--tx-grain), var(--tx-sheen);
+  border-top-left-radius: inherit;
+  border-top-right-radius: inherit;
+  box-shadow: inset 0 1px 0 var(--tx-hi), inset 0 -1px 0 var(--tx-lo), 0 1px 0 var(--tx-hi-soft);
+}
+
+/* ------------------------------------------------------------ panels: a little off the page */
+
+:root[data-texture="skeuo"] :is(.card, .list-group, .agent-hero, .cs-fold, .chat-status, .approval, .toast, .md .codeblock, .choice-card, .q-option) {
+  box-shadow: var(--tx-lift);
+}
+:root[data-texture="skeuo"] .agent-card {
+  box-shadow: var(--tx-lift);
+}
+@media (hover: hover) {
+  :root[data-texture="skeuo"] .agent-card:hover {
+    box-shadow: var(--tx-lift), 0 0 0 1px color-mix(in srgb, var(--c) 12%, transparent), 0 18px 50px -20px color-mix(in srgb, var(--c) 45%, transparent);
+  }
+}
+:root[data-texture="skeuo"] .msg.human .bubble {
+  background-image: var(--tx-raise);
+  box-shadow: var(--tx-raise-edge), var(--tx-drop);
+}
+/* Sheets, dialogs and menus stand higher: their own shadow, with the light on their upper edge. */
+:root[data-texture="skeuo"] :is(.dialog, .ctl-pop, .mention-pop, .csb-new-menu) {
+  box-shadow: var(--shadow-pop), inset 0 1px 0 var(--tx-hi);
+}
+/* The sheet's own colour under it while it settles (motion.css), as themes.css keeps it. */
+:root[data-texture="skeuo"] .app.mobile .dialog {
+  box-shadow: var(--shadow-pop), inset 0 1px 0 var(--tx-hi), 0 40px 0 var(--surface);
+}
+:root[data-texture="skeuo"][data-backdrop] .app.mobile .dialog {
+  box-shadow: var(--shadow-pop), inset 0 1px 0 var(--tx-hi), 0 40px 0 var(--pop);
+}
+
+/* ------------------------------------------------------------ buttons: raised, and they sink when pressed */
+
+:root[data-texture="skeuo"] :is(.btn:not(.ghost), .settings-tabs-row button, .seg button.on, .jump-latest-btn, .cs-chip, .csb-new) {
+  background-image: var(--tx-raise);
+  border-color: var(--tx-lo);
+  box-shadow: var(--tx-raise-edge), var(--tx-drop);
+}
+:root[data-texture="skeuo"] :is(.btn:not(.ghost), .settings-tabs-row button, .jump-latest-btn, .cs-chip, .csb-new):active {
+  background-image: var(--tx-press);
+  box-shadow: var(--tx-press-edge);
+}
+/* The main button: a gel. */
+/* (:not(.ghost) only so these outweigh the raised button's rule above.) */
+:root[data-texture="skeuo"] .btn.primary:not(.ghost),
+:root[data-texture="skeuo"] .btn.danger.solid:not(.ghost),
+:root[data-texture="skeuo"] .composer .send:not(:disabled):not(.stop) {
+  background-image: var(--tx-gel);
+  border-color: transparent;
+  box-shadow: var(--tx-gel-edge), var(--tx-drop);
+}
+:root[data-texture="skeuo"] .btn.primary:not(.ghost):active,
+:root[data-texture="skeuo"] .btn.danger.solid:not(.ghost):active,
+:root[data-texture="skeuo"] .composer .send:not(:disabled):not(.stop):active {
+  background-image: var(--tx-gel-press);
+  box-shadow: var(--tx-press-edge);
+}
+/* What's filled with the accent (the tab you're on): a gel too, as far as its words allow. */
+:root[data-texture="skeuo"] .settings-tabs-row button[aria-selected="true"] {
+  background-image: var(--tx-gel-accent);
+  box-shadow: var(--tx-gel-edge), var(--tx-drop);
+}
+/* Switched off, a button lies flat. */
+:root[data-texture="skeuo"] :is(.btn, .btn.primary, .btn.danger.solid):is(:disabled, [aria-disabled="true"]) {
+  background-image: none;
+  box-shadow: inset 0 0 0 0.5px var(--tx-lo);
+}
+/* A quiet button and an icon button have no body until they're pressed. */
+:root[data-texture="skeuo"] :is(.btn.ghost, .icon-btn, .composer-icon, .csb-tab):active,
+:root[data-texture="skeuo"] :is(.icon-btn.active, .csb-tab.active, .composer-icon.mic.on) {
+  box-shadow: var(--tx-press-edge);
+}
+/* The open chat's row is pressed in, keeping its agent's line down the side. */
+:root[data-texture="skeuo"] .csb-chat.active {
+  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--c) 70%, transparent), var(--tx-press-edge);
+}
+
+/* ------------------------------------------------------------ fields: wells */
+
+:root[data-texture="skeuo"] :is(.input, .select, .textarea, .composer, .seg) {
+  box-shadow: var(--tx-well);
+}
+:root[data-texture="skeuo"] :is(.input, .select, .textarea, .composer) {
+  border-color: var(--tx-lo);
+}
+/* The ring a field has while it's typed in stays, around the well. */
+:root[data-texture="skeuo"] :is(.input, .select, .textarea):focus {
+  border-color: var(--accent);
+  box-shadow: var(--tx-well), 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+:root[data-texture="skeuo"] .composer:focus-within {
+  border-color: var(--edge-focus);
+}
+:root[data-texture="skeuo"] .pill {
+  box-shadow: inset 0 1px 0 var(--tx-hi-soft), inset 0 -1px 0 rgba(0, 0, 0, 0.16);
+}
+
+/* ------------------------------------------------------------ switches and sliders: a groove and a metal knob */
+
+:root[data-texture="skeuo"] .switch span,
+:root[data-texture="skeuo"] .switch span::before {
+  box-shadow: var(--tx-well);
+}
+:root[data-texture="skeuo"] .switch span::after {
+  background-image: var(--tx-knob);
+  box-shadow: var(--tx-knob-edge);
+}
+:root[data-texture="skeuo"] :is(.theme-range input[type="range"], .effort-range)::-webkit-slider-runnable-track {
+  box-shadow: var(--tx-well);
+}
+:root[data-texture="skeuo"] :is(.theme-range input[type="range"], .effort-range)::-moz-range-track {
+  box-shadow: var(--tx-well);
+}
+:root[data-texture="skeuo"] :is(.theme-range input[type="range"], .effort-range)::-webkit-slider-thumb {
+  background-image: var(--tx-knob);
+  box-shadow: var(--tx-knob-edge);
+}
+:root[data-texture="skeuo"] :is(.theme-range input[type="range"], .effort-range)::-moz-range-thumb {
+  background-image: var(--tx-knob);
+  box-shadow: var(--tx-knob-edge);
+}
+/* The ring a slider's knob has from the keyboard stays, around the knob. */
+:root[data-texture="skeuo"] .theme-range input[type="range"]:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 3px var(--bg), 0 0 0 5px var(--accent);
+}
+:root[data-texture="skeuo"] .theme-range input[type="range"]:focus-visible::-moz-range-thumb {
+  box-shadow: 0 0 0 3px var(--bg), 0 0 0 5px var(--accent);
+}
+
+/* ============================================================ Liquid glass */
+
+/*
+ * theme.ts sets the layers (--chrome, --pop, --menu), the blur (--glass-filter) and the edge, shine and shadow
+ * (--glass-edge, --glass-shine, --glass-shadow) for every theme under this texture, and puts data-glass on the root;
+ * themes.css draws the bars, sheets, cards and fields with them. Here: what a plain page needs that a backdrop's rules
+ * give it, and the small controls, which take the edge and a rim of shine and never a blur.
+ */
+:root[data-texture="glass"],
+.xp-glass {
+  /* A small control's rim: the light on its upper edge, a hair of it round the rest, and a short glow under the edge
+     that ends above its words. */
+  --gx-rim: inset 0 1px 0 rgba(255, 255, 255, 0.28), inset 0 0 0 0.5px rgba(255, 255, 255, 0.12), inset 0 -1px 0 rgba(255, 255, 255, 0.05);
+  --gx-glow: linear-gradient(180deg, rgba(255, 255, 255, 0.1) 0, rgba(255, 255, 255, 0) 4px);
+  /* A filled control's: brighter, it has the contrast to spare. */
+  --gx-rim-filled: inset 0 1px 0 rgba(255, 255, 255, 0.7), inset 0 0 0 0.5px rgba(255, 255, 255, 0.3);
+  --gx-glow-filled: linear-gradient(135deg, rgba(255, 255, 255, 0.45) 0%, rgba(255, 255, 255, 0) 45%, rgba(255, 255, 255, 0) 72%, rgba(255, 255, 255, 0.18) 100%);
+  --gx-glow-accent: var(--gx-glow-filled);
+  --gx-float: 0 4px 14px rgba(0, 0, 0, 0.3);
+  --gx-sweep: linear-gradient(118deg, rgba(255, 255, 255, 0.06) 0%, rgba(255, 255, 255, 0) 32%, rgba(255, 255, 255, 0) 70%, rgba(255, 255, 255, 0.04) 100%);
+}
+:root[data-scheme="light"][data-texture="glass"],
+:root[data-scheme="light"] .xp-glass {
+  --gx-rim: inset 0 1px 0 rgba(255, 255, 255, 0.95), inset 0 0 0 0.5px rgba(255, 255, 255, 0.6), 0 0 0 0.5px rgba(48, 48, 90, 0.1);
+  --gx-glow: linear-gradient(135deg, rgba(255, 255, 255, 0.75) 0%, rgba(255, 255, 255, 0) 45%, rgba(255, 255, 255, 0) 72%, rgba(255, 255, 255, 0.4) 100%);
+  --gx-rim-filled: inset 0 1px 0 rgba(255, 255, 255, 0.4), inset 0 0 0 0.5px rgba(255, 255, 255, 0.2);
+  --gx-glow-filled: linear-gradient(135deg, rgba(255, 255, 255, 0.26) 0%, rgba(255, 255, 255, 0) 40%);
+  /* The accent's white words are only just readable on it: a rim, and nothing across them. */
+  --gx-glow-accent: linear-gradient(180deg, rgba(255, 255, 255, 0.3) 0, rgba(255, 255, 255, 0) 4px);
+  --gx-float: 0 4px 14px rgba(48, 48, 90, 0.14);
+}
+
+/* ------------------------------------------------------------ a plain page */
+
+/* The strip under the phone's status bar is the top bar's own glass, not a block of the page colour over it. */
+:root[data-texture="glass"] .app.mobile::before {
+  background: transparent;
+}
+/* On a light page sheets and menus are the page's own white (themes.css): here they're that white, see-through. */
+:root[data-texture="glass"]:not([data-backdrop]) :is(.dialog, .toast) {
+  background: var(--glass-shine), var(--pop);
+}
+:root[data-texture="glass"]:not([data-backdrop]) :is(.ctl-pop, .mention-pop, .csb-new-menu) {
+  background: var(--menu);
+}
+/* A dark bar on a plain page has the contrast to spare for a sweep of light across it (its words are the bright ones). */
+:root[data-texture="glass"]:not([data-backdrop]):not([data-scheme="light"]) .app .topbar,
+:root[data-texture="glass"]:not([data-backdrop]):not([data-scheme="light"]) .app.mobile .topbar,
+:root[data-texture="glass"]:not([data-backdrop]):not([data-scheme="light"]) .settings-tabs {
+  background-image: var(--gx-sweep), var(--glass-shine);
+}
+:root[data-texture="glass"]:not([data-backdrop]):not([data-scheme="light"]) .app .topbar.tinted,
+:root[data-texture="glass"]:not([data-backdrop]):not([data-scheme="light"]) .app.mobile .topbar.tinted {
+  background-image: var(--gx-sweep), var(--glass-shine), radial-gradient(70% 220% at 0% 0%, color-mix(in srgb, var(--c) 22%, transparent), transparent 70%);
+}
+/* The bars float: a bright upper edge, and the bar under them falls away in shadow. */
+:root[data-texture="glass"] .app .topbar,
+:root[data-texture="glass"] .app.mobile .topbar,
+:root[data-texture="glass"] .settings-tabs {
+  box-shadow: var(--glass-edge), var(--gx-float);
+}
+:root[data-texture="glass"] .chat-sidebar:not(.drawer) {
+  box-shadow: var(--glass-edge);
+}
+/* Small menus are nearly solid (they open inside a bar, where a blur can't reach), with the glass's edge. */
+:root[data-texture="glass"] :is(.ctl-pop, .mention-pop, .csb-new-menu) {
+  box-shadow: var(--shadow-pop), var(--glass-edge);
+}
+
+/* ------------------------------------------------------------ small controls: an edge and a rim of shine, no blur */
+
+:root[data-texture="glass"] :is(.btn:not(.ghost):not(.primary), .settings-tabs-row button, .seg button.on, .jump-latest-btn, .cs-chip, .csb-new, .pill, .chat-status, .cs-fold, .approval, .md .codeblock) {
+  background-image: var(--gx-glow);
+  box-shadow: var(--gx-rim);
+}
+:root[data-texture="glass"] .jump-latest-btn {
+  box-shadow: var(--shadow-pop), var(--gx-rim);
+}
+:root[data-texture="glass"] :is(.seg, .switch span) {
+  box-shadow: var(--gx-rim);
+}
+:root[data-texture="glass"] .btn.primary,
+:root[data-texture="glass"] .btn.danger.solid,
+:root[data-texture="glass"] .composer .send:not(:disabled):not(.stop) {
+  background-image: var(--gx-glow-filled);
+  box-shadow: var(--gx-rim-filled), var(--gx-float);
+}
+:root[data-texture="glass"] .settings-tabs .settings-tabs-row button[aria-selected="true"] {
+  background-image: var(--gx-glow-accent);
+  box-shadow: var(--gx-rim-filled);
+}
+:root[data-texture="glass"] .switch span::after {
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35), inset 0 0 0 0.5px rgba(255, 255, 255, 0.9), inset 0 -2px 3px rgba(0, 0, 0, 0.1);
+}
+/* Pressed, a control dims: the light leaves its edge. */
+:root[data-texture="glass"] :is(.btn:not(.ghost), .settings-tabs-row button, .jump-latest-btn, .cs-chip, .csb-new):active {
+  background-image: linear-gradient(rgba(0, 0, 0, 0.14), rgba(0, 0, 0, 0.14));
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.35);
+}
+:root[data-texture="glass"] :is(.btn, .btn.primary, .btn.danger.solid):is(:disabled, [aria-disabled="true"]) {
+  background-image: none;
+  box-shadow: none;
+}
+/* The ring a field has while it's typed in stays, with the edge. */
+:root[data-texture="glass"][data-glass] :is(.input, .select, .textarea):focus {
+  box-shadow: var(--glass-edge), 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+/* ============================================================ the three, drawn small (Settings → Texture) */
+
+/*
+ * A bit of bar, a button and a switch in the colours of the theme in use, each drawn as its texture draws them
+ * whatever texture is on: so these are written out here, with the same recipes as above.
+ */
+.xp-flat .xp-bar {
+  background: var(--surface);
+  border-bottom-color: var(--sep);
+}
+.xp-flat .xp-btn {
+  background: var(--primary-bg);
+}
+.xp-flat .xp-key {
+  background: var(--surface-2);
+  border-color: var(--sep);
+}
+.xp-flat .xp-switch {
+  background: var(--green);
+}
+.xp-flat .xp-switch::after {
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+}
+
+.xp-skeuo .xp-bar {
+  background-color: var(--surface);
+  background-image: var(--tx-grain), var(--tx-sheen);
+  border-bottom-color: var(--tx-line);
+  box-shadow: inset 0 1px 0 var(--tx-hi), 0 1px 3px rgba(0, 0, 0, 0.35);
+}
+.xp-skeuo .xp-btn {
+  background-color: var(--primary-bg);
+  background-image: var(--tx-gel);
+  box-shadow: var(--tx-gel-edge), var(--tx-drop);
+}
+.xp-skeuo .xp-key {
+  background-color: var(--surface-2);
+  background-image: var(--tx-raise);
+  border-color: var(--tx-lo);
+  box-shadow: var(--tx-raise-edge), var(--tx-drop);
+}
+.xp-skeuo .xp-switch {
+  background: var(--green);
+  box-shadow: var(--tx-well);
+}
+.xp-skeuo .xp-switch::after {
+  background-image: var(--tx-knob);
+  box-shadow: var(--tx-knob-edge);
+}
+
+/* Glass needs something behind it to be seen through: a soft pool of the accent under the bar. */
+.xp-glass {
+  background-image: radial-gradient(60% 80% at 22% 8%, color-mix(in srgb, var(--accent) 60%, transparent), transparent 100%), radial-gradient(50% 70% at 92% 96%, color-mix(in srgb, var(--accent) 30%, transparent), transparent 100%);
+}
+.xp-glass .xp-bar {
+  background-color: color-mix(in srgb, var(--surface) 45%, transparent);
+  background-image: linear-gradient(135deg, rgba(255, 255, 255, 0.22) 0%, rgba(255, 255, 255, 0) 55%);
+  border-bottom-color: transparent;
+  box-shadow: var(--gx-rim), var(--gx-float);
+}
+.xp-glass .xp-btn {
+  background-color: var(--primary-bg);
+  background-image: var(--gx-glow-filled);
+  box-shadow: var(--gx-rim-filled), var(--gx-float);
+}
+.xp-glass .xp-key {
+  background-color: color-mix(in srgb, var(--surface-2) 55%, transparent);
+  background-image: linear-gradient(135deg, rgba(255, 255, 255, 0.2) 0%, rgba(255, 255, 255, 0) 60%);
+  border-color: transparent;
+  box-shadow: var(--gx-rim);
+}
+.xp-glass .xp-switch {
+  background: color-mix(in srgb, var(--green) 80%, transparent);
+  box-shadow: var(--gx-rim);
+}
+.xp-glass .xp-switch::after {
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35), inset 0 0 0 0.5px rgba(255, 255, 255, 0.9), inset 0 -2px 3px rgba(0, 0, 0, 0.1);
+}
+
+/* A sheet over a gradient or a picture holds rows of small, quiet words: under this texture it keeps its rim of light
+   but not the sweep across it, and has a veil of the page's own colour in it, so those words read over the lighter
+   parts of a backdrop and over whatever of the chat shows through. */
+:root[data-texture="glass"][data-backdrop] .dialog {
+  background:
+    linear-gradient(color-mix(in srgb, var(--bg) 52%, transparent), color-mix(in srgb, var(--bg) 52%, transparent)),
+    var(--pop);
+}

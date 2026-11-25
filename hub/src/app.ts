@@ -68,7 +68,8 @@ import { localLibraryOf } from "./localLibrary";
 import { MacServer, clock } from "./mac";
 import { FACTORY_SCREEN, ScreenManager } from "./screen";
 import { Updater } from "./update";
-import { stagedBuild, takeNextBuild } from "./setup/system";
+import { SelfUpdate, releaseSource } from "./selfUpdate";
+import { hubService, stagedBuild, takeNextBuild } from "./setup/system";
 import { isModelAlias, modelName, pickModel, userNamed } from "./agents/model-lock";
 import { forgetConversation } from "./agents/builtin";
 import { codexAllowedLabel } from "./agents/codex";
@@ -129,6 +130,7 @@ export class App {
   readonly mac: MacServer;
   readonly screen: ScreenManager;
   readonly updater: Updater;
+  readonly selfUpdate: SelfUpdate;
   /** Ask others (asks.ts): one-shot questions to other agents about a message, answered into cards. */
   readonly asks: Asks;
   /** Helpers that run for a chat's agent on another account (helpers.ts). */
@@ -323,6 +325,25 @@ export class App {
       },
       changed: () => this.bus.emit({ t: "hub", hub: this.hubInfo() }),
     });
+    // Updates from the app: a newer release is offered, and one button downloads it to where the Updater finds it.
+    // Only Crosstalk's own program does any of it: a hub run from its source (every test's) asks GitHub nothing.
+    this.selfUpdate = new SelfUpdate({
+      version: HUB_VERSION,
+      path: process.execPath,
+      compiled: !inMemory && (Bun.main.startsWith("/$bunfs/") || Bun.main.startsWith("B:\\~BUN\\")),
+      platform: osPlatform(),
+      arch: process.arch,
+      ...releaseSource(),
+      run: runQuietly,
+      restarts: async () => {
+        const service = await hubService(runQuietly);
+        return service ? service.runningUnder !== "none" : null;
+      },
+      ready: () => this.updater.status(),
+      staged: () => this.updater.look(),
+      changed: () => this.bus.emit({ t: "hub", hub: this.hubInfo() }),
+      auto: !process.env.CROSSTALK_NO_UPDATE_CHECK,
+    });
     this.mac = new MacServer({
       run: (args, timeoutMs) => runQuietly(args, timeoutMs),
       readable: (path) => canRead(path),
@@ -402,6 +423,8 @@ export class App {
     if (this.opts.dbPath !== ":memory:" || process.env.CROSSTALK_SCREEN_PORT) this.screen.start();
     // A new build put in place starts by itself once the chats are quiet (update.ts).
     if (this.opts.dbPath !== ":memory:") this.updater.start();
+    // And a newer release on GitHub is looked for now and then (selfUpdate.ts).
+    if (this.opts.dbPath !== ":memory:") this.selfUpdate.start();
   }
 
   /**
@@ -605,6 +628,7 @@ export class App {
       flowsIn: true,
       screen: { ready: this.screen.ready(), agents: this.screen.agentsAllowed() },
       update: this.updater.status(),
+      release: this.selfUpdate.brief(),
     };
   }
 
@@ -1449,6 +1473,7 @@ export class App {
     this.mac.stop();
     this.screen.shutdown();
     this.updater.stop();
+    this.selfUpdate.stop();
     this.push.stopRetries();
     this.busy?.stop();
     this.storage.stop();

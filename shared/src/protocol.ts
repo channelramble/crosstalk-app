@@ -1146,6 +1146,11 @@ export interface HubInfo {
   /** A new build of Crosstalk is in place on this machine and starts when its chats are quiet (hub/src/update.ts). */
   update?: HubUpdate | null;
   /**
+   * A newer version of Crosstalk this machine can download, and the download while it runs (hub/src/selfUpdate.ts).
+   * Absent from older hubs, which are updated by running the installer again.
+   */
+  release?: HubRelease | null;
+  /**
    * A message sent while an agent works goes into its running reply by itself, whether or not its helpers are at work
    * (engine.ts flowIn): the app then shows one line under the message and one button, Interrupt, and no Send now or
    * Answer now. Absent from hubs before 0.8, which do that only while helpers work (messagesFlow).
@@ -1212,6 +1217,78 @@ export function updateWords(u: Pick<HubUpdate, "version" | "working" | "restarti
   if (u.restarting) return `Restarting to update to ${u.version}…`;
   if (!u.working) return `Update ${u.version} is ready. It starts in a moment.`;
   return `Update ${u.version} is ready. It starts when ${u.working === 1 ? "the chat that's working is" : `the ${u.working} chats that are working are`} done.`;
+}
+
+// ---- Updates from the app (hub/src/selfUpdate.ts) ----
+//
+// The hub asks GitHub for the newest release of the repo it was installed from: a little after it starts, about every
+// six hours, and when asked. The request says nothing about the person or the machine. A newer one is offered on
+// every device (HubInfo.release); Update downloads the program for this machine, checks it against the release's
+// SHA256SUMS and that it really is that version, and leaves it beside the running one, where the update that applies
+// itself (above) finds it. People's devices only.
+//   GET  /api/update          -> UpdateStatus
+//   POST /api/update/check    -> UpdateStatus (asks GitHub now; `checkFailed` when it couldn't)
+//   POST /api/update/install  -> UpdateStatus (starts the download, or answers with the one that's running)
+//   POST /api/update/restart  -> { ok: true } (an update that's ready starts now)
+
+/** The download of an update: where it is, or why it failed. Gone once the update is ready (then HubInfo.update says so). */
+export interface UpdateInstall {
+  /** The version being downloaded ("" until GitHub has said which). */
+  version: string;
+  step: "checking" | "downloading" | "verifying" | "failed";
+  /** 0 to 100 while it downloads; null when the size isn't known. */
+  percent: number | null;
+  /** Why it failed, in plain words. */
+  error?: string;
+}
+
+export interface HubRelease {
+  /** A newer version than the one that runs, not downloaded yet. Null: none that this machine knows of. */
+  available: string | null;
+  install: UpdateInstall | null;
+}
+
+export interface UpdateStatus extends HubRelease {
+  /** The version that runs. */
+  version: string;
+  /** False: this Crosstalk can't update itself from the app, and `why` says why (nothing is offered then). */
+  can: boolean;
+  why: string | null;
+  /** What's new in the available version: the release's notes (Markdown), cut short. */
+  notes: string | null;
+  /** When GitHub last answered (null: not yet). */
+  checkedAt: number | null;
+  /** The last time it asked, GitHub couldn't be reached: normal for a machine that's offline. */
+  checkFailed: boolean;
+  /** An update that's downloaded and waits for the chats to go quiet (HubInfo.update). */
+  ready: HubUpdate | null;
+}
+
+/** A download's progress in one line. */
+export function installWords(i: Pick<UpdateInstall, "version" | "step" | "percent" | "error">): string {
+  const what = i.version ? `Crosstalk ${i.version}` : "the update";
+  switch (i.step) {
+    case "checking":
+      return "Looking for the update…";
+    case "downloading":
+      return `Downloading ${what}…${i.percent === null ? "" : ` ${i.percent}%`}`;
+    case "verifying":
+      return "Checking the download…";
+    case "failed":
+      return i.error || "The update didn't download.";
+  }
+}
+
+/**
+ * Compares two versions like 0.10.0 and 0.9.1 by their numbers: above zero when `a` is newer, below when older, 0 when
+ * they're the same. Null when either isn't three plain numbers (a test build, a tag of another kind): never offered.
+ */
+export function compareVersions(a: string, b: string): number | null {
+  const parts = (v: string) => /^v?(\d{1,6})\.(\d{1,6})\.(\d{1,6})$/.exec(v.trim())?.slice(1).map(Number) ?? null;
+  const [x, y] = [parts(a), parts(b)];
+  if (!x || !y) return null;
+  for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] - y[i];
+  return 0;
 }
 
 // ---- The hub machine's screen (hub/src/screen) ----

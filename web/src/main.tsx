@@ -21,6 +21,8 @@ import "./styles/chat-settings.css";
 import "./styles/together.css";
 // What only a theme needs (Settings → This device → Theme): a backdrop, see-through panels, the Theme section itself.
 import "./styles/themes.css";
+// How surfaces and controls are drawn (Settings → This device → Texture): colours, sizes and places are never touched.
+import "./styles/textures.css";
 // Last: every duration, curve and moving rule, and the Reduce Motion policy over them all.
 import "./styles/motion.css";
 import { App } from "./App";

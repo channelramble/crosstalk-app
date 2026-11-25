@@ -1,4 +1,4 @@
-import { Component, createContext, createElement, createRef, useContext, useRef, useState, type HTMLAttributes, type ReactNode } from "react";
+import { Component, createContext, createElement, createRef, useContext, useEffect, useLayoutEffect, useRef, useState, type HTMLAttributes, type ReactNode, type RefObject } from "react";
 import { layoutZoom, zoomFactor } from "./zoom";
 
 /*
@@ -23,6 +23,8 @@ import { layoutZoom, zoomFactor } from "./zoom";
  *   line) changes. `enter` fades new rows in; `exit` gives the rows that went a copy of that kind.
  * - `useEntrance()`: "m-enter" for a part that appears on a screen that's already up (a card, a status line), "" for
  *   one drawn with its screen. Each screen (App.tsx) and each dialog (ui.tsx) is an `EntranceScope`.
+ * - `useGlide(ref)`: what's inside a sheet glides to its new place when a tap in it changes its size (a section
+ *   opening): the sheet itself, and everything under the part that grew or shrank.
  * - `fadeIn(els)`: a 150 ms fade for words swapped in place (a dialog's next step).
  * - `token("--dur-fade")`, `ms("--dur-fade")`: motion.css's tokens, for animations started from here.
  * - `ghosts()`: the copies playing their exits right now (tests, and looking into a stutter).
@@ -79,6 +81,8 @@ type Leaving = {
   part?: string;
   frozen: Box | null;
   from: [number, number] | null;
+  /** A sheet: how far it drops to leave the screen, in % of its own height. */
+  fall: number | null;
   /** How opaque it, its ::before and the moving piece were (an entrance fading in): the exit starts there. */
   opacity: { el: number; before: number; part: number };
   /** Where the element itself sat, when it's lifted out of the page's flow. */
@@ -208,11 +212,25 @@ function copyOf(el: HTMLElement, kind: GhostKind, opts: LeaveOptions, list: HTML
     part: part === el ? undefined : opts.part,
     frozen: part === el ? null : boxOf(part),
     from: entranceLeft(part),
+    fall: kind === "sheet" ? fallOf(el, part) : null,
     opacity,
     lifted: style.position === "static" || style.position === "relative" ? boxOf(el) : null,
     scrolls,
   });
   if (queue.length === 1) queueMicrotask(place);
+}
+
+/**
+ * How far a closing sheet drops to be off the screen whole, in % of its own height (its keyframes are all %): from its
+ * top to the bottom edge of the dim it sits in, and its shadow's reach more. A sheet at the bottom edge of a phone
+ * drops its own height; one in the middle of a computer's window drops further, and never stops half way down.
+ */
+function fallOf(overlay: HTMLElement, sheet: HTMLElement): number | null {
+  const o = overlay.getBoundingClientRect();
+  const r = sheet.getBoundingClientRect();
+  if (!r.height || !o.height) return null;
+  const SHADOW = 56;
+  return Math.max(100, Math.ceil(((o.bottom - r.top + SHADOW) / r.height) * 100));
 }
 
 /** How far `t`'s entrance still had to go, in % of its own width and height; null when it wasn't moving in. */
@@ -275,6 +293,7 @@ function placeOne(b: Leaving, withSheet: boolean) {
     part.style.setProperty("--m-from-x", `${b.from[0]}%`);
     part.style.setProperty("--m-from-y", `${b.from[1]}%`);
   }
+  if (part && b.fall) part.style.setProperty("--m-out-y", `${b.fall}%`);
   // Closed while it was still fading in: its exit starts as faint as it was, rather than brightening first. The moving
   // piece always says its own (it would inherit the copy's otherwise).
   const opacity = (o: number) => String(Number.isFinite(o) ? Math.round(o * 1000) / 1000 : 1);
@@ -421,6 +440,101 @@ export class FlipGroup extends Component<FlipProps> {
     const { order: _order, enter: _enter, exit: _exit, children, ...rest } = this.props;
     return createElement("div", { ...rest, ref: this.box }, children);
   }
+}
+
+// ------------------------------------------------------------------------------------------------ a sheet's parts
+
+/** The parts of a sheet that glide: what sits directly in it, in a section's body, or in an agent's block. */
+const GLIDERS = ":scope > *, .cs-fold-body > *, .cs-agent-body > *, [data-glide]";
+/** More parts than this, and nothing glides (it would cost more than it's worth). */
+const MOST_GLIDERS = 80;
+
+/**
+ * A sheet whose parts glide when a tap in it changes its size (a section opening or closing, a longer list): where
+ * each part was is read as the tap lands, before React changes the page, and what ended up somewhere else is drawn
+ * where it was and eased home, the sheet itself too (it grows from where it stood). `ref`: the element the parts are
+ * in (it scrolls with them). Only transform moves, nothing waits, and a part that's new has no glide (it has its own
+ * entrance). Never under Reduce Motion, nor while the text size is being changed.
+ */
+export function useGlide(ref: RefObject<HTMLElement | null>): void {
+  const before = useRef<{ parts: Map<Element, number>; frame: Element | null; frameTop: number; width: number } | null>(null);
+  useEffect(() => {
+    const root = ref.current;
+    if (!root) return;
+    const read = (e: Event) => {
+      before.current = null;
+      // The part that was tapped (and what it's in) is drawn over the parts that glide out of its way, so what opens in
+      // it takes a tap from its first frame (motion-controls.css `[data-over]`). Not by where the focus is: Safari
+      // doesn't give a button the focus when it's clicked.
+      for (const el of Array.from(root.querySelectorAll("[data-over]"))) el.removeAttribute("data-over");
+      for (let el = e.target instanceof Element ? e.target.closest(".cs-fold") : null; el && root.contains(el); el = el.parentElement?.closest(".cs-fold") ?? null) el.setAttribute("data-over", "");
+      if (reduced() || layoutZoom() !== Math.round(zoomFactor() * 100) || !root.getClientRects().length) return;
+      const els = Array.from(root.querySelectorAll(GLIDERS));
+      if (els.length > MOST_GLIDERS) return;
+      // Where each part is in the sheet's own page (it scrolls with it), and where the sheet is on the screen.
+      const top = root.getBoundingClientRect().top;
+      const frame = root.closest(".dialog");
+      before.current = { parts: new Map(els.map((el) => [el, el.getBoundingClientRect().top - top])), frame, frameTop: frame?.getBoundingClientRect().top ?? 0, width: root.clientWidth };
+      // A tap that changed nothing leaves nothing behind for a later redraw to move from.
+      requestAnimationFrame(() => (before.current = null));
+    };
+    root.addEventListener("click", read, true);
+    return () => root.removeEventListener("click", read, true);
+  }, [ref]);
+  useLayoutEffect(() => {
+    const was = before.current;
+    const root = ref.current;
+    before.current = null;
+    if (!was || !root || reduced() || root.clientWidth !== was.width) return;
+    const zoom = zoomFactor();
+    const timing = { duration: ms("--dur-flip"), easing: token("--ease-smooth") || "ease", composite: "add" as const };
+    const glide = (el: Element, dy: number) => {
+      if (Math.abs(dy) >= 1) el.animate({ transform: [`translate(0px, ${dy / zoom}px)`, "translate(0px, 0px)"] }, timing);
+    };
+    if (was.frame?.isConnected) {
+      const dy = was.frameTop - was.frame.getBoundingClientRect().top;
+      // Before the sheet is drawn where it stood: this reads where it has come to rest.
+      if (dy <= -1) underSheet(was.frame, -dy / zoom, timing);
+      glide(was.frame, dy);
+    }
+    const top = root.getBoundingClientRect().top;
+    const moved = new Map<Element, number>();
+    for (const [el, at] of was.parts) if (el.isConnected) moved.set(el, at - (el.getBoundingClientRect().top - top));
+    for (const [el, dy] of moved) {
+      // A part inside a part that moved goes with it: only what it moved besides is its own.
+      let within = 0;
+      for (let a = el.parentElement; a && a !== root; a = a.parentElement) {
+        if (moved.has(a)) {
+          within = moved.get(a)!;
+          break;
+        }
+      }
+      glide(el, dy - within);
+    }
+  });
+}
+
+/**
+ * A sheet at the bottom edge that got shorter is drawn where it stood and eased down: for that long, a strip of its own
+ * colour fills what would show under it, moving down with it (`by`: how much shorter, in the page's pixels).
+ */
+function underSheet(sheet: Element, by: number, timing: KeyframeAnimationOptions) {
+  const host = sheet.parentElement;
+  if (!host) return;
+  const s = sheet.getBoundingClientRect();
+  const h = host.getBoundingClientRect();
+  if (s.bottom < h.bottom - 1) return; // not at the bottom edge: nothing shows under one in the middle of a window
+  const zoom = zoomFactor();
+  const strip = document.createElement("div");
+  strip.setAttribute("aria-hidden", "true");
+  strip.dataset.underSheet = "";
+  strip.style.cssText = `position: absolute; left: ${(s.left - h.left) / zoom}px; width: ${s.width / zoom}px; bottom: 0; height: ${by}px; background: ${getComputedStyle(sheet).backgroundColor}; pointer-events: none`;
+  host.appendChild(strip);
+  const down = strip.animate({ transform: ["translate(0px, 0px)", `translate(0px, ${by}px)`] }, { ...timing, composite: "replace", fill: "forwards" });
+  const gone = () => strip.remove();
+  void down.finished.then(gone, gone);
+  // However it goes, never left on the screen.
+  setTimeout(gone, Number(timing.duration) + 500);
 }
 
 // ------------------------------------------------------------------------------------------------ entrances

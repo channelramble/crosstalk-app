@@ -11,7 +11,7 @@ export const SECTION_TITLES: Record<SectionId, string> = {
   answers: "Answers with",
   may: "May do",
   helpers: "Helpers",
-  memory: "Memory",
+  memory: "Memory and usage",
   agent: "Name and role",
   group: "Working together",
   chat: "This chat",
@@ -44,6 +44,14 @@ export function openAt(at: SheetAt | null | undefined, group: boolean): string[]
   if (!at?.section) return at?.memberId && group ? [`agent:${at.memberId}`] : [];
   const key = foldKey(at.section, at.memberId);
   return group && at.memberId && key !== at.section ? [`agent:${at.memberId}`, key] : [key];
+}
+
+/** The plan limit nearest full, for the closed Memory and usage row ("5-hour limit 34% used"); null when none is reported. */
+export function limitWords(windows: readonly { label: string; usedPercent: number | null }[] | undefined): string | null {
+  const known = (windows ?? []).filter((w): w is { label: string; usedPercent: number } => w.usedPercent !== null);
+  if (!known.length) return null;
+  const top = known.reduce((a, b) => (b.usedPercent > a.usedPercent ? b : a));
+  return `${top.label} limit ${Math.round(top.usedPercent)}% used`;
 }
 
 /** Effort as a step or a chip says it: one short word, in the agent's own names. */

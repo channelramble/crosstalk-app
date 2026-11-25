@@ -92,8 +92,12 @@ export function trackVisualViewport() {
     if (room.keyboard !== was) updateSegments();
     return typing;
   };
+  // What the visible part said when the app was last sized to it.
+  let sized = { height: -1, top: -1, scale: -1 };
+  const said = () => ({ height: Math.round(vv.height * vv.scale), top: Math.round(vv.offsetTop), scale: Math.round(vv.scale * 100) });
   const update = () => {
     frame = 0;
+    sized = said();
     const scale = vv.scale;
     // Pinch-zoomed: sizes from the screen as they are unzoomed, and the page left where it's been zoomed to.
     const pinched = Math.abs(scale - 1) > 0.01;
@@ -143,10 +147,45 @@ export function trackVisualViewport() {
   });
   // And the page's own box: whatever changed it, the app is sized to it again.
   if (typeof ResizeObserver !== "undefined") new ResizeObserver(schedule).observe(root);
-  // A field taking or losing focus: only whether the keyboard is up (and the room it leaves) is looked at again.
-  const typingChanged = () => requestAnimationFrame(() => measure(document.activeElement));
+  // A phone doesn't always say when its keyboard changed the visible part: an iPhone's keyboard brought back by a tap
+  // on a field that already had the focus, the app coming back to the front with a field in it, a keyboard that
+  // settles after the last word of it. The message box was then left under the keyboard. So the visible part is also
+  // read, without being told, around every moment a keyboard could have moved (a field taking or losing the focus, a
+  // touch while one has it, a letter typed), and now and then for as long as a field has the focus. Reading it costs
+  // nothing; the app is sized again only when it says something new.
+  const peek = () => {
+    const now = said();
+    if (now.height !== sized.height || now.top !== sized.top || now.scale !== sized.scale) schedule();
+  };
+  const PEEKS = [60, 180, 350, 600, 1000, 1600];
+  let peeks: ReturnType<typeof setTimeout>[] = [];
+  const soon = () => {
+    peeks.forEach(clearTimeout);
+    peeks = PEEKS.map((ms) => setTimeout(peek, ms));
+  };
+  const typingIn = (el: Element | null) => !!el && (el instanceof HTMLTextAreaElement || (el instanceof HTMLInputElement && !["checkbox", "radio", "button", "submit", "range", "color", "file"].includes(el.type)) || (el as HTMLElement).isContentEditable);
+  let watch: ReturnType<typeof setInterval> | undefined;
+  const watching = () => {
+    const on = touch.matches && typingIn(document.activeElement);
+    if (on && !watch) watch = setInterval(peek, 700);
+    if (!on && watch) {
+      clearInterval(watch);
+      watch = undefined;
+    }
+  };
+  // A field taking or losing focus: whether the keyboard is up (and the room it leaves) is looked at again.
+  const typingChanged = () => {
+    requestAnimationFrame(() => measure(document.activeElement));
+    soon();
+    watching();
+  };
   document.addEventListener("focusin", typingChanged);
   document.addEventListener("focusout", typingChanged);
+  const touched = () => {
+    if (typingIn(document.activeElement)) soon();
+  };
+  document.addEventListener("touchend", touched, { passive: true });
+  document.addEventListener("beforeinput", peek);
   // A new size takes effect at once, so the page never shows a frame sized for the old one.
   onZoom(update);
   update();

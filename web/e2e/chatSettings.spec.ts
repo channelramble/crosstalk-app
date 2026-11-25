@@ -102,7 +102,7 @@ test("the row says what's in force, and switching the model is two taps from the
 test("from the top bar the sheet is an overview: a row per section that says what's in force", async ({ page, request, token }) => {
   const c = await chat(page, request, token, { member: { permissionMode: "edits", model: "claude-sonnet-5", config: { effort: "low" } } });
   const s = await chatSettings(page);
-  await expect(s.locator(".cs-fold-title")).toHaveText(["Answers with", "May do", "Helpers", "Memory", "This chat"]);
+  await expect(s.locator(".cs-fold-title")).toHaveText(["Answers with", "May do", "Helpers", "Memory and usage", "This chat"]);
   await expect(s.locator('.cs-fold-head[aria-expanded="true"]')).toHaveCount(0);
   await expect(s.getByRole("region", { name: "Answers with", exact: true }).locator(".cs-fold-sum")).toHaveText("Sonnet 5 · Low");
   await expect(s.getByRole("region", { name: "May do", exact: true }).locator(".cs-fold-sum")).toHaveText("Can edit");
@@ -145,7 +145,7 @@ test("from the top bar the sheet is an overview: a row per section that says wha
   await expect(helpers.getByRole("combobox", { name: "Helpers run on", exact: true })).toBeVisible();
 
   // Memory: in plain words, with summarizing and starting fresh.
-  const memory = await chatSettings(page, "Memory");
+  const memory = await chatSettings(page, "Memory and usage");
   await expect(memory.getByRole("button", { name: "Summarize now", exact: true })).toBeEnabled();
   await memory.getByRole("combobox", { name: "Summarize by itself at", exact: true }).selectOption("100000");
   await expect.poll(() => c.patches.at(-1)?.config?.autoCompact).toBe(100_000);
@@ -190,7 +190,7 @@ test("it says what will happen: at the next reply, after this one, once helpers 
   // While it replies, a change waits for the reply to end.
   c.send({ status: "working" });
   await expect(answers).toContainText("Claude Code is replying now. A change here applies once this reply ends.");
-  const memory = await chatSettings(page, "Memory");
+  const memory = await chatSettings(page, "Memory and usage");
   await expect(memory.getByRole("button", { name: "Summarize now", exact: true })).toBeDisabled();
   await expect(memory).toContainText("Available once Claude Code finishes this reply.");
   // A change that's waiting on its helpers says so at the top of the sheet.
@@ -235,7 +235,7 @@ test("a group chat's sheet: how they work together, then a block per agent with 
 
   // An agent's block has the sections a one-agent chat has, and its name and role.
   const checker = await openFold(s, "@checker");
-  await expect(checker.locator(".cs-fold-title")).toHaveText(["@checker", "Answers with", "May do", "Helpers", "Memory", "Name and role"]);
+  await expect(checker.locator(".cs-fold-title")).toHaveText(["@checker", "Answers with", "May do", "Helpers", "Memory and usage", "Name and role"]);
   const may = await openFold(checker, "May do");
   await pickPermission(may, "edits");
   await expect(permissionCards(may).locator('[aria-checked="true"]')).toHaveAttribute("data-value", "edits");
@@ -266,7 +266,7 @@ test("on the smallest phone the row is one line and the sheet fits the screen", 
   await noHorizontalOverflow(page);
   await row(page).locator(".ctl-model").click();
   const s = sheet(page);
-  for (const name of ["Answers with", "May do", "Helpers", "Memory", "This chat"] as const) await openFold(s, name);
+  for (const name of ["Answers with", "May do", "Helpers", "Memory and usage", "This chat"] as const) await openFold(s, name);
   const fits = await s.evaluate((el) => {
     const d = el.getBoundingClientRect();
     const body = el.querySelector(".dialog-body")!;
@@ -283,6 +283,37 @@ test("on the smallest phone the row is one line and the sheet fits the screen", 
   expect(fits.sideways).toBe(false);
   expect(fits.wide).toEqual([]);
   expect(fits.small).toEqual([]);
+  await noHorizontalOverflow(page);
+});
+
+test("the ring opens Memory and usage: how full the memory is, the plan's limits and what the chat cost, in one place", async ({ page, request, token }) => {
+  const c = await chat(page, request, token);
+  // The plan that pays for this chat's replies, as the machine reports it.
+  await page.evaluate(async () => {
+    const { useStore } = await import("/src/store.ts" as string);
+    const now = Date.now();
+    useStore.setState({ usage: { ...useStore.getState().usage, claude: { provider: "claude", accountId: "default", account: null, plan: "Max", windows: [{ label: "5-hour", usedPercent: 34, resetsAt: now + 9_000_000 }, { label: "Weekly", usedPercent: 58, resetsAt: now + 250_000_000 }], credits: null, note: null, updatedAt: now } } });
+  });
+  const ring = row(page).getByRole("button", { name: /Open this chat's memory and usage$/ });
+  await ring.click();
+  const s = sheet(page);
+  const memory = s.getByRole("region", { name: "Memory and usage", exact: true });
+  await expect(memory.locator("> .cs-fold-head")).toHaveAttribute("aria-expanded", "true");
+  // Only that section is open, and its closed neighbours say theirs in a line.
+  await expect(s.locator('.cs-fold-head[aria-expanded="true"]')).toHaveCount(1);
+  // The plan's limits, each with how much is used.
+  await expect(memory.getByText("Plan limits")).toBeVisible();
+  await expect(memory.locator(".usage-line").filter({ hasText: "5-hour" })).toContainText("34%");
+  await expect(memory.locator(".usage-line").filter({ hasText: "Weekly" })).toContainText("58%");
+  // The memory's own choices are still there, under them.
+  await expect(memory.getByRole("button", { name: "Summarize now", exact: true })).toBeVisible();
+  await expect(memory.getByRole("combobox", { name: "Summarize by itself at", exact: true })).toBeVisible();
+  // Answers with no longer repeats the limits.
+  const answers = await openFold(s, "Answers with");
+  await expect(answers.getByText("Plan limits")).toHaveCount(0);
+  // Closed, the row says the limit nearest full beside the memory.
+  await memory.locator("> .cs-fold-head").click();
+  await expect(memory.locator(".cs-fold-sum")).toContainText("Weekly limit 58% used");
   await noHorizontalOverflow(page);
 });
 

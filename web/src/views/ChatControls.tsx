@@ -57,7 +57,7 @@ export function ChatControls({ room, member: only, members, onOpen }: { room: Ro
           +{others}
         </button>
       )}
-      <button className="ctl ring-btn" onClick={() => onOpen({ section: "memory", memberId: member.id })} aria-haspopup="dialog" aria-label={pct !== null ? `${whose}Memory ${pct}% full. Open this chat's memory` : `${whose}Memory. Open this chat's memory`} title="How much of the chat the model remembers">
+      <button className="ctl ring-btn" onClick={() => onOpen({ section: "memory", memberId: member.id })} aria-haspopup="dialog" aria-label={pct !== null ? `${whose}Memory ${pct}% full. Open this chat's memory and usage` : `${whose}Memory. Open this chat's memory and usage`} title="Memory and usage">
         <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
           <circle cx="9" cy="9" r={r} className="ring-track" />
           {pct !== null && pct > 0 && <circle cx="9" cy="9" r={r} className={`ring-fill ${toneFor(pct)}`} strokeDasharray={`${Math.max(1.5, (pct / 100) * c)} ${c}`} transform="rotate(-90 9 9)" />}

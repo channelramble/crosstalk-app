@@ -147,9 +147,9 @@ async function wrong(page: Page, size: Size, want: Want = {}): Promise<string[]>
         const m = box(main);
         if (!near(s.left, 0) || !near(s.width, W) || !near(s.height, H)) out.push(`the frame is at ${s.left}, ${s.top}, ${s.width} × ${s.height}`);
         const d = docked ? box(docked) : null;
-        // Docked: the chats then the screen, edge to edge. Alone: the screen, as wide as it gets (860 px), centered.
+        // Docked: the chats then the screen, edge to edge. Alone: the screen, edge to edge too.
         if (d && want.posture !== "book" && (!near(d.left, 0) || !near(m.left, d.right) || !near(m.right, W))) out.push(`docked, the chats span ${d.left}–${d.right} and the screen ${m.left}–${m.right} of ${W}`);
-        if (!d && (!near(m.width, Math.min(W, 860 * zoom), 3) || !near(m.left + m.right, W, 3))) out.push(`the screen spans ${m.left}–${m.right} of ${W}`);
+        if (!d && (!near(m.left, 0, 3) || !near(m.right, W, 3))) out.push(`the screen spans ${m.left}–${m.right} of ${W}`);
         if (!near(m.top, 0) || !near(m.bottom, H)) out.push(`the screen spans ${m.top}–${m.bottom} down a ${H}px screen`);
       }
       // The chats: docked or not, as asked, and never a drawer's leftovers beside a docked list.

@@ -102,7 +102,7 @@ test("the controls under the message box are for one agent at a time", async ({ 
     await pickPermission(await chatSettings(page, "May do", "checker"), "edits");
     expect((await saved).postDataJSON().permissionMode).toBe("edits");
     // Summarize now isn't offered: in a group chat "/compact" would be a message for whoever answers.
-    const memory = await chatSettings(page, "Memory", "checker");
+    const memory = await chatSettings(page, "Memory and usage", "checker");
     await expect(memory.getByRole("combobox", { name: "Summarize by itself at", exact: true })).toBeVisible();
     await expect(memory.getByRole("button", { name: "Summarize now", exact: true })).toHaveCount(0);
     await noHorizontalOverflow(page);

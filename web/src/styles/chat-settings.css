@@ -56,6 +56,20 @@
 .cs-fold.open {
   background: var(--surface-2);
 }
+/* Over a gradient or a picture, and under Liquid glass, the sheet is see-through already: a row that's see-through too
+   would stack one veil on another, and its quiet words would read on neither. There a row is an outline on the sheet,
+   and an open one a trace of the words' own colour. */
+:root:is([data-backdrop], [data-texture="glass"]) .cs-fold {
+  background: transparent;
+}
+:root:is([data-backdrop], [data-texture="glass"]) .cs-fold.open {
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+}
+/* And the sheet's quiet words are a step stronger there: what shows through a see-through sheet is the chat itself,
+   lighter and darker than the page the theme measured them against. */
+:root:is([data-backdrop], [data-texture="glass"]) .cs-sheet :is(.cs-fold-sum, .cs-note, .cs-when, .cs-card-help, .cs-step-default, .cs-part-title) {
+  color: color-mix(in srgb, var(--text) 70%, var(--text-2));
+}
 .cs-fold-head {
   display: flex;
   align-items: center;
@@ -315,9 +329,13 @@
   background: var(--accent-2);
 }
 .cs-card > svg,
+.cs-tick,
 .cs-models .pop-item > svg {
   flex-shrink: 0;
   color: var(--accent);
+}
+.cs-tick {
+  display: inline-flex;
 }
 .cs-card:disabled {
   opacity: 0.55;
@@ -349,7 +367,8 @@
   border-color: var(--red);
   background: var(--red-2);
 }
-.cs-card.danger.on > svg {
+.cs-card.danger.on > svg,
+.cs-card.danger.on > .cs-tick {
   color: var(--red);
 }
 .cs-models [role="group"] {

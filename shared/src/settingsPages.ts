@@ -81,7 +81,7 @@ export const SETTINGS_PAGES: SettingsPage[] = [
     about: "Notifications, theme, text size, paired devices",
     sections: [
       { id: "notifications", title: "Notifications", keywords: ["push", "alerts", "add to home screen"] },
-      { id: "appearance", title: "Theme", keywords: ["appearance", "look", "colour", "color", "dark", "light", "oled", "background", "picture", "wallpaper", "gradient", "glass", "see-through", "blur", "accent", "your own"] },
+      { id: "appearance", title: "Theme", keywords: ["appearance", "look", "colour", "color", "dark", "light", "oled", "background", "picture", "wallpaper", "gradient", "glass", "see-through", "blur", "accent", "your own", "texture", "flat", "metal", "brushed", "skeuomorphic", "liquid glass"] },
       { id: "display", title: "Text size", keywords: ["zoom", "bigger", "smaller", "font", "page size", "display"] },
       { id: "devices", title: "Paired devices", keywords: ["pair a new device", "phone", "qr", "code", "sign out"] },
     ],
@@ -92,6 +92,7 @@ export const SETTINGS_PAGES: SettingsPage[] = [
     about: "The computers that run Crosstalk",
     sections: [
       { id: "machines", title: "Machines", top: true, keywords: ["name", "rename", "link", "linux", "add a machine", "address"] },
+      { id: "updates", title: "Updates", keywords: ["update", "new version", "upgrade", "what's new", "check now", "release", "download"] },
       { id: "this-mac", title: "This Mac", keywords: ["automatic login", "keep it on", "sleep", "permissions", "restart", "privacy"] },
       { id: "storage", title: "Storage", keywords: ["disk", "space", "free", "clean up", "caches", "full"] },
       { id: "more", title: "GitHub", keywords: ["git", "push", "private repos", "gh"] },

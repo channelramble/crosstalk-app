@@ -228,11 +228,16 @@ test("pictures for the README and the guide", async ({ browser, token }) => {
     if (sc) sc.scrollTop -= 120;
   });
   await shot("phone-themes");
-  for (const [name, file] of [["Liquid glass", "phone-theme-glass"], ["Light", "phone-theme-light"]] as const) {
+  // (The glass picture is Nebula under the Liquid glass texture: what the Liquid glass theme was.)
+  for (const [name, file, texture, room, words] of [
+    ["Nebula", "phone-theme-glass", "Liquid glass", t.ids.done, "Starter"],
+    ["OLED black", "phone-theme-metal", "Skeuomorphic", t.ids.work, "git push origin fix/login-race"],
+  ] as const) {
     await page.goto("/#/settings/display");
     await tiles.getByRole("radio", { name: new RegExp(`^${name}\\.`) }).click();
-    await page.goto(`/#/room/${t.ids.done}`);
-    await expect(page.locator(".messages").getByText("Starter")).toBeVisible();
+    await page.getByRole("radiogroup", { name: "Texture", exact: true }).getByRole("radio", { name: new RegExp(`^${texture}\\.`) }).click();
+    await page.goto(`/#/room/${room}`);
+    await expect(page.locator(".messages").getByText(words).first()).toBeVisible();
     await shot(file);
   }
 

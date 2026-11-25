@@ -72,12 +72,13 @@ Stuck? **[The step-by-step guide](docs/GETTING-STARTED.md)** has pictures and a 
 - Usage for each plan's limits, costs per chat and per account, and spending limits. A reply stopped by a plan limit
   carries on when the limit resets.
 - Templates for prompts you use often.
-- Themes: dark, light and colourful looks, or your own colours, gradient or picture.
+- Themes: dark, light and colourful looks, or your own colours, gradient or picture. And a texture for any of
+  them: Flat, Skeuomorphic (brushed metal, raised buttons) or Liquid glass.
 
 <p align="center">
-  <img src="docs/images/phone-chat-settings.png" width="250" alt="Chat settings: Answers with, May do, Helpers, Memory, This chat">
-  <img src="docs/images/phone-themes.png" width="250" alt="Themes: dark, light and colourful presets, and your own">
-  <img src="docs/images/phone-theme-glass.webp" width="250" alt="A chat in the Liquid glass theme">
+  <img src="docs/images/phone-chat-settings.png" width="250" alt="Chat settings: Answers with, May do, Helpers, Memory and usage, This chat">
+  <img src="docs/images/phone-theme-glass.webp" width="250" alt="A chat in the Liquid glass texture, over the Nebula theme">
+  <img src="docs/images/phone-theme-metal.png" width="250" alt="A chat in the Skeuomorphic texture: brushed metal bars and raised buttons">
 </p>
 
 **More than Claude and ChatGPT**
@@ -94,7 +95,10 @@ Stuck? **[The step-by-step guide](docs/GETTING-STARTED.md)** has pictures and a 
 
 ## Updating and removing
 
-**Update:** run the install line again. Your chats, settings and accounts stay, and open pages offer to reload.
+**Update:** when a new version is out, the app says so: tap **Update** on Home or in Settings → Machines. It downloads,
+checks itself, and starts when your chats are quiet. Your chats, settings and accounts stay, and open pages offer to
+reload. Running the install line again does the same. Set `CROSSTALK_NO_UPDATE_CHECK=1` to stop Crosstalk looking by
+itself.
 
 **Remove:** add `-s -- --uninstall` to the install line ([details](docs/GETTING-STARTED.md#uninstall)). Your chats
 stay in `~/.crosstalk` until you delete that folder.

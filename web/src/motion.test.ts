@@ -258,7 +258,7 @@ describe("one Reduce Motion policy", () => {
 describe("nothing is in place later than it was in 0.6.2", () => {
   /** What 0.6.2 already moved in, and by when it was in place there. */
   const BEFORE: [string, number][] = [
-    [".app.mobile .dialog", 220],
+    [".dialog", 220],
     [".chat-sidebar.drawer", 200],
     [".toast", 180],
     [".ctl-pop", 120],

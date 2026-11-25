@@ -18,6 +18,7 @@ import { DeviceIcon, NotificationsCard, PairDialog } from "./DevicesPage";
 import { ComputersCard } from "./ComputersCard";
 import { StorageSection } from "./StorageSection";
 import { MachinesSection } from "./MachinesSection";
+import { MachineUpdates } from "./MachineUpdates";
 import { ImageEditorSection } from "./ImageEditorSection";
 import { MacSection } from "./MacSection";
 import { AccountsList } from "./AccountsList";
@@ -332,6 +333,11 @@ function MachinesPage({ asked }: { asked: { section: string; n: number } | null 
     <>
       <TipHeading id="machines" topic="machines">Machines</TipHeading>
       <MachinesSection />
+
+      <h2 className="settings-heading" id="updates">
+        Updates
+      </h2>
+      <MachineUpdates />
 
       {several && (
         <div className="machine-things" id="machine-things">

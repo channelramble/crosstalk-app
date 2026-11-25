@@ -21,6 +21,7 @@ import { serviceRoutes } from "./services";
 import { searchRoutes } from "./search";
 import { bookmarkRoutes } from "./bookmarks";
 import { screenRoutes } from "./screen/routes";
+import { updateRoutes } from "./updateRoutes";
 import { compressedFile, compressedJson } from "./compress";
 import { ScreenViewer } from "./screen/proxy";
 import { localModelRoutes } from "./localModels";
@@ -564,7 +565,7 @@ export function buildRoutes(app: App): Route[] {
     }),
   ];
   // 0.4 features each own their routes (docs/SPEC-0.4.md): ask others, spend and limits, AI services.
-  return [...core, ...askRoutes(app), ...spendRoutes(app), ...serviceRoutes(app), ...searchRoutes(app), ...bookmarkRoutes(app), ...screenRoutes(app), ...localModelRoutes(app), ...setupRoutes(app), ...templateRoutes(app), ...signInRoutes(app)];
+  return [...core, ...askRoutes(app), ...spendRoutes(app), ...serviceRoutes(app), ...searchRoutes(app), ...bookmarkRoutes(app), ...screenRoutes(app), ...updateRoutes(app), ...localModelRoutes(app), ...setupRoutes(app), ...templateRoutes(app), ...signInRoutes(app)];
 }
 
 /** A request's `memberId` (a group chat's agent), null when it names none. */

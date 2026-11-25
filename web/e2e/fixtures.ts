@@ -3,6 +3,7 @@ import { settingsSection } from "@crosstalk/shared";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { DEFAULT_SETTINGS, paintFor, serialize, THEME_KEY, type ThemeSettings } from "../src/theme";
 
 const HUB = "http://127.0.0.1:8451";
 
@@ -80,6 +81,15 @@ export const test = base.extend<{ token: string; cleanHub: void }>({
     { auto: true },
   ],
   page: async ({ page, token }, use) => {
+    // CT_TEXTURE=skeuo|glass: the whole run on a device that has that texture saved (OLED black under it), so the specs
+    // that measure sizes, taps and overflow prove a texture changes none of them. A test's own saved theme wins.
+    const texture = process.env.CT_TEXTURE;
+    if (texture === "skeuo" || texture === "glass") {
+      const settings: ThemeSettings = { ...DEFAULT_SETTINGS, texture };
+      await page.addInitScript(([key, value]) => {
+        if (!localStorage.getItem(key)) localStorage.setItem(key, value);
+      }, [THEME_KEY, serialize(settings, paintFor(settings))] as const);
+    }
     await page.addInitScript((token) => {
       localStorage.setItem("crosstalk.conn.v1", JSON.stringify({ baseUrl: "", token, deviceName: "Browser tests" }));
       // New chat's More options starts open, as on a device where someone opened it once: the specs that set a model,
@@ -160,7 +170,7 @@ export async function openTeam(page: Page) {
 }
 
 /** The names of a chat settings sheet's sections, as their rows say them. */
-export type ChatSection = "Answers with" | "May do" | "Helpers" | "Memory" | "This chat" | "Working together" | "Name and role";
+export type ChatSection = "Answers with" | "May do" | "Helpers" | "Memory and usage" | "This chat" | "Working together" | "Name and role";
 
 /** Opens a row of the chat settings sheet (a section, or a group chat's agent "@name") unless it's open, and returns its region. */
 export async function openFold(scope: Locator, name: string) {

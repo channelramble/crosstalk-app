@@ -2476,17 +2476,11 @@ a {
 
 /* ------------------------------------------------------------ agent picker app */
 
-/* One column on every screen size, centered on wide ones. */
+/* The screen fills the window, with the chats docked beside it or not: what's in it keeps to a width that reads well
+   by itself (the messages, a page's cards). It was once a column of 860 px in the middle with the chats collapsed,
+   which left a bar each side of an unfolded phone held sideways. */
 .app.single .main {
   width: 100%;
-  max-width: 860px;
-  margin: 0 auto;
-}
-@media (min-width: 900px) {
-  .app.single .main {
-    border-left: 0.5px solid var(--sep);
-    border-right: 0.5px solid var(--sep);
-  }
 }
 .ellipsis {
   overflow: hidden;
@@ -2663,12 +2657,6 @@ a {
 }
 .app.single .shell > .main {
   flex: 1;
-}
-.app.single.docked .shell > .main {
-  max-width: none;
-  margin: 0;
-  border-left: 0;
-  border-right: 0;
 }
 .chat-sidebar {
   width: 272px;
@@ -4927,6 +4915,16 @@ a.get-repo {
 .app.single:not(.docked) .shell {
   padding-left: var(--safe-left);
 }
+/* The top bar itself reaches the screen's edges past a cutout at the side (its tint and the line under it), so a phone
+   held sideways shows no bar of plain page beside it; what's in it keeps clear, as before. */
+.app.single .shell > .main > .topbar {
+  margin-right: calc(-1 * var(--safe-right));
+  padding-right: calc(16px + var(--safe-right));
+}
+.app.single:not(.docked) .shell > .main > .topbar {
+  margin-left: calc(-1 * var(--safe-left));
+  padding-left: calc(16px + var(--safe-left));
+}
 
 /* Wide screens (an unfolded foldable, a phone turned sideways, a computer): sheets as wide as reads well, centered. */
 @media (min-width: 761px) {
@@ -5303,11 +5301,106 @@ a.get-repo {
   flex: none;
   color: var(--accent);
 }
+.update-ready {
+  flex-wrap: wrap;
+}
 .update-ready-text {
-  flex: 1;
+  flex: 1 1 150px;
   min-width: 0;
   margin: 0;
   font-size: 13.5px;
+  overflow-wrap: anywhere;
+}
+.update-ready-why {
+  color: var(--text-2);
+}
+.update-ready-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+.update-progress {
+  flex: 1 1 150px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.update-progress .update-ready-text {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Settings → Machines → Updates: one card for each machine (MachineUpdates.tsx). */
+.machine-updates {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+.machine-update {
+  padding: 12px 14px;
+}
+.machine-update-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+.machine-update-text {
+  flex: 1 1 200px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.machine-update-name {
+  font-weight: 600;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+.machine-update-line {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+.machine-update-line.new {
+  color: var(--text);
+}
+.machine-update-line.bad {
+  color: var(--orange);
+}
+.machine-update-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-left: auto;
+}
+.machine-update-notes {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--sep);
+}
+.machine-update-notes-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2);
+  margin-bottom: 4px;
+}
+.machine-update-notes-text {
+  max-height: 180px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.machine-update-notes-text :first-child {
+  margin-top: 0;
+}
+.machine-update-notes-text :last-child {
+  margin-bottom: 0;
 }
 
 /* Pairing in Safari on an iPhone: add it to the Home Screen first. */

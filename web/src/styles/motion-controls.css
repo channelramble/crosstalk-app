@@ -1,0 +1,222 @@
+/*
+ * Motion for the controls that were drawn without any: the Chat settings sheet (its sections, its cards and steps,
+ * the lists in it), the theme picker's tiles and swatches, group chat set-up, agent set-up's rows, a question's
+ * options, and the app's text links. Imported by motion.css, whose header has the rules; the names of the curves,
+ * times and keyframes used here are all defined there.
+ *
+ * - A press: a touch smaller while held and a spring back, as every other button (rows and cards wait 60 ms first, so
+ *   a finger that starts a scroll on one never shrinks it). A text link dims instead: it has no box to shrink.
+ * - A section of the Chat settings sheet opening: its arrow turns, what's in it drops in under its row, and what's
+ *   under it glides out of the way, the sheet too (motion.ts useGlide). Closing, the rest glides back.
+ * - What's picked: a card's colours change over --dur-paint, and its tick pops in.
+ */
+
+/* ------------------------------------------------------------ both ways: colour, never movement */
+
+.cs-fold-head,
+.cs-card,
+.cs-step,
+.pop-item,
+.pop-back,
+.theme-tile,
+.theme-swatch,
+.theme-start,
+.theme-choose,
+.group-more-head,
+.group-pick-main,
+.group-add-row,
+.as-fold-btn,
+.as-row-btn,
+.q-option,
+.ask-row,
+.machine-picker,
+.helper-main,
+.helpers-stop,
+.svc-model,
+.tpl-tray-btn,
+.help-tip-btn,
+.codeblock-copy,
+.codeblock-more {
+  transition:
+    background-color var(--dur-paint) var(--ease-fade),
+    border-color var(--dur-paint) var(--ease-fade),
+    box-shadow var(--dur-paint) var(--ease-fade),
+    color var(--dur-paint) var(--ease-fade);
+}
+.link-btn {
+  transition:
+    color var(--dur-paint) var(--ease-fade),
+    opacity var(--dur-paint) var(--ease-fade);
+}
+.link-btn:active:not(:disabled) {
+  opacity: 0.55;
+}
+
+/* ------------------------------------------------------------ with motion */
+
+@media (prefers-reduced-motion: no-preference) {
+  /* ---- Press. */
+  .cs-step,
+  .pop-back,
+  .theme-start,
+  .theme-choose,
+  .group-more-head,
+  .as-fold-btn,
+  .helpers-stop,
+  .tpl-tray-btn {
+    --press: var(--press-button);
+  }
+  .theme-swatch,
+  .help-tip-btn,
+  .codeblock-copy,
+  .codeblock-more {
+    --press: var(--press-icon);
+  }
+  .cs-fold-head,
+  .cs-card,
+  .pop-item,
+  .theme-tile,
+  .group-pick-main,
+  .group-add-row,
+  .as-row-btn,
+  .q-option,
+  .ask-row,
+  .machine-picker,
+  .helper-main,
+  .svc-model {
+    --press: var(--press-card);
+  }
+  :is(
+      .cs-fold-head,
+      .cs-card,
+      .cs-step,
+      .pop-item,
+      .pop-back,
+      .theme-tile,
+      .theme-swatch,
+      .theme-start,
+      .theme-choose,
+      .group-more-head,
+      .group-pick-main,
+      .group-add-row,
+      .as-fold-btn,
+      .as-row-btn,
+      .q-option,
+      .ask-row,
+      .machine-picker,
+      .helper-main,
+      .helpers-stop,
+      .svc-model,
+      .tpl-tray-btn,
+      .help-tip-btn,
+      .codeblock-copy,
+      .codeblock-more
+    ) {
+    transition:
+      background-color var(--dur-paint) var(--ease-fade),
+      border-color var(--dur-paint) var(--ease-fade),
+      box-shadow var(--dur-paint) var(--ease-fade),
+      color var(--dur-paint) var(--ease-fade),
+      scale var(--dur-press-out) var(--ease-bouncy);
+  }
+  :is(.cs-step, .pop-back, .theme-swatch, .theme-start, .theme-choose, .group-more-head, .as-fold-btn, .helpers-stop, .tpl-tray-btn, .help-tip-btn, .codeblock-copy, .codeblock-more):active:not(:disabled):not([aria-disabled="true"]) {
+    scale: var(--press);
+    transition:
+      background-color var(--dur-paint) var(--ease-fade),
+      border-color var(--dur-paint) var(--ease-fade),
+      box-shadow var(--dur-paint) var(--ease-fade),
+      color var(--dur-paint) var(--ease-fade),
+      scale var(--dur-press-in) var(--ease-fade);
+  }
+  :is(.cs-fold-head, .cs-card, .pop-item, .theme-tile, .group-pick-main, .group-add-row, .as-row-btn, .q-option, .ask-row, .machine-picker, .helper-main, .svc-model):active:not(:disabled):not([aria-disabled="true"]) {
+    scale: var(--press);
+    transition:
+      background-color var(--dur-paint) var(--ease-fade),
+      border-color var(--dur-paint) var(--ease-fade),
+      box-shadow var(--dur-paint) var(--ease-fade),
+      color var(--dur-paint) var(--ease-fade),
+      scale var(--dur-press-in) var(--ease-fade) 60ms;
+  }
+
+  /* ---- A section of the Chat settings sheet: its arrow turns, what's in it drops in under its row. The section that
+     was just tapped (motion.ts useGlide marks it) is drawn over the ones gliding out of its way, so its choices take a tap
+     from the first frame. */
+  .cs-fold {
+    position: relative;
+  }
+  .cs-fold[data-over] {
+    z-index: 1;
+  }
+  .cs-fold-chevron {
+    transition: transform var(--dur-rotate) var(--ease-snappy);
+  }
+  .cs-fold-body,
+  .cs-agent-body {
+    animation: m-drop-in var(--dur-enter) var(--ease-snappy);
+  }
+  /* New chat's More options, the same: its arrow turns and its choices drop in. */
+  .more-options > summary::after {
+    transition: transform var(--dur-rotate) var(--ease-snappy);
+  }
+  .more-options[open] > :not(summary) {
+    animation: m-drop-in var(--dur-enter) var(--ease-snappy);
+  }
+
+  /* ---- What's picked says so with a tick that pops in. */
+  .cs-tick,
+  .theme-tile-check {
+    animation: m-pop-in var(--dur-badge) var(--ease-bouncy);
+  }
+}
+
+/* ------------------------------------------------------------ Reduce Motion */
+
+@media (prefers-reduced-motion: reduce) {
+  .cs-fold-body,
+  .cs-agent-body,
+  .more-options[open] > :not(summary) {
+    animation: m-drop-in var(--dur-fade) var(--ease-fade);
+  }
+  .cs-tick,
+  .theme-tile-check {
+    animation: m-pop-in var(--dur-fade) var(--ease-fade);
+  }
+  /* Held down: dimmed, nothing moves. */
+  :is(
+      .cs-fold-head,
+      .cs-card,
+      .cs-step,
+      .pop-item,
+      .pop-back,
+      .theme-tile,
+      .theme-swatch,
+      .theme-start,
+      .theme-choose,
+      .group-more-head,
+      .group-pick-main,
+      .group-add-row,
+      .as-fold-btn,
+      .as-row-btn,
+      .q-option,
+      .ask-row,
+      .machine-picker,
+      .helper-main,
+      .helpers-stop,
+      .svc-model,
+      .tpl-tray-btn,
+      .help-tip-btn,
+      .codeblock-copy,
+      .codeblock-more
+    ):active:not(:disabled):not([aria-disabled="true"]) {
+    opacity: 0.7;
+  }
+}
+
+/* ------------------------------------------------------------ what's folded away doesn't play */
+
+/* In a closed <details> (a card of Settings folded up) nothing is drawn, so nothing there comes in: an entrance in it
+   would never be played, nor ever said to have ended (a browser doesn't run what it doesn't draw). It plays when the
+   card opens. */
+details:not([open]) :is(.cs-tick, .theme-tile-check, .cs-fold-body, .cs-agent-body) {
+  animation: none;
+}

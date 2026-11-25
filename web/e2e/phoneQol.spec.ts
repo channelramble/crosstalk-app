@@ -550,3 +550,48 @@ test("screens name the machine they run on instead of assuming a Mac", async ({ 
   // (The chat list has no agent headings to name the machine any more; nothing in it calls it "the Mac" either.)
   await expect(page.getByRole("complementary", { name: "Chats", exact: true })).not.toContainText("the Mac");
 });
+
+// An iPhone doesn't always say when its keyboard changed what's visible (viewport.ts): the app reads it anyway while a
+// field has the focus. Played here by a visible part that gets shorter and taller without a word.
+test("a keyboard that comes and goes without a word: the message box still ends up above it", async ({ page, request, token }) => {
+  test.skip((page.viewportSize()?.width ?? 0) > 760, "A phone's keyboard.");
+  const headers = { authorization: `Bearer ${token}` };
+  const room = await (await request.post(`${hub}/api/chats`, { headers, data: { provider: "claude", name: "Quiet keyboard" } })).json();
+  try {
+    await page.addInitScript(() => {
+      const vv = window.visualViewport!;
+      const real = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(vv), "height")!.get!;
+      const w = window as unknown as { __keyboard: number };
+      w.__keyboard = 0;
+      Object.defineProperty(vv, "height", { get: () => real.call(vv) - w.__keyboard });
+    });
+    await page.goto(`/#/room/${room.id}`);
+    const box = page.getByRole("textbox", { name: "Message", exact: true });
+    await expect(box).toBeVisible();
+    const screen = page.viewportSize()!.height;
+    const appHeight = () => page.evaluate(() => Math.round(document.querySelector(".app")!.getBoundingClientRect().height));
+    const bottomOfBox = async () => {
+      const b = (await box.boundingBox())!;
+      return b.y + b.height;
+    };
+    expect(await appHeight()).toBe(screen);
+    await box.focus();
+    // The keyboard takes 300 px, and nothing is said: no resize, no scroll.
+    await page.evaluate(() => ((window as unknown as { __keyboard: number }).__keyboard = 300));
+    await expect.poll(appHeight, { timeout: 3000 }).toBe(screen - 300);
+    expect(await bottomOfBox()).toBeLessThanOrEqual(screen - 300);
+    // It goes down again while the field keeps the focus (swiped away), as quietly.
+    await page.evaluate(() => ((window as unknown as { __keyboard: number }).__keyboard = 0));
+    await expect.poll(appHeight, { timeout: 3000 }).toBe(screen);
+    // Brought back by a letter typed, with the focus where it was.
+    await page.evaluate(() => ((window as unknown as { __keyboard: number }).__keyboard = 280));
+    await box.pressSequentially("h");
+    await expect.poll(appHeight, { timeout: 3000 }).toBe(screen - 280);
+    // The field loses the focus and the keyboard goes: the app is the whole screen again.
+    await page.evaluate(() => ((window as unknown as { __keyboard: number }).__keyboard = 0));
+    await box.blur();
+    await expect.poll(appHeight, { timeout: 3000 }).toBe(screen);
+  } finally {
+    await request.delete(`${hub}/api/rooms/${room.id}`, { headers });
+  }
+});

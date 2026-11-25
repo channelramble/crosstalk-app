@@ -7,7 +7,7 @@
     },
     "hub": {
       "name": "@crosstalk/hub",
-      "version": "0.9.1",
+      "version": "0.10.0",
       "dependencies": {
         "@crosstalk/shared": "workspace:*",
         "@muse-code/sdk": "1.4.2",
@@ -28,11 +28,11 @@
     },
     "shared": {
       "name": "@crosstalk/shared",
-      "version": "0.9.1",
+      "version": "0.10.0",
     },
     "web": {
       "name": "@crosstalk/web",
-      "version": "0.9.1",
+      "version": "0.10.0",
       "dependencies": {
         "@crosstalk/shared": "workspace:*",
         "@novnc/novnc": "1.7.0",

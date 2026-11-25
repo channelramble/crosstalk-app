@@ -70,6 +70,7 @@
 @import "./motion-lists.css";
 /* The chat screen's motion (messages, the box you type in and what's above it, its menus) and Settings' tabs. */
 @import "./motion-chat.css";
+@import "./motion-controls.css";
 
 /* ------------------------------------------------------------ tokens */
 
@@ -83,6 +84,7 @@
   --ease-bouncy: cubic-bezier(0.41, 1.08, 0.06, 1.08); /* bounce 0.3 */
   /* UIKit's sheet and push curve. */
   --ease-ios: cubic-bezier(0.32, 0.72, 0, 1);
+  --ease-fall: cubic-bezier(0.25, 0.3, 0.7, 0.6); /* a sheet dropping away: moving from its first frame, a little faster as it goes */
   /* The quick ease-out sheets and the drawer always came in on: what they hold is reachable as soon as it was. */
   --ease-out: cubic-bezier(0.2, 0.9, 0.3, 1);
   /* Core Animation's default: fades and colour. */
@@ -94,7 +96,7 @@
   --dur-fade: 150ms; /* every fade under Reduce Motion, and no more */
   --dur-paint: 120ms; /* a colour change on a small control */
   --dur-sheet-in: 220ms; /* at rest by then, as 0.6.2's was: 1% past its place by 150 ms, then the settle */
-  --dur-sheet-out: 300ms;
+  --dur-sheet-out: 260ms;
   --dur-drawer-in: 200ms; /* as 0.6.2's */
   --dur-drawer-out: 260ms;
   --dur-scrim: 300ms;
@@ -160,13 +162,15 @@
     transform: translateY(0%);
   }
 }
+/* A sheet's copy drops until it's off the screen whole (--m-out-y: motion.ts works out how far that is from where it
+   sat; its own height, for one at the bottom edge), picking up speed as it goes, so it never hangs half way down. */
 @keyframes m-sheet-out {
   from {
     transform: translateY(var(--m-from-y, 0%));
     opacity: var(--m-from-o, 1);
   }
   to {
-    transform: translateY(100%);
+    transform: translateY(var(--m-out-y, 100%));
     opacity: var(--m-from-o, 1);
   }
 }
@@ -382,9 +386,12 @@
     transition: transform var(--dur-switch) var(--ease-snappy);
   }
 
-  /* ---- Sheets (ui.tsx Dialog): the dim fades in (above), the sheet rises from 40% and settles by 220 ms. */
-  .app.mobile .dialog {
+  /* ---- Sheets (ui.tsx Dialog): the dim fades in (above), the sheet rises from 40% and settles by 220 ms: at the
+     bottom edge of a phone, and in the middle of a computer's window, where it used to be drawn at once. */
+  .dialog {
     animation: m-sheet-in var(--dur-sheet-in);
+  }
+  .app.mobile .dialog {
     /* Its own colour under it, so the settle never shows a gap at the bottom edge. */
     box-shadow:
       var(--shadow-pop),
@@ -480,7 +487,7 @@
     animation: m-fade-out var(--dur-sheet-out) var(--ease-fade) forwards !important;
   }
   [data-ghost="sheet"] > .dialog {
-    animation: m-sheet-out var(--dur-sheet-out) var(--ease-ios) forwards !important;
+    animation: m-sheet-out var(--dur-sheet-out) var(--ease-fall) forwards !important;
   }
   [data-ghost="drawer"] {
     animation: m-drawer-out var(--dur-drawer-out) var(--ease-ios) forwards !important;
@@ -540,7 +547,7 @@
       opacity: 0;
     }
   }
-  .app.mobile .dialog {
+  .dialog {
     animation: m-sheet-in var(--dur-fade) var(--ease-fade);
   }
   .toast {

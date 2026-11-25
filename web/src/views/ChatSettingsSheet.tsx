@@ -5,13 +5,14 @@ import { api } from "../api";
 import { accountKey, memberAccount } from "../accounts";
 import { chatIdentity, identityWhere } from "../chatIdentity";
 import { ANSWER_OPTIONS, hopsOf, moreLine, roundsOf } from "../groupChat";
-import { SECTION_TITLES, effortName, agentLine, agentSections, asDefaults, foldKey, hasDefaults, heldLine, isBusy, memoryWords, openAt, startsLikeThis, whenWords, type SectionId, type SheetAt } from "../chatSettings";
+import { SECTION_TITLES, effortName, agentLine, agentSections, asDefaults, foldKey, hasDefaults, heldLine, isBusy, memoryWords, openAt, startsLikeThis, whenWords, type SectionId, type SheetAt, limitWords } from "../chatSettings";
 import { nameEdit } from "../chatName";
 import { contextSize } from "../models";
 import { isPinned, pinChat, pinFailed } from "../pins";
 import { settingsPath } from "../settingsTabs";
 import { deleteRoomHere, useMachines, useStore } from "../store";
 import { ChatAvatar, Dialog, MemberAvatar, Switch, formatTokens } from "../ui";
+import { useGlide } from "../motion";
 import { useAgentSettings, useChatContext, type AgentSettings } from "../useAgentSettings";
 import { useCatalog } from "../useCatalog";
 import { olderThan } from "../version";
@@ -274,10 +275,6 @@ function AnswersWith({ room, member, s, too }: { room: Room; member: Member; s: 
       )}
       <p className="cs-when">{whenWords("settings", member, agentName)}</p>
       <NewChatsToo member={member} s={s} too={too} />
-      <div className="cs-usage">
-        <ChatCostLine room={room} member={member} />
-        <PlanLimits member={member} />
-      </div>
       {switching && next && (
         <AskOnce title={`Switch to ${next.label}?`} confirmLabel="Switch account" onConfirm={() => s.switchAccount(switching)} onClose={() => setSwitching(null)}>
           {agentName} starts fresh on {next.label}: it forgets what was said so far, and its model and effort go back to that account's own. The messages here stay.
@@ -380,7 +377,7 @@ const toneFor = (pct: number) => (pct >= 90 ? "full" : pct >= 70 ? "warn" : "");
  * Memory: how much of the chat the model still holds, summarizing the earlier messages (now, or by itself at a size),
  * and starting fresh. `onFresh` asks before it does.
  */
-export function ChatMemory({ room, member, model, onCompactAt, onFresh }: { room: Room; member: Member; model: ModelOption | undefined; onCompactAt: (v: string) => void; onFresh?: () => void }) {
+export function ChatMemory({ room, member, model, onCompactAt, onFresh, usage }: { room: Room; member: Member; model: ModelOption | undefined; onCompactAt: (v: string) => void; onFresh?: () => void; /** What's shown between how full it is and what can be done about it (the sheet: the plan's limits and the chat's cost). */ usage?: ReactNode }) {
   const toast = useStore((s) => s.toast);
   const ctx = useChatContext(room, member, model);
   const agent = PROVIDER_INFO[member.provider].name;
@@ -434,6 +431,8 @@ export function ChatMemory({ room, member, model, onCompactAt, onFresh }: { room
           {reserve > 0 ? `; ${agent} keeps ${reserve}% of it for its instructions and the reply.` : "."}
         </p>
       )}
+      {usage}
+      {usage && <div className="cs-part-title">Memory</div>}
       {/* A group chat's messages go to who they're for: "/compact" there would be a message, not the agent's command. */}
       {pct !== null && pct >= 80 && !group && <p className="cs-note">Nearly full. Summarize now to make room.</p>}
       {!group && (
@@ -583,6 +582,8 @@ function AgentSections({ room, member, folds, group, lead = false, onClose }: { 
   const too = useNewChatDefaults(member);
   const ctx = useChatContext(room, member, s.exact);
   const [fresh, setFresh] = useState(false);
+  // The plan that pays for this agent's replies: its fullest limit is on the closed row, beside the memory.
+  const plan = useStore((st) => st.usage[accountKey(member.provider, memberAccount(member))]);
   const held = heldLine(member, s.agentName);
   const accountLabel = useStore((st) => (s.account === "default" ? null : st.accounts[accountKey(member.provider, s.account)]?.label ?? null));
   // Another account does its helper work ("Helpers run on"): its name, for the closed row.
@@ -592,7 +593,8 @@ function AgentSections({ room, member, folds, group, lead = false, onClose }: { 
     answers: [accountLabel, s.words.answers, s.fastOn ? "Fast" : null, s.ultracode ? "Ultracode" : null].filter(Boolean).join(" · "),
     may: <span className={s.words.danger ? "cs-danger" : undefined}>{s.words.may}</span>,
     helpers: helpersName ? `Run on ${helpersName}` : s.helper ? `${s.agentName}'s own, on ${s.helper.label}` : `${s.agentName}'s own, on the same model`,
-    memory: memoryWords(ctx.tokens, ctx.window).words,
+    // Until a reply has said how full the memory is, the plan's limit is the news: it goes first.
+    memory: (ctx.tokens === null ? [limitWords(plan?.windows), memoryWords(ctx.tokens, ctx.window).words] : [memoryWords(ctx.tokens, ctx.window).words, limitWords(plan?.windows)]).filter(Boolean).join(" · "),
     agent: [`@${member.handle}`, lead ? "leads" : null, member.role ? "has a role" : null].filter(Boolean).join(" · "),
     group: "",
     chat: "",
@@ -606,7 +608,23 @@ function AgentSections({ room, member, folds, group, lead = false, onClose }: { 
       case "helpers":
         return <Helpers member={member} s={s} />;
       case "memory":
-        return <ChatMemory room={room} member={member} model={s.exact} onCompactAt={(v) => void s.setCompactAt(v)} onFresh={() => setFresh(true)} />;
+        // The ring under the message box opens here: how full the model's memory is, then the plan's limits and what
+        // the chat has cost, then what can be done about the memory.
+        return (
+          <ChatMemory
+            room={room}
+            member={member}
+            model={s.exact}
+            onCompactAt={(v) => void s.setCompactAt(v)}
+            onFresh={() => setFresh(true)}
+            usage={
+              <div className="cs-usage">
+                <PlanLimits member={member} />
+                <ChatCostLine room={room} member={member} />
+              </div>
+            }
+          />
+        );
       case "agent":
         return <NameAndRole room={room} member={member} lead={lead} />;
       default:
@@ -814,6 +832,8 @@ export function ChatSettingsSheet({ room, members, machine, at, onClose, onDupli
   const [adding, setAdding] = useState(false);
   const folds: Folds = { open: (key) => open.includes(key), toggle: (key) => setOpen((now) => (now.includes(key) ? now.filter((k) => k !== key) : [...now, key])) };
   const body = useRef<HTMLDivElement>(null);
+  // A section opening or closing: what's under it glides out of its way, and the sheet grows from where it stood.
+  useGlide(body);
   // Opened on a section: that one is at the top of the sheet, so its choices are the next thing under the thumb.
   useEffect(() => {
     const want = openAt(at, group).at(-1);

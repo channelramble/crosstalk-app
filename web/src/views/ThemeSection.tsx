@@ -1,4 +1,4 @@
-import { useId, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useId, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
 import { Check, ImagePlus, Minus, Plus } from "lucide-react";
 import {
   ACCENT_SWATCHES,
@@ -9,19 +9,21 @@ import {
   DEFAULT_SETTINGS,
   GRADIENT_STARTS,
   gradientCss,
-  hasBackdrop,
+  hasSeeThrough,
   isPristine,
   paintFor,
   PRESET_GROUPS,
   PRESETS,
   presetById,
   previewVars,
+  TEXTURES,
   type CustomBase,
   type CustomTheme,
   type Gradient,
   type GradientShape,
   type PictureFit,
   type TextChoice,
+  type Texture,
   type ThemeSettings,
 } from "../theme";
 import { choosePicture, removePicture, resetTheme, setTheme, useDeviceLessGlass, usePictureUrl, useTheme } from "../themeDevice";
@@ -31,7 +33,8 @@ import { ConfirmButton, Switch } from "../ui";
 /**
  * Settings → This device → Theme: the looks to pick from, each drawn small in its own colours and put on the moment
  * it's tapped; then your own (a colour, a gradient or a picture, with what panels look like over it), which changes the
- * app as each control moves. Kept on this device only (themeDevice.ts).
+ * app as each control moves; then the texture, which draws whatever theme is on as flat, as brushed metal or as glass.
+ * Kept on this device only (themeDevice.ts).
  */
 export function ThemeSection() {
   const theme = useTheme();
@@ -42,6 +45,7 @@ export function ThemeSection() {
   const changedCustom = JSON.stringify(theme.custom) !== JSON.stringify(DEFAULT_CUSTOM);
   const preset = presetById(theme.theme);
   const calmId = useId();
+  const textureId = useId();
   // Your own theme's preview follows every control; it shows the look itself, see-through panels and all, whatever
   // "Reduce see-through effects" says.
   const ownPreview = useMemo(() => previewVars(paintFor({ ...DEFAULT_SETTINGS, theme: CUSTOM_THEME, custom: theme.custom }), picture), [theme.custom, picture]);
@@ -49,7 +53,7 @@ export function ThemeSection() {
     <>
       <div className="card theme-card">
         <div className="help">How Crosstalk looks on this device. Your other devices keep their own look.</div>
-        <div className="theme-tiles" role="radiogroup" aria-label="Theme">
+        <div className="theme-tiles" role="radiogroup" aria-label="Theme" onKeyDown={arrowKeys}>
           {PRESET_GROUPS.map((group) => (
             <div className="theme-group" key={group}>
               <div className="theme-group-name">{group}</div>
@@ -89,6 +93,16 @@ export function ThemeSection() {
 
       {custom && <CustomEditor theme={theme} picture={picture} />}
 
+      <section className="card texture-card" aria-labelledby={textureId}>
+        <h3 id={textureId}>Texture</h3>
+        <div className="help">How bars, buttons and panels are drawn. It works with every theme and changes none of its colours.</div>
+        <div className="texture-grid" role="radiogroup" aria-label="Texture" onKeyDown={arrowKeys}>
+          {TEXTURES.map((t) => (
+            <TextureTile key={t.id} id={t.id} name={t.name} about={t.about} on={theme.texture === t.id} onPick={() => set({ texture: t.id })} />
+          ))}
+        </div>
+      </section>
+
       <section className="card" aria-label="Reduce see-through effects">
         <div className="row">
           <div style={{ flex: 1, minWidth: 0 }}>
@@ -96,9 +110,9 @@ export function ThemeSection() {
             <div className="help" id={calmId}>
               {deviceCalm
                 ? "This device already asks for less see-through, so panels are solid and nothing blurs."
-                : hasBackdrop(theme)
+                : hasSeeThrough(theme)
                   ? "Makes panels solid and turns blur off. Easier to read, and lighter work for an older phone."
-                  : "Makes panels solid and turns blur off in themes with a gradient or a picture. This theme has none."}
+                  : "Makes panels solid and turns blur off in themes with a gradient or a picture, and with the Liquid glass texture. Nothing is see-through as things are."}
             </div>
           </div>
           <Switch checked={theme.calm || deviceCalm} disabled={deviceCalm} onChange={(calm) => set({ calm })} label="Reduce see-through effects" describedBy={calmId} />
@@ -109,7 +123,7 @@ export function ThemeSection() {
         <ConfirmButton
           className="btn small"
           label="Reset theme"
-          question="Back to OLED black, and your own theme and picture are removed from this device."
+          question="Back to OLED black and the Flat texture, and your own theme and picture are removed from this device."
           confirmLabel="Reset"
           disabled={isPristine(theme)}
           onConfirm={() => void resetTheme()}
@@ -138,6 +152,50 @@ function Tile({ id, name, about, on, vars, onPick }: { id: string; name: string;
         </span>
       )}
       <span className="theme-tile-name">{name}</span>
+    </button>
+  );
+}
+
+/**
+ * The arrow keys in a group of tiles: to the next or the one before (round the ends), Home and End to the first and
+ * the last, picking it as a group of radio buttons does. Tab still reaches every tile.
+ */
+function arrowKeys(e: KeyboardEvent<HTMLElement>) {
+  const step = e.key === "ArrowRight" || e.key === "ArrowDown" ? 1 : e.key === "ArrowLeft" || e.key === "ArrowUp" ? -1 : 0;
+  if (!step && e.key !== "Home" && e.key !== "End") return;
+  const tiles = [...e.currentTarget.querySelectorAll<HTMLElement>('[role="radio"]')];
+  const at = tiles.indexOf(e.target as HTMLElement);
+  if (at < 0) return;
+  e.preventDefault();
+  const next = tiles[e.key === "Home" ? 0 : e.key === "End" ? tiles.length - 1 : (at + step + tiles.length) % tiles.length];
+  next.focus();
+  next.click();
+}
+
+/** One texture: a bit of bar, a button and a switch drawn its way in the colours of the theme in use, and a line about it. */
+function TextureTile({ id, name, about, on, onPick }: { id: Texture; name: string; about: string; on: boolean; onPick: () => void }) {
+  return (
+    <button type="button" role="radio" aria-checked={on} aria-label={`${name}. ${about}`} className={`theme-tile texture-tile${on ? " on" : ""}`} onClick={onPick} data-texture-tile={id}>
+      <span className={`xp xp-${id}`} aria-hidden="true">
+        <span className="xp-bar">
+          <i className="xp-dot" />
+          <i className="xp-line" />
+        </span>
+        <span className="xp-row">
+          <i className="xp-btn" />
+          <i className="xp-key" />
+          <i className="xp-switch" />
+        </span>
+      </span>
+      {on && (
+        <span className="theme-tile-check" aria-hidden="true">
+          <Check size={12} strokeWidth={3.2} />
+        </span>
+      )}
+      <span className="texture-tile-text">
+        <span className="theme-tile-name">{name}</span>
+        <span className="texture-tile-about">{about}</span>
+      </span>
     </button>
   );
 }
@@ -376,6 +434,7 @@ function CustomEditor({ theme, picture }: { theme: ThemeSettings; picture: strin
           <>
             <Range label="See-through" value={c.seeThrough} min={0} max={100} step={5} says={percent} ends={["Solid", "Glass"]} onChange={(seeThrough) => change({ seeThrough })} />
             <Range label="Blur behind panels" value={c.panelBlur} min={0} max={40} step={2} says={pixels} onChange={(panelBlur) => change({ panelBlur })} />
+            {theme.texture === "glass" && <div className="help">With the Liquid glass texture, bars and sheets are always see-through, and the blur is at least 28 px.</div>}
           </>
         ) : (
           <div className="help">Over a gradient or a picture, panels can be see-through.</div>

@@ -88,7 +88,7 @@ test("the context panel: what the chat's model holds before a reply, Codex's lon
   try {
     await s.open();
     await page.locator(".chat-controls .ring-btn").click();
-    const pop = page.getByRole("dialog", { name: "Chat settings", exact: true }).getByRole("region", { name: "Memory", exact: true });
+    const pop = page.getByRole("dialog", { name: "Chat settings", exact: true }).getByRole("region", { name: "Memory and usage", exact: true });
     // Before the first reply: what the model holds, from Codex's list.
     await expect(pop).toContainText("GPT-6-Astra remembers up to 258k of a chat. How full that is shows after Codex's next reply.");
     await expect(pop).toContainText("GPT-6-Astra holds 272k; Codex keeps 5% of it for its instructions and the reply.");
@@ -152,7 +152,7 @@ test("a Claude chat: each model's own window, and the context ring follows a mod
     await menu.getByRole("menuitemradio").filter({ hasText: "Sonnet 4.6" }).click();
     // 150k of Sonnet 4.6's 200k: the ring says so without waiting for a reply on it.
     await expect(ring).toHaveAttribute("aria-label", /^Memory 75% full/);
-    const pop = await chatSettings(page, "Memory");
+    const pop = await chatSettings(page, "Memory and usage");
     await expect(pop.locator(".usage-line").first()).toContainText("150k of 200k");
     await expect(pop.locator("select option").first()).toHaveText("Claude Code's default (167k)");
     // Claude Code has no long context to turn on.

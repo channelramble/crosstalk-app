@@ -7,6 +7,10 @@
  * the page: themeDevice.ts keeps the choice on the device and applies it, index.html applies the saved one before the
  * first paint, and styles/themes.css holds the rules that only a theme with a backdrop needs.
  *
+ * Beside the theme there's a texture (Flat, Skeuomorphic, Liquid glass): how surfaces and controls are drawn, in
+ * whatever colours the theme has. It's `data-texture` on the page's root and styles/textures.css; only Liquid glass
+ * needs anything worked out here (its see-through bars and its edges), for every theme.
+ *
  * OLED black is the look styles.css draws by itself: it sets nothing, so a device that never chose a theme pays
  * nothing.
  */
@@ -140,7 +144,7 @@ export interface Gradient {
 
 export type Backdrop =
   | ({ kind: "gradient" } & Gradient)
-  /** Written by hand (Liquid glass's pools of colour): `colors` are the brightest and darkest it gets. */
+  /** Written by hand (Nebula's pools of colour): `colors` are the brightest and darkest it gets. */
   | { kind: "css"; css: string; colors: string[] }
   | { kind: "picture"; blur: number; dim: number; fit: PictureFit; x: number; y: number; average: string; lo: number; hi: number };
 
@@ -164,8 +168,13 @@ export interface ThemeSpec {
   glass?: number;
   /** How much panels blur what's behind them, in pixels. */
   blur?: number;
-  /** A light edge and a soft shine on panels, 0 to 1 (Liquid glass). */
+  /** A light edge and a soft shine on panels, 0 to 1. */
   shine?: number;
+  /**
+   * The shine across its panels under the Liquid glass texture, when the look can take more of it than its own
+   * (Nebula's colours were chosen for all of it). Left out: its own `shine`.
+   */
+  glassShine?: number;
   /** Corners, 0 (square) to 100 (round); 50 is as designed. */
   round?: number;
   /** Stronger lines and words (for reading in sunlight). */
@@ -188,8 +197,8 @@ export interface Preset {
 export const DEFAULT_THEME = "oled";
 export const CUSTOM_THEME = "custom";
 
-/** Liquid glass's backdrop: pools of colour over deep blue, bright enough to show through and dark enough to read on. */
-const GLASS_POOLS: { css: string; colors: string[] } = {
+/** Nebula's backdrop: pools of colour over deep blue, bright enough to show through and dark enough to read on. */
+const POOLS: { css: string; colors: string[] } = {
   css: [
     "radial-gradient(65% 55% at 10% 6%, #74184f 0%, rgba(116, 24, 79, 0) 100%)",
     "radial-gradient(60% 50% at 94% 14%, #173aa3 0%, rgba(23, 58, 163, 0) 100%)",
@@ -206,7 +215,7 @@ export const PRESETS: Preset[] = [
   { id: "charcoal", name: "Charcoal", group: "Dark", about: "Soft dark grey.", spec: { scheme: "dark", bg: "#17181c", accent: "#6aa9ff" } },
   { id: "midnight", name: "Midnight", group: "Dark", about: "Deep blue.", spec: { scheme: "dark", bg: "#0a1022", accent: "#7aa7ff", tint: "#bfd0ff", ink: "#eef2ff", depth: 1.15 } },
   { id: "ember", name: "Ember", group: "Dark", about: "Warm dark, like a low fire.", spec: { scheme: "dark", bg: "#16110e", accent: "#ff9a5a", tint: "#ffd2ad", ink: "#f6ede4", depth: 1.1 } },
-  { id: "terminal", name: "Terminal", group: "Dark", about: "Green on black.", spec: { scheme: "dark", bg: "#020a05", accent: "#3df07a", tint: "#56ff95", ink: "#c5f7d2", depth: 1.05, round: 30 } },
+  { id: "terminal", name: "Terminal", group: "Dark", about: "Neon green on true black.", spec: { scheme: "dark", bg: "#000000", accent: "#00ffa2", tint: "#39ff14", ink: "#39ff14", depth: 1.05, round: 30 } },
   { id: "light", name: "Light", group: "Light", about: "Clean and bright.", spec: { scheme: "light", bg: "#ffffff", accent: "#045ed2", tint: "#14142b" } },
   { id: "paper", name: "Paper", group: "Light", about: "Warm, like a page.", spec: { scheme: "light", bg: "#f6f0e4", accent: "#9c4001", tint: "#5c3d14", ink: "#2a231c", depth: 1.25 } },
   { id: "sunlight", name: "Sunlight", group: "Light", about: "Strong contrast for reading outdoors.", spec: { scheme: "light", bg: "#ffffff", accent: "#0032b1", ink: "#000000", bold: true, depth: 1.5 } },
@@ -238,14 +247,29 @@ export const PRESETS: Preset[] = [
     about: "Soft morning colours.",
     spec: { scheme: "light", bg: "#f3e8f4", accent: "#773adc", glass: 0.9, blur: 20, shine: 0.6, backdrop: { kind: "gradient", shape: "linear", angle: 155, stops: ["#ffe6d9", "#f0e4ff", "#d9efff"] } },
   },
+  // Until textures, this was the "Liquid glass" theme (id `glass`): its colours stay, and its glass is now the texture.
   {
-    id: "glass",
-    name: "Liquid glass",
+    id: "nebula",
+    name: "Nebula",
     group: "Colourful",
-    about: "Clear panels over pools of colour.",
-    spec: { scheme: "dark", bg: "#1b1450", accent: "#b7daff", glass: 1, blur: 28, shine: 1, depth: 1.2, round: 78, backdrop: { kind: "css", ...GLASS_POOLS } },
+    about: "Pools of colour over deep blue.",
+    spec: { scheme: "dark", bg: "#1b1450", accent: "#b7daff", glass: 1, blur: 20, shine: 0.4, glassShine: 1, depth: 1.2, round: 78, backdrop: { kind: "css", ...POOLS } },
   },
 ];
+
+/** The theme that became the Nebula preset with the Liquid glass texture. */
+const WAS_GLASS_THEME = "glass";
+
+/** How surfaces and controls are drawn, whatever the theme's colours. */
+export type Texture = "flat" | "skeuo" | "glass";
+export const DEFAULT_TEXTURE: Texture = "flat";
+/** The textures to pick from, in the order they're shown. */
+export const TEXTURES: { id: Texture; name: string; about: string }[] = [
+  { id: "flat", name: "Flat", about: "Plain and simple." },
+  { id: "skeuo", name: "Skeuomorphic", about: "Brushed metal and raised, glossy buttons." },
+  { id: "glass", name: "Liquid glass", about: "Clear, shiny panels you can see through." },
+];
+const TEXTURE_IDS = TEXTURES.map((t) => t.id);
 
 export const presetById = (id: string): Preset | undefined => PRESETS.find((p) => p.id === id);
 
@@ -292,6 +316,8 @@ export interface ThemeSettings {
   custom: CustomTheme;
   /** "Reduce see-through effects": panels are solid and nothing blurs. */
   calm: boolean;
+  /** How surfaces and controls are drawn. It changes no colour and no size. */
+  texture: Texture;
 }
 
 export const DEFAULT_CUSTOM: CustomTheme = {
@@ -306,7 +332,7 @@ export const DEFAULT_CUSTOM: CustomTheme = {
   text: "auto",
 };
 
-export const DEFAULT_SETTINGS: ThemeSettings = { v: 1, theme: DEFAULT_THEME, custom: DEFAULT_CUSTOM, calm: false };
+export const DEFAULT_SETTINGS: ThemeSettings = { v: 1, theme: DEFAULT_THEME, custom: DEFAULT_CUSTOM, calm: false, texture: DEFAULT_TEXTURE };
 
 /** Good accents to start from. */
 export const ACCENT_SWATCHES = ["#3d95ff", "#38bdf8", "#2dd4bf", "#3ec468", "#a3e635", "#ffd60a", "#ff9f43", "#ff5a5f", "#ff6fb5", "#a78bfa"];
@@ -368,16 +394,19 @@ function customFrom(raw: unknown): CustomTheme {
 
 /**
  * Whatever was saved, as today's settings: a bare name (the first shape, before your own themes), an object missing
- * parts that came later, numbers out of range, a preset that's gone. Anything it can't read is the default, so a
- * damaged value never leaves the app unreadable.
+ * parts that came later (no texture: Flat), numbers out of range, a preset that's gone. Anything it can't read is the
+ * default, so a damaged value never leaves the app unreadable. The Liquid glass theme of before textures is Nebula
+ * with the Liquid glass texture: the same colours, drawn the same way.
  */
 export function migrate(raw: unknown): ThemeSettings {
   if (typeof raw === "string") raw = { theme: raw };
   const s = record(raw);
   // Before `theme` it was `preset`.
   const named = typeof s.theme === "string" ? s.theme : typeof s.preset === "string" ? s.preset : DEFAULT_THEME;
-  const theme = named === CUSTOM_THEME || presetById(named) ? named : DEFAULT_THEME;
-  return { v: 1, theme, custom: customFrom(s.custom), calm: s.calm === true || s.reduce === true };
+  const wasGlass = named === WAS_GLASS_THEME;
+  const theme = wasGlass ? "nebula" : named === CUSTOM_THEME || presetById(named) ? named : DEFAULT_THEME;
+  const texture = oneOf(s.texture, TEXTURE_IDS, wasGlass ? "glass" : DEFAULT_TEXTURE);
+  return { v: 1, theme, custom: customFrom(s.custom), calm: s.calm === true || s.reduce === true, texture };
 }
 
 /** What's kept on the device: the settings, and what they paint (so the page can be painted before the app loads). */
@@ -541,21 +570,34 @@ export function groundOf(spec: ThemeSpec) {
   return { dark, scheme, ink, T, veil, veilColour, grounds, bg };
 }
 
+/** Liquid glass, the texture, blurs what's behind its layers at least this much (pixels). */
+const GLASS_BLUR = 28;
+
 /**
  * Everything a look sets, worked out from its few inputs. `calm`: panels are solid and nothing blurs ("Reduce
- * see-through effects", or the device's own setting).
+ * see-through effects", or the device's own setting). `texture`: only Liquid glass changes anything here, and no
+ * colour of the theme's: panels stay as see-through as the theme has them (so every word on them, and on panels
+ * stacked on a sheet, reads as it does under Flat), with the glass's edge, shine and a deeper blur. Where the theme has
+ * nothing see-through (a plain page, or solid panels over a backdrop), what floats over content becomes glass: the
+ * bars, sheets, the drawer, menus. With `calm` it keeps the edges and the shine, and nothing is see-through or blurred.
  */
-export function paintOf(spec: ThemeSpec, id: string, calm = false): Paint {
+export function paintOf(spec: ThemeSpec, id: string, calm = false, texture: Texture = DEFAULT_TEXTURE): Paint {
   const { dark, scheme, ink, T, veil, veilColour, grounds, bg } = groundOf(spec);
 
+  const glassy = texture === "glass";
+  const plainGlass = glassy && !spec.backdrop;
   const glass = spec.backdrop && !calm ? clamp(spec.glass ?? 0, 0, 1) : 0;
-  const blur = glass > 0 ? clamp(spec.blur ?? 0, 0, 40) : 0;
-  const shine = glass * clamp(spec.shine ?? 0, 0, 1);
+  /** How see-through the layers over content are: as the panels, or glass where the theme's panels are solid. */
+  const float = glassy && !calm && glass === 0 ? 1 : glass;
+  const blur = float > 0 ? clamp(glassy ? Math.max(spec.blur ?? 0, GLASS_BLUR) : (spec.blur ?? 0), 0, 40) : 0;
+  const shine = glassy ? 1 : glass * clamp(spec.shine ?? 0, 0, 1);
+  // A plain page's own lines stay as the theme has them: its glass shows in edges and shine, not in stronger lines.
+  const lineShine = plainGlass ? 0 : shine;
   /** A panel as a solid colour over the page colour. */
   const solid = (t: Tint) => over(alpha(t.c, t.a), bg);
   /** A panel as it's painted: solid, or letting `1 - a` of what's behind through while looking the same over the page colour. */
-  const panel = (t: Tint, least = t.a): Rgba => {
-    const a = 1 - glass * (1 - least);
+  const panel = (t: Tint, least = t.a, clear = glass): Rgba => {
+    const a = 1 - clear * (1 - least);
     if (a >= 0.999) return alpha(solid(t), 1);
     const s = solid(t);
     const un = (top: number, under: number) => clamp((top - (1 - a) * under) / a, 0, 255);
@@ -570,16 +612,21 @@ export function paintOf(spec: ThemeSpec, id: string, calm = false): Paint {
   // The layers over a backdrop: the bars (top bar, chat list, message box), what pops over the page (sheets, notices,
   // the drawer) and small menus, which stay nearly solid: they open inside a bar, where a blur can't reach what's
   // behind the bar.
-  const chrome = panel(T.s1, dark ? 0.42 : 0.5);
+  const chrome = panel(T.s1, dark ? 0.42 : 0.5, float);
   // Sheets and the drawer open over words, so they read without their blur too (a browser that doesn't draw one).
-  const pop = panel(T.s2, dark ? 0.8 : 0.84);
-  const menu = panel(T.s2, 0.93);
+  // On a plain page they keep the colour they have there: a sheet is the first panel's on a dark page and the page's
+  // own on a light one.
+  const clearPage = (least: number): Rgba => alpha(bg, 1 - float * (1 - least));
+  const pop = plainGlass ? (dark ? panel(T.s1, 0.8, float) : clearPage(0.84)) : panel(T.s2, dark ? 0.8 : 0.84, float);
+  const menu = plainGlass && !dark ? clearPage(0.93) : panel(T.s2, 0.93, float);
+  // Over a plain page those layers come to colours the panels already have, so they add nothing to read on.
+  const floats = spec.backdrop ? [chrome, pop, menu] : [];
   // What words end up on: the page (every colour of a backdrop), and each panel over it, as it's written (whole bytes).
   const whole = (c: Rgba): Rgba => ({ r: byte(c.r), g: byte(c.g), b: byte(c.b), a: Math.round(c.a * 1000) / 1000 });
   const under = (...panels: Rgba[]) => grounds.flatMap((g) => [g, ...panels.map((p) => over(whole(p), g))]).map((c) => ({ r: byte(c.r), g: byte(c.g), b: byte(c.b) }));
   const plain = under(s1, s2, code, ...cards);
   const onPanels = under(s1, s2, ...cards);
-  const anywhere = under(s1, s2, s3, human, code, chrome, pop, menu, ...cards);
+  const anywhere = under(s1, s2, s3, human, code, ...floats, ...cards);
 
   const text = readable(ink, anywhere, spec.backdrop ? 4.5 : 7);
   const text2 = readable(mix(bg, text, spec.bold ? 0.86 : dark ? 0.66 : 0.72), anywhere, spec.bold ? 7 : 4.5);
@@ -588,7 +635,7 @@ export function paintOf(spec: ThemeSpec, id: string, calm = false): Paint {
   const text3 = readable(mix(bg, text, spec.bold ? 0.76 : dark ? 0.52 : 0.6), [...plain, ...codeHead], spec.bold ? 5.5 : 4.5);
   // The accent also sits on its own soft tint (the tab you're on, what's selected).
   const accentFirst = readable(must(spec.accent), onPanels, spec.bold ? 7 : 4.5, true);
-  const accent = readable(accentFirst, [...onPanels, ...grounds.flatMap((g) => [s1, chrome].map((p) => over(alpha(accentFirst, dark ? 0.16 : 0.13), over(whole(p), g))))], spec.bold ? 7 : 4.5, true);
+  const accent = readable(accentFirst, [...onPanels, ...grounds.flatMap((g) => [s1, ...floats.slice(0, 1)].map((p) => over(alpha(accentFirst, dark ? 0.16 : 0.13), over(whole(p), g))))], spec.bold ? 7 : 4.5, true);
   /** A colour that says something (done, waiting, wrong): readable on the page, on panels and on its own soft chip. */
   const hue = (darkOne: string, lightOne: string) => {
     const start = must(dark ? darkOne : lightOne);
@@ -599,7 +646,7 @@ export function paintOf(spec: ThemeSpec, id: string, calm = false): Paint {
   const orange = hue(...HUES.orange);
   const red = hue(...HUES.red);
   const soft = (c: Rgb, a = dark ? 0.15 : 0.13) => toCss(alpha(c, a));
-  const lines = spec.bold ? [0.32, 0.5] : dark ? [0.08 + 0.08 * shine, 0.14 + 0.12 * shine] : [0.1, 0.17];
+  const lines = spec.bold ? [0.32, 0.5] : dark ? [0.08 + 0.08 * lineShine, 0.14 + 0.12 * lineShine] : [0.1, 0.17];
   const round = clamp(spec.round ?? 50, 0, 100);
   const strip = (c: Rgb, a: number) => toHex(over(alpha(c, a), solid(T.s1)));
 
@@ -631,7 +678,7 @@ export function paintOf(spec: ThemeSpec, id: string, calm = false): Paint {
     "--code-bg": toCss(code),
     "--card-top": toCss(cards[0]),
     "--card-bottom": toCss(cards[1]),
-    "--shadow-pop": dark ? `0 12px 40px rgba(0, 0, 0, 0.55), 0 0 0 0.5px ${toCss(alpha(text, 0.14 + 0.1 * shine))}` : `0 12px 36px rgba(20, 20, 40, 0.16), 0 0 0 0.5px ${toCss(alpha(text, spec.bold ? 0.4 : 0.12))}`,
+    "--shadow-pop": dark ? `0 12px 40px rgba(0, 0, 0, 0.55), 0 0 0 0.5px ${toCss(alpha(text, 0.14 + 0.1 * lineShine))}` : `0 12px 36px rgba(20, 20, 40, 0.16), 0 0 0 0.5px ${toCss(alpha(text, spec.bold ? 0.4 : 0.12))}`,
     "--primary-bg": toHex(text),
     "--primary-text": toHex(onColor(text)),
     "--primary-hover": toHex(mix(text, dark ? WHITE : BLACK, dark ? 1 : 0.35)),
@@ -681,18 +728,51 @@ export function paintOf(spec: ThemeSpec, id: string, calm = false): Paint {
       vars["--backdrop-size"] = b.fit === "fit" ? "contain" : "cover";
       vars["--backdrop-pos"] = `${Math.round(clamp(b.x, 0, 100))}% ${Math.round(clamp(b.y, 0, 100))}%`;
     }
+  }
+  if (spec.backdrop || glassy) {
     vars["--chrome"] = toCss(chrome);
     vars["--pop"] = toCss(pop);
     vars["--menu"] = toCss(menu);
-    vars["--glass-filter"] = blur > 0 ? `saturate(${Math.round(100 + 40 * glass)}%) blur(${px(blur)})` : "none";
+    vars["--glass-filter"] = blur > 0 ? `saturate(${Math.round(100 + 40 * float)}%) blur(${px(blur)})` : "none";
     // Shadows that draw nothing when there's no shine: they're listed beside others, where `none` can't be.
     const NO_SHADOW = "0 0 0 0 transparent";
-    vars["--glass-edge"] = shine > 0 ? `inset 0 1px 0 ${toCss(alpha(WHITE, (dark ? 0.2 : 0.7) * shine))}, inset 0 0 0 0.5px ${toCss(alpha(WHITE, (dark ? 0.1 : 0.4) * shine))}` : NO_SHADOW;
-    vars["--glass-shine"] = shine > 0 ? `linear-gradient(135deg, ${toCss(alpha(WHITE, (dark ? 0.12 : 0.4) * shine))} 0%, ${toCss(alpha(WHITE, 0))} 42%, ${toCss(alpha(WHITE, 0))} 70%, ${toCss(alpha(WHITE, (dark ? 0.05 : 0.2) * shine))} 100%)` : "none";
-    vars["--glass-shadow"] = shine > 0 ? `0 8px 32px ${toCss(alpha(dark ? BLACK : must("#30305a"), (dark ? 0.28 : 0.05) * shine))}` : NO_SHADOW;
-    if (glass > 0) attrs["data-glass"] = "1";
+    const clear = toCss(alpha(WHITE, 0));
+    if (plainGlass) {
+      // On a plain page the quiet words have no contrast to spare for a shine across a whole panel (they're as dim as
+      // reads on it). A dark panel's glass is its rim: a bright upper edge and a short glow under it, above where
+      // words start. A light one takes the full shine (white over light costs words nothing) and a shadow to lift it.
+      vars["--glass-edge"] = `inset 0 1px 0 ${toCss(alpha(WHITE, dark ? 0.3 : 0.9))}, inset 0 0 0 0.5px ${toCss(alpha(WHITE, dark ? 0.13 : 0.5))}, inset 0 -1px 0 ${toCss(alpha(WHITE, dark ? 0.07 : 0.3))}`;
+      vars["--glass-shine"] = dark ? `linear-gradient(180deg, ${toCss(alpha(WHITE, 0.09))} 0, ${clear} 9px)` : `linear-gradient(135deg, ${toCss(alpha(WHITE, 0.7))} 0%, ${clear} 42%, ${clear} 70%, ${toCss(alpha(WHITE, 0.35))} 100%)`;
+      vars["--glass-shadow"] = dark ? `0 8px 32px ${toCss(alpha(BLACK, 0.3))}` : `0 6px 24px ${toCss(alpha(must("#30305a"), 0.13))}, 0 0 0 0.5px ${toCss(alpha(must("#30305a"), 0.12))}`;
+    } else {
+      // The texture over a backdrop: the edge and the shadow at their full strength. The shine across a panel is white
+      // over the words' ground, which a dark look's quiet words can't always spare: it stays as strong as the look has
+      // it itself (or says it can take), with the glow under the upper edge making up the rest; a light look takes all.
+      const sweep = !glassy ? shine : dark ? clamp(spec.glassShine ?? spec.shine ?? 0, 0, 1) : 1;
+      const across = sweep > 0 ? `linear-gradient(135deg, ${toCss(alpha(WHITE, (dark ? 0.12 : 0.4) * sweep))} 0%, ${clear} 42%, ${clear} 70%, ${toCss(alpha(WHITE, (dark ? 0.05 : 0.2) * sweep))} 100%)` : "";
+      const glow = glassy && dark && sweep < 1 ? `linear-gradient(180deg, ${toCss(alpha(WHITE, 0.09))} 0, ${clear} 9px)` : "";
+      vars["--glass-edge"] = shine > 0 ? `inset 0 1px 0 ${toCss(alpha(WHITE, (dark ? 0.2 : 0.7) * shine))}, inset 0 0 0 0.5px ${toCss(alpha(WHITE, (dark ? 0.1 : 0.4) * shine))}` : NO_SHADOW;
+      vars["--glass-shine"] = [glow, across].filter(Boolean).join(", ") || "none";
+      vars["--glass-shadow"] = shine > 0 ? `0 8px 32px ${toCss(alpha(dark ? BLACK : must("#30305a"), (dark ? 0.28 : 0.05) * shine))}` : NO_SHADOW;
+    }
+    // The texture keeps its edges and shine with see-through effects reduced: only the see-through goes.
+    if (glass > 0 || glassy) attrs["data-glass"] = "1";
   }
   return { vars, attrs, color: toHex(bg), scheme };
+}
+
+/** OLED black as the inputs a look is worked out from: only Liquid glass over it needs them (see glassOverOled). */
+const OLED_SPEC: ThemeSpec = { scheme: "dark", bg: OLED_VARS["--bg"], accent: OLED_VARS["--accent"] };
+/** What Liquid glass, the texture, needs worked out whatever the theme. */
+const GLASS_VARS = ["--chrome", "--pop", "--menu", "--glass-filter", "--glass-edge", "--glass-shine", "--glass-shadow"];
+
+/**
+ * Liquid glass over OLED black: the look styles.css draws by itself stays as it is (none of its colours is set here),
+ * with only the see-through layers and the edges the texture needs.
+ */
+function glassOverOled(calm: boolean): Paint {
+  const all = paintOf(OLED_SPEC, DEFAULT_THEME, calm, "glass");
+  return { vars: Object.fromEntries(GLASS_VARS.map((name) => [name, all.vars[name]])), attrs: { "data-glass": "1" }, color: OLED_VARS["--bg"], scheme: "dark" };
 }
 
 /** Your own theme as the inputs a look is worked out from. */
@@ -711,20 +791,30 @@ export function customSpec(c: CustomTheme): ThemeSpec {
 
 /**
  * What the settings paint, or null for the look styles.css draws by itself. `calm`: the device asks for less
- * see-through (prefers-reduced-transparency), as the settings' own switch does.
+ * see-through (prefers-reduced-transparency), as the settings' own switch does. The texture itself isn't part of it
+ * (it's `data-texture` on the page's root, see textureAttr): only what Liquid glass needs worked out is.
  */
 export function paintFor(settings: ThemeSettings, calm = false): Paint | null {
   const still = calm || settings.calm;
-  if (settings.theme === CUSTOM_THEME) return paintOf(customSpec(settings.custom), CUSTOM_THEME, still);
+  if (settings.theme === CUSTOM_THEME) return paintOf(customSpec(settings.custom), CUSTOM_THEME, still, settings.texture);
   const spec = presetById(settings.theme)?.spec;
-  return spec ? paintOf(spec, settings.theme, still) : null;
+  if (spec) return paintOf(spec, settings.theme, still, settings.texture);
+  return settings.texture === "glass" ? glassOverOled(still) : null;
 }
 
-/** Whether a theme has anything see-through to reduce. */
+/** The attribute a texture puts on the page's root (styles/textures.css keys its rules on it). */
+export const TEXTURE_ATTR = "data-texture";
+/** What that attribute says: null for Flat, which is the app as it's drawn without one. */
+export const textureAttr = (settings: ThemeSettings): string | null => (settings.texture === "skeuo" || settings.texture === "glass" ? settings.texture : null);
+
+/** Whether a theme has a gradient or a picture behind the app. */
 export function hasBackdrop(settings: ThemeSettings): boolean {
   if (settings.theme === CUSTOM_THEME) return !!customSpec(settings.custom).backdrop;
   return !!presetById(settings.theme)?.spec?.backdrop;
 }
+
+/** Whether anything is see-through as things are chosen (so "Reduce see-through effects" has something to reduce). */
+export const hasSeeThrough = (settings: ThemeSettings): boolean => hasBackdrop(settings) || settings.texture === "glass";
 
 /** A preset as a start for your own theme ("Change this theme"): its colours and backdrop, yours to move from there. */
 export function customFromPreset(id: string, keep: CustomTheme): CustomTheme {

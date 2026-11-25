@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import type { Member, ModelOption } from "@crosstalk/shared";
-import { agentLine, agentSections, asDefaults, chipWords, effortHint, foldKey, hasDefaults, heldLine, memoryWords, modelWord, openAt, sheetSections, startsLikeThis, whenWords } from "./chatSettings";
+import { agentLine, agentSections, asDefaults, chipWords, effortHint, foldKey, hasDefaults, heldLine, memoryWords, modelWord, openAt, sheetSections, startsLikeThis, whenWords, limitWords } from "./chatSettings";
 
 const OPUS = { id: "opus", resolvedModel: "claude-opus-5-5", label: "Opus 5.5", isDefault: true, efforts: ["low", "medium", "high", "xhigh"], defaultEffort: null } as unknown as ModelOption;
 const HAIKU = { id: "haiku", resolvedModel: "claude-haiku-4-5", label: "Haiku 4.5", isDefault: false, efforts: [], defaultEffort: null } as unknown as ModelOption;
@@ -74,4 +74,12 @@ test("effort hints, memory and an agent's line", () => {
   expect(memoryWords(null, 200_000)).toEqual({ pct: null, words: "Shown after the next reply" });
   expect(memoryWords(50_000, 200_000)).toEqual({ pct: 25, words: "25% full" });
   expect(agentLine(member({ model: "haiku", permissionMode: "edits", config: { effort: "low" } }), [OPUS, HAIKU], "Work")).toBe("Claude Code · Work · Haiku 4.5 · Low · Can edit");
+});
+
+test("the closed Memory and usage row names the plan limit nearest full", () => {
+  expect(limitWords(undefined)).toBeNull();
+  expect(limitWords([])).toBeNull();
+  expect(limitWords([{ label: "5-hour", usedPercent: null }])).toBeNull();
+  expect(limitWords([{ label: "5-hour", usedPercent: 34.4 }, { label: "Weekly", usedPercent: 58 }])).toBe("Weekly limit 58% used");
+  expect(limitWords([{ label: "5-hour", usedPercent: 91 }, { label: "Weekly", usedPercent: 58 }, { label: "Opus", usedPercent: null }])).toBe("5-hour limit 91% used");
 });

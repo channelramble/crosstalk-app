@@ -108,7 +108,7 @@ test("More models on a phone: the menu opens on the usual models, More models op
     await expect(effortSteps(menu).getByRole("radio")).toHaveText(["Low", /^Medium/]);
     await expect(effortSteps(menu).getByRole("radio", { name: "Medium (default)", exact: true })).toHaveAttribute("aria-checked", "true");
     // …and what it holds.
-    await expect(await chatSettings(page, "Memory")).toContainText("GPT-Reserve remembers up to 258k of a chat.");
+    await expect(await chatSettings(page, "Memory and usage")).toContainText("GPT-Reserve remembers up to 258k of a chat.");
     // The sheet stays open after a pick; the row behind it says the model and the effort in force.
     await closeChatSettings(page);
     await expect(page.locator(".chat-controls .ctl-model .ellipsis")).toHaveText("GPT-Reserve · Medium");
