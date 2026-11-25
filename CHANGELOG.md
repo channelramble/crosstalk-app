@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.10.1
+
+- **Aero**, a fourth texture, after Windows 7: frames of frosted glass that take a wash of the theme's accent, with a
+  gloss and streaks of reflection across their upper half; two-tone buttons with a bright inner line that glow in the
+  accent under a pointer; glossy meters; and a soft glow behind a frame's title. On any theme, like the others.
+- **Agent pictures belong to the theme.** An agent's picture is now its mark in its own colour, brighter on a dark
+  page and deeper on a light one, on a tile of the theme's colour with a line of the agent's colour round it. They
+  were a white mark on a patch of muted colour, which looked out of place on a theme and alike from one agent to the
+  next.
+
 ## 0.10.0
 
 **Updates from the app**

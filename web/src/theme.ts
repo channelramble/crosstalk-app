@@ -7,7 +7,7 @@
  * the page: themeDevice.ts keeps the choice on the device and applies it, index.html applies the saved one before the
  * first paint, and styles/themes.css holds the rules that only a theme with a backdrop needs.
  *
- * Beside the theme there's a texture (Flat, Skeuomorphic, Liquid glass): how surfaces and controls are drawn, in
+ * Beside the theme there's a texture (Flat, Skeuomorphic, Liquid glass, Aero): how surfaces and controls are drawn, in
  * whatever colours the theme has. It's `data-texture` on the page's root and styles/textures.css; only Liquid glass
  * needs anything worked out here (its see-through bars and its edges), for every theme.
  *
@@ -261,14 +261,17 @@ export const PRESETS: Preset[] = [
 const WAS_GLASS_THEME = "glass";
 
 /** How surfaces and controls are drawn, whatever the theme's colours. */
-export type Texture = "flat" | "skeuo" | "glass";
+export type Texture = "flat" | "skeuo" | "glass" | "aero";
 export const DEFAULT_TEXTURE: Texture = "flat";
 /** The textures to pick from, in the order they're shown. */
 export const TEXTURES: { id: Texture; name: string; about: string }[] = [
   { id: "flat", name: "Flat", about: "Plain and simple." },
   { id: "skeuo", name: "Skeuomorphic", about: "Brushed metal and raised, glossy buttons." },
   { id: "glass", name: "Liquid glass", about: "Clear, shiny panels you can see through." },
+  { id: "aero", name: "Aero", about: "Frosted glass frames and glossy buttons, after Windows 7." },
 ];
+/** The textures whose bars, sheets and menus are see-through whatever the theme (what `paintOf` works out for them). */
+export const isGlassy = (texture: Texture): boolean => texture === "glass" || texture === "aero";
 const TEXTURE_IDS = TEXTURES.map((t) => t.id);
 
 export const presetById = (id: string): Preset | undefined => PRESETS.find((p) => p.id === id);
@@ -584,7 +587,7 @@ const GLASS_BLUR = 28;
 export function paintOf(spec: ThemeSpec, id: string, calm = false, texture: Texture = DEFAULT_TEXTURE): Paint {
   const { dark, scheme, ink, T, veil, veilColour, grounds, bg } = groundOf(spec);
 
-  const glassy = texture === "glass";
+  const glassy = isGlassy(texture);
   const plainGlass = glassy && !spec.backdrop;
   const glass = spec.backdrop && !calm ? clamp(spec.glass ?? 0, 0, 1) : 0;
   /** How see-through the layers over content are: as the panels, or glass where the theme's panels are solid. */
@@ -799,13 +802,13 @@ export function paintFor(settings: ThemeSettings, calm = false): Paint | null {
   if (settings.theme === CUSTOM_THEME) return paintOf(customSpec(settings.custom), CUSTOM_THEME, still, settings.texture);
   const spec = presetById(settings.theme)?.spec;
   if (spec) return paintOf(spec, settings.theme, still, settings.texture);
-  return settings.texture === "glass" ? glassOverOled(still) : null;
+  return isGlassy(settings.texture) ? glassOverOled(still) : null;
 }
 
 /** The attribute a texture puts on the page's root (styles/textures.css keys its rules on it). */
 export const TEXTURE_ATTR = "data-texture";
 /** What that attribute says: null for Flat, which is the app as it's drawn without one. */
-export const textureAttr = (settings: ThemeSettings): string | null => (settings.texture === "skeuo" || settings.texture === "glass" ? settings.texture : null);
+export const textureAttr = (settings: ThemeSettings): string | null => (settings.texture === "skeuo" || isGlassy(settings.texture) ? settings.texture : null);
 
 /** Whether a theme has a gradient or a picture behind the app. */
 export function hasBackdrop(settings: ThemeSettings): boolean {
@@ -814,7 +817,7 @@ export function hasBackdrop(settings: ThemeSettings): boolean {
 }
 
 /** Whether anything is see-through as things are chosen (so "Reduce see-through effects" has something to reduce). */
-export const hasSeeThrough = (settings: ThemeSettings): boolean => hasBackdrop(settings) || settings.texture === "glass";
+export const hasSeeThrough = (settings: ThemeSettings): boolean => hasBackdrop(settings) || isGlassy(settings.texture);
 
 /** A preset as a start for your own theme ("Change this theme"): its colours and backdrop, yours to move from there. */
 export function customFromPreset(id: string, keep: CustomTheme): CustomTheme {

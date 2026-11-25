@@ -2,7 +2,7 @@ import { mkdirSync, existsSync, readFileSync, writeFileSync, chmodSync } from "n
 import { homedir, hostname } from "node:os";
 import { join, resolve } from "node:path";
 
-export const HUB_VERSION = "0.10.0";
+export const HUB_VERSION = "0.10.1";
 
 export interface HubConfig {
   port: number;

@@ -8,9 +8,12 @@
  * - [data-texture="glass"]: Liquid glass. theme.ts works out its see-through layers and its edges for every theme, and
  *   themes.css draws the bars, sheets and cards with them ([data-glass]); what's here is the rest: small controls, and
  *   what only a plain page needs.
+ * - [data-texture="aero"]: Aero, after Windows 7. The same see-through layers as Liquid glass, drawn as frosted glass
+ *   frames with a gloss and streaks of reflection, two-tone buttons that glow under a pointer, and glossy meters.
  *
  * The rule of this file: a texture changes how a surface is DRAWN and nothing else. Only these properties appear:
- * background-image (layers of white or black at low strength over the theme's own colour, which stays underneath),
+ * background-image (layers of white or black at low strength, or a wash of the theme's own accent, over the theme's
+ * own colour, which stays underneath),
  * background (only to one of the theme's own variables), box-shadow, border-color, text-shadow, backdrop-filter (and
  * one corner radius: a sheet's title bar follows the sheet's own corners, so its metal doesn't poke out of them).
  * Never a size, a border's width, a padding, a font, a place, or a colour of words: every measured thing is the same
@@ -493,4 +496,297 @@
   background:
     linear-gradient(color-mix(in srgb, var(--bg) 52%, transparent), color-mix(in srgb, var(--bg) 52%, transparent)),
     var(--pop);
+}
+
+/* ============================================================ Aero */
+
+/*
+ * After Windows 7's Aero: frames of frosted glass that take the colour you give them (here the theme's own accent, as a
+ * wash), with a gloss over their upper half that ends in a hard line and streaks of reflection across them at a slant;
+ * buttons in two tones split across the middle, with a bright inner line and a dark outer one, that glow in the accent
+ * under a pointer; filled bars with the same gloss; and a soft glow of the page's own colour behind a frame's title,
+ * so it reads on whatever shows through. theme.ts gives it the same see-through layers as Liquid glass (themes.css
+ * draws the bars and sheets with them); what's here is Aero's own drawing over those.
+ *
+ * The wash of colour, the gloss and the streaks all stop half way down a bar, at the gloss's hard line: a bar's title is
+ * above it and has the contrast to spare, its quiet second line is below it, where the glass is only darker (on a
+ * dark page) or lighter (on a light one). The streaks are a small picture, so they can stop there too.
+ */
+:root[data-texture="aero"],
+.xp-aero {
+  --ax-tint: linear-gradient(180deg, color-mix(in srgb, var(--accent) 16%, transparent) 0%, color-mix(in srgb, var(--accent) 6%, transparent) 48%, transparent 52%);
+  --ax-gloss: linear-gradient(180deg, rgba(255, 255, 255, 0.09) 0%, rgba(255, 255, 255, 0.02) 48%, rgba(0, 0, 0, 0.12) 52%, rgba(0, 0, 0, 0.24) 100%);
+  --ax-streaks: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='760' height='240'%3E%3Cdefs%3E%3ClinearGradient id='f' x1='0' y1='0' x2='0' y2='1'%3E%3Cstop offset='0' stop-color='white'/%3E%3Cstop offset='0.11' stop-color='white' stop-opacity='0.8'/%3E%3Cstop offset='0.112' stop-color='white' stop-opacity='0'/%3E%3C/linearGradient%3E%3Cmask id='m'%3E%3Crect width='760' height='240' fill='url(%23f)'/%3E%3C/mask%3E%3C/defs%3E%3Cg mask='url(%23m)' fill='white'%3E%3Cpolygon points='150,0 232,0 -8,240 -90,240' fill-opacity='0.075'/%3E%3Cpolygon points='262,0 296,0 56,240 22,240' fill-opacity='0.04'/%3E%3Cpolygon points='520,0 578,0 338,240 280,240' fill-opacity='0.055'/%3E%3C/g%3E%3C/svg%3E");
+  --ax-side: linear-gradient(90deg, rgba(0, 0, 0, 0) 0%, rgba(0, 0, 0, 0.16) 100%);
+  --ax-pick: linear-gradient(180deg, color-mix(in srgb, var(--accent) 16%, transparent) 0%, color-mix(in srgb, var(--accent) 5%, transparent) 49%, transparent 51%);
+  --ax-hi: rgba(255, 255, 255, 0.42);
+  --ax-hi-soft: rgba(255, 255, 255, 0.12);
+  --ax-line: rgba(0, 0, 0, 0.62);
+  --ax-frame: inset 0 1px 0 rgba(255, 255, 255, 0.42), inset 0 0 0 1px rgba(255, 255, 255, 0.12), 0 0 0 1px rgba(0, 0, 0, 0.6);
+  --ax-frame-shadow: 0 3px 12px rgba(0, 0, 0, 0.45);
+  /* A button: two tones split across its middle. */
+  --ax-button: linear-gradient(180deg, rgba(255, 255, 255, 0.11) 0%, rgba(255, 255, 255, 0) 20%, rgba(0, 0, 0, 0.03) 48%, rgba(0, 0, 0, 0.16) 52%, rgba(0, 0, 0, 0.28) 100%);
+  --ax-button-edge: inset 0 1px 0 rgba(255, 255, 255, 0.32), inset 0 0 0 1px rgba(255, 255, 255, 0.09), 0 1px 2px rgba(0, 0, 0, 0.4);
+  /* Under a pointer it lights up in the accent, inside and around. */
+  --ax-hot: linear-gradient(180deg, color-mix(in srgb, var(--accent) 24%, transparent) 0%, color-mix(in srgb, var(--accent) 12%, transparent) 48%, color-mix(in srgb, var(--accent) 20%, transparent) 52%, color-mix(in srgb, var(--accent) 32%, transparent) 100%);
+  --ax-hot-edge: inset 0 1px 0 rgba(255, 255, 255, 0.4), inset 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent), 0 0 9px color-mix(in srgb, var(--accent) 50%, transparent);
+  --ax-press: linear-gradient(180deg, rgba(0, 0, 0, 0.36) 0%, rgba(0, 0, 0, 0.22) 48%, rgba(0, 0, 0, 0.14) 52%, rgba(0, 0, 0, 0.06) 100%);
+  --ax-press-edge: inset 0 2px 5px rgba(0, 0, 0, 0.6), inset 0 0 0 1px rgba(0, 0, 0, 0.3);
+  /* A filled button, and what's filled with the accent (its words are only just readable on some accents: all light). */
+  --ax-gel: linear-gradient(180deg, rgba(255, 255, 255, 0.62) 0%, rgba(255, 255, 255, 0.24) 48%, rgba(0, 0, 0, 0.14) 52%, rgba(0, 0, 0, 0.04) 100%);
+  --ax-gel-edge: inset 0 1px 0 rgba(255, 255, 255, 0.85), inset 0 0 0 1px rgba(255, 255, 255, 0.28), 0 0 0 1px rgba(0, 0, 0, 0.6), 0 1px 3px rgba(0, 0, 0, 0.45);
+  --ax-gel-accent: linear-gradient(180deg, rgba(255, 255, 255, 0.5) 0%, rgba(255, 255, 255, 0.16) 48%, rgba(255, 255, 255, 0) 52%, rgba(0, 0, 0, 0.03) 100%);
+  --ax-well: inset 0 1px 2px rgba(0, 0, 0, 0.6), inset 0 0 0 1px rgba(0, 0, 0, 0.35), 0 1px 0 rgba(255, 255, 255, 0.1);
+  --ax-pane: inset 0 1px 0 rgba(255, 255, 255, 0.13), inset 0 0 0 1px rgba(255, 255, 255, 0.045), 0 0 0 1px rgba(0, 0, 0, 0.5), 0 2px 6px rgba(0, 0, 0, 0.3);
+  --ax-glow: 0 0 10px color-mix(in srgb, var(--bg) 90%, transparent), 0 0 3px color-mix(in srgb, var(--bg) 80%, transparent);
+  /* What fills a meter: glossy. */
+  --ax-fill: linear-gradient(180deg, rgba(255, 255, 255, 0.5) 0%, rgba(255, 255, 255, 0.14) 48%, rgba(0, 0, 0, 0.14) 52%, rgba(0, 0, 0, 0) 100%);
+  --ax-knob: linear-gradient(180deg, rgba(255, 255, 255, 1) 0%, rgba(255, 255, 255, 0.5) 48%, rgba(0, 0, 0, 0.16) 52%, rgba(0, 0, 0, 0.04) 100%);
+  --ax-knob-edge: 0 1px 3px rgba(0, 0, 0, 0.6), 0 0 0 0.5px rgba(0, 0, 0, 0.55), inset 0 0 0 1px rgba(255, 255, 255, 0.9);
+}
+:root[data-scheme="light"][data-texture="aero"],
+:root[data-scheme="light"] .xp-aero {
+  --ax-tint: linear-gradient(180deg, color-mix(in srgb, var(--accent) 10%, transparent) 0%, color-mix(in srgb, var(--accent) 4%, transparent) 48%, transparent 52%);
+  --ax-gloss: linear-gradient(180deg, rgba(255, 255, 255, 0.8) 0%, rgba(255, 255, 255, 0.4) 48%, rgba(255, 255, 255, 0.1) 52%, rgba(0, 0, 0, 0.03) 100%);
+  --ax-streaks: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='760' height='240'%3E%3Cdefs%3E%3ClinearGradient id='f' x1='0' y1='0' x2='0' y2='1'%3E%3Cstop offset='0' stop-color='white'/%3E%3Cstop offset='0.11' stop-color='white' stop-opacity='0.8'/%3E%3Cstop offset='0.112' stop-color='white' stop-opacity='0'/%3E%3C/linearGradient%3E%3Cmask id='m'%3E%3Crect width='760' height='240' fill='url(%23f)'/%3E%3C/mask%3E%3C/defs%3E%3Cg mask='url(%23m)' fill='white'%3E%3Cpolygon points='150,0 232,0 -8,240 -90,240' fill-opacity='0.55'/%3E%3Cpolygon points='262,0 296,0 56,240 22,240' fill-opacity='0.32'/%3E%3Cpolygon points='520,0 578,0 338,240 280,240' fill-opacity='0.42'/%3E%3C/g%3E%3C/svg%3E");
+  --ax-side: linear-gradient(90deg, rgba(255, 255, 255, 0.5) 0%, rgba(255, 255, 255, 0) 100%);
+  --ax-pick: linear-gradient(180deg, color-mix(in srgb, var(--accent) 9%, transparent) 0%, color-mix(in srgb, var(--accent) 3%, transparent) 49%, transparent 51%);
+  --ax-hi: rgba(255, 255, 255, 0.95);
+  --ax-hi-soft: rgba(255, 255, 255, 0.7);
+  --ax-line: rgba(0, 0, 0, 0.3);
+  --ax-frame: inset 0 1px 0 rgba(255, 255, 255, 0.95), inset 0 0 0 1px rgba(255, 255, 255, 0.6), 0 0 0 1px rgba(0, 0, 0, 0.26);
+  --ax-frame-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  --ax-button: linear-gradient(180deg, rgba(255, 255, 255, 0.92) 0%, rgba(255, 255, 255, 0.55) 48%, rgba(0, 0, 0, 0.03) 52%, rgba(0, 0, 0, 0.07) 100%);
+  --ax-button-edge: inset 0 1px 0 rgba(255, 255, 255, 1), inset 0 0 0 1px rgba(255, 255, 255, 0.6), 0 1px 2px rgba(0, 0, 0, 0.14);
+  --ax-hot: linear-gradient(180deg, color-mix(in srgb, var(--accent) 10%, transparent) 0%, color-mix(in srgb, var(--accent) 5%, transparent) 48%, color-mix(in srgb, var(--accent) 12%, transparent) 52%, color-mix(in srgb, var(--accent) 18%, transparent) 100%);
+  --ax-hot-edge: inset 0 1px 0 rgba(255, 255, 255, 0.95), inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent), 0 0 8px color-mix(in srgb, var(--accent) 40%, transparent);
+  --ax-press: linear-gradient(180deg, rgba(0, 0, 0, 0.13) 0%, rgba(0, 0, 0, 0.05) 48%, rgba(0, 0, 0, 0.02) 52%, rgba(255, 255, 255, 0.2) 100%);
+  --ax-press-edge: inset 0 2px 4px rgba(0, 0, 0, 0.28), inset 0 0 0 1px rgba(0, 0, 0, 0.14);
+  /* The main button is dark with white words here, and the accent's words only just readable on it. */
+  --ax-gel: linear-gradient(180deg, rgba(255, 255, 255, 0.4) 0%, rgba(255, 255, 255, 0.15) 48%, rgba(255, 255, 255, 0) 52%, rgba(0, 0, 0, 0.12) 100%);
+  --ax-gel-edge: inset 0 1px 0 rgba(255, 255, 255, 0.5), inset 0 0 0 1px rgba(255, 255, 255, 0.16), 0 0 0 1px rgba(0, 0, 0, 0.3), 0 1px 3px rgba(0, 0, 0, 0.25);
+  --ax-gel-accent: linear-gradient(180deg, rgba(255, 255, 255, 0.3) 0%, rgba(255, 255, 255, 0) 16%, rgba(0, 0, 0, 0) 52%, rgba(0, 0, 0, 0.16) 100%);
+  --ax-well: inset 0 1px 2px rgba(0, 0, 0, 0.22), inset 0 0 0 1px rgba(0, 0, 0, 0.14), 0 1px 0 rgba(255, 255, 255, 0.9);
+  --ax-pane: inset 0 1px 0 rgba(255, 255, 255, 0.9), 0 0 0 1px rgba(0, 0, 0, 0.12), 0 2px 6px rgba(0, 0, 0, 0.1);
+  --ax-knob-edge: 0 1px 3px rgba(0, 0, 0, 0.3), 0 0 0 0.5px rgba(0, 0, 0, 0.3), inset 0 0 0 1px rgba(255, 255, 255, 1);
+}
+
+/* ------------------------------------------------------------ a plain page, as under Liquid glass */
+
+:root[data-texture="aero"] .app.mobile::before {
+  background: transparent;
+}
+:root[data-texture="aero"]:not([data-backdrop]) :is(.dialog, .toast) {
+  background: var(--pop);
+}
+:root[data-texture="aero"]:not([data-backdrop]) :is(.ctl-pop, .mention-pop, .csb-new-menu) {
+  background: var(--menu);
+}
+/* Over a gradient or a picture a sheet holds rows of small, quiet words: a veil of the page's own colour in it. */
+:root[data-texture="aero"][data-backdrop] .dialog {
+  background:
+    linear-gradient(color-mix(in srgb, var(--bg) 52%, transparent), color-mix(in srgb, var(--bg) 52%, transparent)),
+    var(--pop);
+}
+
+/* ------------------------------------------------------------ frames: frosted glass with its gloss and streaks */
+
+:root[data-texture="aero"] .app .topbar,
+:root[data-texture="aero"] .app.mobile .topbar,
+:root[data-texture="aero"] .settings-tabs {
+  background-image: var(--ax-streaks), var(--ax-gloss), var(--ax-tint);
+  border-bottom-color: var(--ax-line);
+  box-shadow: inset 0 1px 0 var(--ax-hi), inset 0 -1px 0 var(--ax-hi-soft), var(--ax-frame-shadow);
+}
+/* A chat's bar keeps the glow of its agent's colour, in the glass. */
+:root[data-texture="aero"] .app .topbar.tinted,
+:root[data-texture="aero"] .app.mobile .topbar.tinted {
+  background-image: var(--ax-streaks), var(--ax-gloss), radial-gradient(70% 220% at 0% 0%, color-mix(in srgb, var(--c) 22%, transparent), transparent 70%), var(--ax-tint);
+}
+:root[data-texture="aero"] .topbar h1,
+:root[data-texture="aero"] .dialog-head h3,
+:root[data-texture="aero"] .csb-brand {
+  text-shadow: var(--ax-glow);
+}
+/* The chat list, docked or as a drawer: a tall pane of plainer glass, shaded across (its quiet words have nothing to
+   spare for a wash of colour under them). */
+:root[data-texture="aero"] .chat-sidebar,
+:root[data-texture="aero"] .chat-sidebar.drawer {
+  background-image: var(--ax-side);
+  border-right-color: var(--ax-line);
+}
+:root[data-texture="aero"] .chat-sidebar:not(.drawer) {
+  box-shadow: inset -1px 0 0 var(--ax-hi-soft), inset 0 1px 0 var(--ax-hi-soft);
+}
+:root[data-texture="aero"] .csb-foot {
+  border-top-color: var(--ax-line);
+  box-shadow: inset 0 1px 0 var(--ax-hi-soft);
+}
+/* A sheet or a dialog is a window: the frame's two lines round it, and its title a bar of the same glass. */
+:root[data-texture="aero"] :is(.dialog, .toast, .ctl-pop, .mention-pop, .csb-new-menu) {
+  box-shadow: var(--shadow-pop), var(--ax-frame);
+}
+:root[data-texture="aero"] .app.mobile .dialog {
+  box-shadow: var(--shadow-pop), var(--ax-frame), 0 40px 0 var(--pop);
+}
+:root[data-texture="aero"] .dialog-head {
+  background-image: var(--ax-streaks), var(--ax-gloss), var(--ax-tint);
+  border-top-left-radius: inherit;
+  border-top-right-radius: inherit;
+  box-shadow: inset 0 1px 0 var(--ax-hi), inset 0 -1px 0 var(--ax-line), 0 1px 0 var(--ax-hi-soft);
+}
+
+/* ------------------------------------------------------------ panes */
+
+:root[data-texture="aero"] :is(.card, .list-group, .agent-hero, .agent-card, .cs-fold, .chat-status, .approval, .md .codeblock, .choice-card, .q-option) {
+  box-shadow: var(--ax-pane);
+}
+@media (hover: hover) {
+  :root[data-texture="aero"] .agent-card:hover {
+    box-shadow: var(--ax-pane), 0 0 0 1px color-mix(in srgb, var(--c) 30%, transparent), 0 0 18px -4px color-mix(in srgb, var(--c) 55%, transparent);
+  }
+}
+:root[data-texture="aero"] .msg.human .bubble {
+  background-image: var(--ax-button);
+  box-shadow: var(--ax-button-edge);
+}
+/* The open chat's row is selected as a file is in a window: a wash of the accent with its line round it, and the
+   agent's own line down the side. The wash stops half way down, above the row's quiet second line. */
+:root[data-texture="aero"] .csb-chat.active {
+  background-image: var(--ax-pick);
+  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--c) 70%, transparent), inset 0 0 0 1px color-mix(in srgb, var(--accent) 34%, transparent);
+}
+
+/* ------------------------------------------------------------ buttons: two tones, and a glow under a pointer */
+
+:root[data-texture="aero"] :is(.btn:not(.ghost), .settings-tabs-row button, .seg button.on, .jump-latest-btn, .cs-chip, .csb-new) {
+  background-image: var(--ax-button);
+  border-color: var(--ax-line);
+  box-shadow: var(--ax-button-edge);
+}
+@media (hover: hover) {
+  :root[data-texture="aero"] .btn:not(.ghost):not(.primary):not(.danger):not(:disabled):hover,
+  :root[data-texture="aero"] .settings-tabs-row button:not([aria-selected="true"]):hover,
+  :root[data-texture="aero"] :is(.jump-latest-btn, .cs-chip, .csb-new):hover {
+    background-image: var(--ax-hot), var(--ax-button);
+    box-shadow: var(--ax-hot-edge);
+  }
+}
+:root[data-texture="aero"] :is(.btn:not(.ghost), .settings-tabs-row button, .jump-latest-btn, .cs-chip, .csb-new):active {
+  background-image: var(--ax-press);
+  box-shadow: var(--ax-press-edge);
+}
+/* The main button: filled, with the gloss. (:not(.ghost) only so these outweigh the rule above.) */
+:root[data-texture="aero"] .btn.primary:not(.ghost),
+:root[data-texture="aero"] .btn.danger.solid:not(.ghost),
+:root[data-texture="aero"] .composer .send:not(:disabled):not(.stop) {
+  background-image: var(--ax-gel);
+  border-color: transparent;
+  box-shadow: var(--ax-gel-edge);
+}
+:root[data-texture="aero"] .btn.primary:not(.ghost):active,
+:root[data-texture="aero"] .btn.danger.solid:not(.ghost):active,
+:root[data-texture="aero"] .composer .send:not(:disabled):not(.stop):active {
+  background-image: var(--ax-press);
+  box-shadow: var(--ax-press-edge);
+}
+:root[data-texture="aero"] .settings-tabs-row button[aria-selected="true"] {
+  background-image: var(--ax-gel-accent);
+  box-shadow: var(--ax-gel-edge);
+}
+/* Switched off, a button lies flat. */
+:root[data-texture="aero"] :is(.btn, .btn.primary, .btn.danger.solid):is(:disabled, [aria-disabled="true"]) {
+  background-image: none;
+  box-shadow: inset 0 0 0 0.5px var(--ax-line);
+}
+/* A quiet button and an icon button have no body until they're pressed. */
+:root[data-texture="aero"] :is(.btn.ghost, .icon-btn, .composer-icon, .csb-tab):active,
+:root[data-texture="aero"] :is(.icon-btn.active, .csb-tab.active, .composer-icon.mic.on) {
+  box-shadow: var(--ax-press-edge);
+}
+
+/* ------------------------------------------------------------ fields, switches, sliders and meters */
+
+:root[data-texture="aero"] :is(.input, .select, .textarea, .composer, .seg) {
+  box-shadow: var(--ax-well);
+}
+:root[data-texture="aero"] :is(.input, .select, .textarea, .composer) {
+  border-color: var(--ax-line);
+}
+/* A field being typed in glows in the accent, as a text box in a window does. */
+:root[data-texture="aero"] :is(.input, .select, .textarea):focus {
+  border-color: var(--accent);
+  box-shadow: var(--ax-well), 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent), 0 0 9px color-mix(in srgb, var(--accent) 40%, transparent);
+}
+:root[data-texture="aero"] .composer:focus-within {
+  border-color: var(--edge-focus);
+}
+:root[data-texture="aero"] .pill {
+  box-shadow: inset 0 1px 0 var(--ax-hi-soft), inset 0 -1px 0 rgba(0, 0, 0, 0.16);
+}
+:root[data-texture="aero"] .switch span,
+:root[data-texture="aero"] .switch span::before {
+  box-shadow: var(--ax-well);
+}
+:root[data-texture="aero"] .switch span::after {
+  background-image: var(--ax-knob);
+  box-shadow: var(--ax-knob-edge);
+}
+:root[data-texture="aero"] :is(.theme-range input[type="range"], .effort-range)::-webkit-slider-runnable-track {
+  box-shadow: var(--ax-well);
+}
+:root[data-texture="aero"] :is(.theme-range input[type="range"], .effort-range)::-moz-range-track {
+  box-shadow: var(--ax-well);
+}
+:root[data-texture="aero"] :is(.theme-range input[type="range"], .effort-range)::-webkit-slider-thumb {
+  background-image: var(--ax-knob);
+  box-shadow: var(--ax-knob-edge);
+}
+:root[data-texture="aero"] :is(.theme-range input[type="range"], .effort-range)::-moz-range-thumb {
+  background-image: var(--ax-knob);
+  box-shadow: var(--ax-knob-edge);
+}
+:root[data-texture="aero"] .theme-range input[type="range"]:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 3px var(--bg), 0 0 0 5px var(--accent);
+}
+:root[data-texture="aero"] .theme-range input[type="range"]:focus-visible::-moz-range-thumb {
+  box-shadow: 0 0 0 3px var(--bg), 0 0 0 5px var(--accent);
+}
+/* A meter's track is a groove, and what fills it has the gloss of a progress bar. */
+:root[data-texture="aero"] :is(.meter, .fill-bar, .upload-bar) {
+  box-shadow: var(--ax-well);
+}
+:root[data-texture="aero"] :is(.meter > i, .fill-bar > span, .upload-bar > span) {
+  background-image: var(--ax-fill);
+}
+
+/* ------------------------------------------------------------ Aero, drawn small (Settings → Texture) */
+
+.xp-aero {
+  background-image: radial-gradient(60% 80% at 22% 8%, color-mix(in srgb, var(--accent) 60%, transparent), transparent 100%), radial-gradient(50% 70% at 92% 96%, color-mix(in srgb, var(--accent) 30%, transparent), transparent 100%);
+}
+.xp-aero .xp-bar {
+  background-color: color-mix(in srgb, var(--surface) 45%, transparent);
+  background-image: var(--ax-streaks), var(--ax-gloss), var(--ax-tint);
+  border-bottom-color: var(--ax-line);
+  box-shadow: inset 0 1px 0 var(--ax-hi);
+}
+.xp-aero .xp-btn {
+  background-color: var(--primary-bg);
+  background-image: var(--ax-gel);
+  box-shadow: var(--ax-gel-edge);
+}
+.xp-aero .xp-key {
+  background-color: var(--surface-2);
+  background-image: var(--ax-button);
+  border-color: var(--ax-line);
+  box-shadow: var(--ax-button-edge);
+}
+.xp-aero .xp-switch {
+  background: var(--green);
+  box-shadow: var(--ax-well);
+}
+.xp-aero .xp-switch::after {
+  background-image: var(--ax-knob);
+  box-shadow: var(--ax-knob-edge);
 }

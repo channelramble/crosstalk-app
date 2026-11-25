@@ -17,6 +17,7 @@ import {
   presetById,
   previewVars,
   TEXTURES,
+  isGlassy,
   type CustomBase,
   type CustomTheme,
   type Gradient,
@@ -33,7 +34,7 @@ import { ConfirmButton, Switch } from "../ui";
 /**
  * Settings → This device → Theme: the looks to pick from, each drawn small in its own colours and put on the moment
  * it's tapped; then your own (a colour, a gradient or a picture, with what panels look like over it), which changes the
- * app as each control moves; then the texture, which draws whatever theme is on as flat, as brushed metal or as glass.
+ * app as each control moves; then the texture, which draws whatever theme is on as flat, as brushed metal, as glass or as Aero's frosted frames.
  * Kept on this device only (themeDevice.ts).
  */
 export function ThemeSection() {
@@ -112,7 +113,7 @@ export function ThemeSection() {
                 ? "This device already asks for less see-through, so panels are solid and nothing blurs."
                 : hasSeeThrough(theme)
                   ? "Makes panels solid and turns blur off. Easier to read, and lighter work for an older phone."
-                  : "Makes panels solid and turns blur off in themes with a gradient or a picture, and with the Liquid glass texture. Nothing is see-through as things are."}
+                  : "Makes panels solid and turns blur off in themes with a gradient or a picture, and with the Liquid glass and Aero textures. Nothing is see-through as things are."}
             </div>
           </div>
           <Switch checked={theme.calm || deviceCalm} disabled={deviceCalm} onChange={(calm) => set({ calm })} label="Reduce see-through effects" describedBy={calmId} />
@@ -434,7 +435,7 @@ function CustomEditor({ theme, picture }: { theme: ThemeSettings; picture: strin
           <>
             <Range label="See-through" value={c.seeThrough} min={0} max={100} step={5} says={percent} ends={["Solid", "Glass"]} onChange={(seeThrough) => change({ seeThrough })} />
             <Range label="Blur behind panels" value={c.panelBlur} min={0} max={40} step={2} says={pixels} onChange={(panelBlur) => change({ panelBlur })} />
-            {theme.texture === "glass" && <div className="help">With the Liquid glass texture, bars and sheets are always see-through, and the blur is at least 28 px.</div>}
+            {isGlassy(theme.texture) && <div className="help">With the {theme.texture === "aero" ? "Aero" : "Liquid glass"} texture, bars and sheets are always see-through, and the blur is at least 28 px.</div>}
           </>
         ) : (
           <div className="help">Over a gradient or a picture, panels can be see-through.</div>

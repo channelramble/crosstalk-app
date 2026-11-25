@@ -619,13 +619,42 @@ a {
 }
 .room-avatar.empty.compact { width: 22px; height: 22px; }
 .room-agent-icon {
+  --c: #888;
   position: absolute;
   display: grid;
   place-items: center;
   border-radius: 30%;
-  color: white;
   font-weight: 700;
   line-height: 1;
+}
+/*
+ * An agent's picture: its mark in its own colour, on a tile of the theme's with a trace of that colour in it and a
+ * line of it round the edge. So the picture belongs to whatever theme is on, and agents are told apart by a mark in a
+ * strong colour rather than by a white mark on one patch of muted colour or another. On a dark page the mark is the
+ * colour made brighter and it glows a little; on a light one it's the colour made deeper.
+ */
+.avatar,
+.room-agent-icon {
+  color: color-mix(in oklab, var(--c) 70%, white);
+  background: color-mix(in srgb, var(--c) 17%, var(--surface-2));
+  box-shadow:
+    inset 0 0 0 1.5px color-mix(in srgb, var(--c) 60%, transparent),
+    0 0 10px -3px color-mix(in srgb, var(--c) 65%, transparent);
+}
+:root[data-scheme="light"] :is(.avatar, .room-agent-icon) {
+  color: color-mix(in oklab, var(--c) 78%, black);
+  background: color-mix(in srgb, var(--c) 12%, var(--surface));
+  box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--c) 55%, transparent);
+}
+/* Where the browser can work a colour out from another: the same hue, stronger, and as bright (or as deep) as reads. */
+@supports (color: oklch(from red l c h)) {
+  .avatar,
+  .room-agent-icon {
+    color: oklch(from var(--c) max(l, 0.8) calc(c * 1.45) h);
+  }
+  :root[data-scheme="light"] :is(.avatar, .room-agent-icon) {
+    color: oklch(from var(--c) min(l, 0.5) calc(c * 1.4) h);
+  }
 }
 
 .avatar {
@@ -637,8 +666,6 @@ a {
   place-items: center;
   font-weight: 700;
   font-size: 12px;
-  color: white;
-  background: var(--c);
   flex: none;
   position: relative;
   letter-spacing: -0.02em;

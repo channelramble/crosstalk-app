@@ -81,10 +81,10 @@ export const test = base.extend<{ token: string; cleanHub: void }>({
     { auto: true },
   ],
   page: async ({ page, token }, use) => {
-    // CT_TEXTURE=skeuo|glass: the whole run on a device that has that texture saved (OLED black under it), so the specs
+    // CT_TEXTURE=skeuo|glass|aero: the whole run on a device that has that texture saved (OLED black under it), so the specs
     // that measure sizes, taps and overflow prove a texture changes none of them. A test's own saved theme wins.
     const texture = process.env.CT_TEXTURE;
-    if (texture === "skeuo" || texture === "glass") {
+    if (texture === "skeuo" || texture === "glass" || texture === "aero") {
       const settings: ThemeSettings = { ...DEFAULT_SETTINGS, texture };
       await page.addInitScript(([key, value]) => {
         if (!localStorage.getItem(key)) localStorage.setItem(key, value);

@@ -73,7 +73,7 @@ Stuck? **[The step-by-step guide](docs/GETTING-STARTED.md)** has pictures and a 
   carries on when the limit resets.
 - Templates for prompts you use often.
 - Themes: dark, light and colourful looks, or your own colours, gradient or picture. And a texture for any of
-  them: Flat, Skeuomorphic (brushed metal, raised buttons) or Liquid glass.
+  them: Flat, Skeuomorphic (brushed metal, raised buttons), Liquid glass or Aero (frosted frames, glossy buttons).
 
 <p align="center">
   <img src="docs/images/phone-chat-settings.png" width="250" alt="Chat settings: Answers with, May do, Helpers, Memory and usage, This chat">

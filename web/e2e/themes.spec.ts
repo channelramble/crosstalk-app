@@ -722,7 +722,7 @@ test("a tap on a texture changes how the app is drawn at once, in the theme's ow
   await openTheme(page);
   const group = page.getByRole("radiogroup", { name: "Texture", exact: true });
   await expect(page.getByRole("heading", { name: "Texture", exact: true })).toBeVisible();
-  await expect(group.getByRole("radio")).toHaveCount(3);
+  await expect(group.getByRole("radio")).toHaveCount(TEXTURES.length);
   for (const t of TEXTURES) await expect(textureTile(page, t.name)).toHaveAccessibleName(`${t.name}. ${t.about}`);
   // Flat is what a device has until it picks another, and it is the app as it always was.
   await expect(textureTile(page, "Flat")).toHaveAttribute("aria-checked", "true");
@@ -820,7 +820,7 @@ async function expectReadableAsFlat(page: Page, settings: ThemeSettings, texture
   expect(poor, `${what}: words that read below 4.5:1, and worse than under Flat`).toEqual([]);
 }
 
-for (const texture of ["skeuo", "glass"] as const) {
+for (const texture of ["skeuo", "glass", "aero"] as const) {
   for (const theme of TEXTURE_THEMES) {
     test(`${texture} on ${theme.id}: words read on what's behind them, in a chat, in Settings and on Home`, async ({ page, request, token }) => {
       test.setTimeout(90_000);
@@ -899,7 +899,7 @@ test("a texture changes no size and no place: every box on screen is where it is
           if (settled) break;
         }
         expect(flat.length).toBeGreaterThan(100);
-        for (const texture of ["skeuo", "glass"] as const) {
+        for (const texture of ["skeuo", "glass", "aero"] as const) {
           await change(textured(theme, texture));
           expect((await root(page)).texture).toBe(texture);
           const moved = async () => {
@@ -986,19 +986,23 @@ test("the Texture tiles work from the keyboard and fit a narrow phone", async ({
   expect((await root(page)).texture).toBe("glass");
   // The arrow keys move through the group and pick as they go, round its ends; Home and End jump.
   await page.keyboard.press("ArrowDown");
+  await expect(textureTile(page, "Aero")).toBeFocused();
+  await expect(textureTile(page, "Aero")).toHaveAttribute("aria-checked", "true");
+  expect((await root(page)).texture).toBe("aero");
+  await page.keyboard.press("ArrowDown");
   await expect(textureTile(page, "Flat")).toBeFocused();
   await expect(textureTile(page, "Flat")).toHaveAttribute("aria-checked", "true");
   expect((await root(page)).texture).toBeNull();
   await page.keyboard.press("ArrowUp");
-  await expect(textureTile(page, "Liquid glass")).toBeFocused();
-  await expect(textureTile(page, "Liquid glass")).toHaveAttribute("aria-checked", "true");
+  await expect(textureTile(page, "Aero")).toBeFocused();
+  await expect(textureTile(page, "Aero")).toHaveAttribute("aria-checked", "true");
   await page.keyboard.press("ArrowLeft");
-  await expect(textureTile(page, "Skeuomorphic")).toHaveAttribute("aria-checked", "true");
+  await expect(textureTile(page, "Liquid glass")).toHaveAttribute("aria-checked", "true");
   await page.keyboard.press("Home");
   await expect(textureTile(page, "Flat")).toHaveAttribute("aria-checked", "true");
   await page.keyboard.press("End");
-  await expect(textureTile(page, "Liquid glass")).toBeFocused();
-  expect((await root(page)).texture).toBe("glass");
+  await expect(textureTile(page, "Aero")).toBeFocused();
+  expect((await root(page)).texture).toBe("aero");
   await expect(group.locator(".theme-tile-check")).toHaveCount(1);
 
   // Under each texture: nothing wider than the screen, nothing sticking out of the card, every tile a finger's height,
@@ -1016,9 +1020,9 @@ test("the Texture tiles work from the keyboard and fit a narrow phone", async ({
     for (const x of fit.tiles) expect([t.name, x.h >= 44, x.cut, x.preview >= 80]).toEqual([t.name, true, false, true]);
     for (const about of TEXTURES.map((x) => x.about)) await expect(group.getByText(about, { exact: true })).toBeVisible();
   }
-  // Each tile's preview is drawn its own way whatever texture is on: three different pictures.
+  // Each tile's preview is drawn its own way whatever texture is on: a different picture each.
   const previews = await group.evaluate((el) => [...el.querySelectorAll(".xp")].map((x) => { const bar = getComputedStyle(x.querySelector(".xp-bar")!); const button = getComputedStyle(x.querySelector(".xp-btn")!); return `${bar.backgroundImage} ${bar.boxShadow} ${button.backgroundImage}`; }));
-  expect(new Set(previews).size).toBe(3);
+  expect(new Set(previews).size).toBe(TEXTURES.length);
   expect(previews[0]).toBe("none none none");
 });
 

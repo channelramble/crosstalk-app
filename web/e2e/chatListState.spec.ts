@@ -131,7 +131,7 @@ test("chats are listed by state, each row saying its state in words", async ({ p
   await expect(words(side, "Migrate the database")).toHaveText("Failed");
   await expect(words(side, "Refactor the importer")).toHaveText("Working · 47m");
   await expect(words(side, "Research helpers")).toHaveText("3 helpers working");
-  await expect(words(side, "Translate the docs")).toHaveText(/^Back at \d{1,2}:\d\d/);
+  await expect(words(side, "Translate the docs")).toHaveText(/^Back at (\w{3} )?\d{1,2}:\d\d/); // with the day, when that's past midnight
   // A pinned chat says its state like any other, and stays under Pinned.
   await expect(words(side, "Release notes")).toHaveText("Working · 12m");
   // No state: where it lives and when — without the folder when it only repeats the name.
@@ -164,7 +164,7 @@ test("chats are listed by state, each row saying its state in words", async ({ p
   await expect(row(side, "Migrate the database")).toHaveAccessibleName("Migrate the database, Failed, 25 minutes ago");
   await expect(row(side, "Refactor the importer")).toHaveAccessibleName("Refactor the importer, Working for 47 minutes, 47 minutes ago");
   await expect(row(side, "Research helpers")).toHaveAccessibleName("Research helpers, 3 helpers working, 9 minutes ago");
-  await expect(row(side, "Translate the docs")).toHaveAccessibleName(/^Translate the docs, Back at \d{1,2}:\d\d.*, 1 hour ago$/);
+  await expect(row(side, "Translate the docs")).toHaveAccessibleName(/^Translate the docs, Back at (\w{3} )?\d{1,2}:\d\d.*, 1 hour ago$/);
   await expect(row(side, "Holiday photos")).toHaveAccessibleName("Holiday photos, new reply, 2026, 4 minutes ago");
   await expect(row(side, "Fix the login page")).toHaveAccessibleName("Fix the login page, 3 hours ago");
 

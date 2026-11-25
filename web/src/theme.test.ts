@@ -308,7 +308,7 @@ describe("textures", () => {
   const ALL: ThemeSettings[] = [...PRESETS.map((p) => with_(p.id, "flat")), ...OWN];
 
   test("there are three: Flat (as the app comes), Skeuomorphic and Liquid glass, each with a line about it", () => {
-    expect(TEXTURES.map((t) => [t.id, t.name])).toEqual([["flat", "Flat"], ["skeuo", "Skeuomorphic"], ["glass", "Liquid glass"]]);
+    expect(TEXTURES.map((t) => [t.id, t.name])).toEqual([["flat", "Flat"], ["skeuo", "Skeuomorphic"], ["glass", "Liquid glass"], ["aero", "Aero"]]);
     for (const t of TEXTURES) expect(t.about.length).toBeGreaterThan(8);
     expect(DEFAULT_SETTINGS.texture).toBe("flat");
   });
@@ -334,7 +334,7 @@ describe("textures", () => {
     expect(textureAttr({ ...DEFAULT_SETTINGS, texture: "shiny" as Texture })).toBeNull();
     // index.html sets the same attribute from what's saved, before the app loads, with or without a paint.
     const html = readFileSync(join(import.meta.dir, "..", "index.html"), "utf8");
-    expect(html).toContain('if (kept.texture === "skeuo" || kept.texture === "glass") root.setAttribute("data-texture", kept.texture);');
+    expect(html).toContain('if (kept.texture === "skeuo" || kept.texture === "glass" || kept.texture === "aero") root.setAttribute("data-texture", kept.texture);');
     expect(html.indexOf('root.setAttribute("data-texture"')).toBeLessThan(html.indexOf("if (!paint) return;"));
   });
 
@@ -441,17 +441,24 @@ describe("textures", () => {
     expect([hasSeeThrough(with_("light", "glass")), hasSeeThrough(with_("oled", "glass")), hasSeeThrough(with_("light", "skeuo")), hasSeeThrough(with_("aurora", "flat")), hasSeeThrough(with_("oled", "flat"))]).toEqual([true, true, false, true, false]);
   });
 
+  test("Aero has Liquid glass's see-through layers on every theme, and its own name on the page", () => {
+    for (const s of ALL) for (const calm of [false, true]) expect(paintFor({ ...s, texture: "aero", calm })).toEqual(paintFor({ ...s, texture: "glass", calm }));
+    expect(textureAttr(with_("oled", "aero"))).toBe("aero");
+    expect(hasSeeThrough(with_("light", "aero"))).toBe(true);
+    expect(migrate({ theme: "ocean", texture: "aero" })).toEqual(with_("ocean", "aero"));
+  });
+
   test("the texture stylesheet changes how things are drawn and nothing else: no size, no place, no font, no colour of words", () => {
     const sheet = readFileSync(join(import.meta.dir, "styles", "textures.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
     const props = new Set<string>();
     for (const block of sheet.matchAll(/\{([^{}]*)\}/g)) for (const d of block[1].split(";")) if (d.includes(":")) props.add(d.slice(0, d.indexOf(":")).trim());
-    const drawn = /^(--(tx|gx)-[\w-]+|--csb-bg|background|background-image|background-color|box-shadow|border(-(top|right|bottom|left))?-color|text-shadow|(-webkit-)?backdrop-filter|border-top-(left|right)-radius)$/;
+    const drawn = /^(--(tx|gx|ax)-[\w-]+|--csb-bg|background|background-image|background-color|box-shadow|border(-(top|right|bottom|left))?-color|text-shadow|(-webkit-)?backdrop-filter|border-top-(left|right)-radius)$/;
     expect([...props].filter((p) => !drawn.test(p))).toEqual([]);
     // Every rule is under a texture's attribute, or draws the picker's own previews: Flat is untouched.
     // (A list of selectors is split at its own commas, not at those inside :is(…).)
     const heads = [...sheet.replace(/@media[^{]*\{/g, "").matchAll(/(?:^|\})\s*([^{}]+)\{/g)].flatMap((m) => m[1].split(/,(?![^()]*\))/).map((h) => h.trim())).filter(Boolean);
     expect(heads.length).toBeGreaterThan(60);
-    expect(heads.filter((h) => !/^:root(\[data-scheme="light"\])?\[data-texture="(skeuo|glass)"\]/.test(h) && !/^(:root(\[data-scheme="light"\])?(\[data-backdrop\])? )?\.xp-(flat|skeuo|glass)\b/.test(h))).toEqual([]);
+    expect(heads.filter((h) => !/^:root(\[data-scheme="light"\])?\[data-texture="(skeuo|glass|aero)"\]/.test(h) && !/^(:root(\[data-scheme="light"\])?(\[data-backdrop\])? )?\.xp-(flat|skeuo|glass|aero)\b/.test(h))).toEqual([]);
   });
 });
 

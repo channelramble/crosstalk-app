@@ -23,7 +23,7 @@
           var kept = JSON.parse(saved);
           var root = document.documentElement;
           // How surfaces are drawn (styles/textures.css), whatever the theme: OLED black has no paint and still has one.
-          if (kept.texture === "skeuo" || kept.texture === "glass") root.setAttribute("data-texture", kept.texture);
+          if (kept.texture === "skeuo" || kept.texture === "glass" || kept.texture === "aero") root.setAttribute("data-texture", kept.texture);
           var paint = kept.paint;
           if (!paint) return;
           var k;

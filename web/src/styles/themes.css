@@ -91,26 +91,26 @@
 :root[data-backdrop] .composer-wrap {
   background: none;
 }
-:root:is([data-backdrop], [data-texture="glass"]) .chat-sidebar {
+:root:is([data-backdrop], [data-texture="glass"], [data-texture="aero"]) .chat-sidebar {
   --csb-bg: transparent;
 }
 
 /* The bars: a tint of the page, blurring what's behind when the theme asks. */
-:root:is([data-backdrop], [data-texture="glass"]) .app .topbar,
-:root:is([data-backdrop], [data-texture="glass"]) .app.mobile .topbar,
-:root:is([data-backdrop], [data-texture="glass"]) .settings-tabs,
-:root:is([data-backdrop], [data-texture="glass"]) .chat-sidebar {
+:root:is([data-backdrop], [data-texture="glass"], [data-texture="aero"]) .app .topbar,
+:root:is([data-backdrop], [data-texture="glass"], [data-texture="aero"]) .app.mobile .topbar,
+:root:is([data-backdrop], [data-texture="glass"], [data-texture="aero"]) .settings-tabs,
+:root:is([data-backdrop], [data-texture="glass"], [data-texture="aero"]) .chat-sidebar {
   background: var(--glass-shine), var(--chrome);
   -webkit-backdrop-filter: var(--glass-filter);
   backdrop-filter: var(--glass-filter);
 }
-:root:is([data-backdrop], [data-texture="glass"]) .app .topbar.tinted,
-:root:is([data-backdrop], [data-texture="glass"]) .app.mobile .topbar.tinted {
+:root:is([data-backdrop], [data-texture="glass"], [data-texture="aero"]) .app .topbar.tinted,
+:root:is([data-backdrop], [data-texture="glass"], [data-texture="aero"]) .app.mobile .topbar.tinted {
   background:
     radial-gradient(70% 220% at 0% 0%, color-mix(in srgb, var(--c) 22%, transparent), transparent 70%),
     var(--chrome);
 }
-:root:is([data-backdrop], [data-texture="glass"]) .composer {
+:root:is([data-backdrop], [data-texture="glass"], [data-texture="aero"]) .composer {
   background: var(--glass-shine), var(--chrome);
   -webkit-backdrop-filter: var(--glass-filter);
   backdrop-filter: var(--glass-filter);
@@ -118,33 +118,33 @@
 }
 
 /* What opens over the page: sheets, notices, the chats drawer, the jump button. */
-:root:is([data-backdrop], [data-texture="glass"]) .dialog,
-:root:is([data-backdrop], [data-texture="glass"]) .toast,
-:root:is([data-backdrop], [data-texture="glass"]) .chat-sidebar.drawer {
+:root:is([data-backdrop], [data-texture="glass"], [data-texture="aero"]) .dialog,
+:root:is([data-backdrop], [data-texture="glass"], [data-texture="aero"]) .toast,
+:root:is([data-backdrop], [data-texture="glass"], [data-texture="aero"]) .chat-sidebar.drawer {
   background: var(--glass-shine), var(--pop);
   -webkit-backdrop-filter: var(--glass-filter);
   backdrop-filter: var(--glass-filter);
 }
-:root:is([data-backdrop], [data-texture="glass"]) .dialog,
-:root:is([data-backdrop], [data-texture="glass"]) .toast {
+:root:is([data-backdrop], [data-texture="glass"], [data-texture="aero"]) .dialog,
+:root:is([data-backdrop], [data-texture="glass"], [data-texture="aero"]) .toast {
   box-shadow: var(--shadow-pop), var(--glass-edge);
 }
 /* The sheet's own colour under it while it settles (motion.css), in the sheet's colour here too. */
-:root:is([data-backdrop], [data-texture="glass"]) .app.mobile .dialog {
+:root:is([data-backdrop], [data-texture="glass"], [data-texture="aero"]) .app.mobile .dialog {
   box-shadow: var(--shadow-pop), var(--glass-edge), 0 40px 0 var(--pop);
 }
 /* Small menus open inside a bar, where a blur can't reach what's behind the bar: nearly solid instead. */
-:root:is([data-backdrop], [data-texture="glass"]) :is(.ctl-pop, .mention-pop, .csb-new-menu, .jump-latest-btn) {
+:root:is([data-backdrop], [data-texture="glass"], [data-texture="aero"]) :is(.ctl-pop, .mention-pop, .csb-new-menu, .jump-latest-btn) {
   background: var(--menu);
 }
 @media (hover: hover) {
-  :root:is([data-backdrop], [data-texture="glass"]) .jump-latest-btn:hover {
+  :root:is([data-backdrop], [data-texture="glass"], [data-texture="aero"]) .jump-latest-btn:hover {
     background: var(--menu);
     border-color: var(--edge-hover);
   }
 }
 /* A chat row's ⋯ comes up over the row's end: it covers the words under it. */
-:root:is([data-backdrop], [data-texture="glass"]) .csb-row .csb-row-more {
+:root:is([data-backdrop], [data-texture="glass"], [data-texture="aero"]) .csb-row .csb-row-more {
   background: var(--menu);
 }
 /* The open chat's row is tinted in its agent's colour: its second line takes the stronger of the two quiet colours. */
@@ -168,7 +168,7 @@
   opacity: 1;
 }
 /* Tinted with the accent over whatever is behind, rather than over the page colour. */
-:root:is([data-backdrop], [data-texture="glass"]) :is(.send-now, .read-now) {
+:root:is([data-backdrop], [data-texture="glass"], [data-texture="aero"]) :is(.send-now, .read-now) {
   background: color-mix(in srgb, var(--accent) 14%, var(--surface));
 }
 /* A code block is one see-through panel, not two on top of each other (its box, then its lines). */
@@ -527,7 +527,7 @@
 }
 @media (min-width: 700px) {
   .texture-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 10px;
   }
   .texture-tile {
